@@ -26,6 +26,8 @@ export class AgentLoop {
   private listeners = new Set<TurnListener>()
   private cancelled = false
   private reconnectAttempted = false
+  /** User-selected model/effort applied on the next thread start or resume. */
+  private overrides: Partial<ThreadSettings> = {}
 
   constructor(private readonly deps: AgentLoopDeps) {
     this.deps.codex.onToolCall = async (req) => {
@@ -45,6 +47,11 @@ export class AgentLoop {
     return this.threadId
   }
 
+  /** Model/effort changes land on the next turn via thread resume. */
+  setOverrides(overrides: Partial<ThreadSettings>): void {
+    this.overrides = { ...this.overrides, ...overrides }
+  }
+
   onTurnEvent(listener: TurnListener): () => void {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)
@@ -56,6 +63,7 @@ export class AgentLoop {
     const full: ThreadSettings = {
       dynamicTools,
       developerInstructions: this.deps.developerInstructions,
+      ...this.overrides,
       ...settings,
     }
     if (this.threadId) {

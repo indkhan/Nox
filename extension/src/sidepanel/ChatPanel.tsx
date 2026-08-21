@@ -4,6 +4,7 @@ import { agentLoop, fetchCurrentPageContext } from '../lib/agent/panel'
 import { AssistantMarkdown, ProgressBlock, type ProgressStep } from './MessageParts'
 import { Composer } from './Composer'
 import { EmptyState } from './EmptyState'
+import { SettingsModal } from './SettingsModal'
 
 interface TurnView {
   progress: ProgressStep[]
@@ -14,6 +15,7 @@ interface TurnView {
 export function ChatPanel() {
   const [turns, setTurns] = useState<Array<{ userText: string; view: TurnView }>>([])
   const [busy, setBusy] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const currentPage = useNoxStore((s) => s.currentPage)
   const connectionStatus = useNoxStore((s) => s.connectionStatus)
@@ -105,10 +107,12 @@ export function ChatPanel() {
       <header className="flex items-center gap-2 border-b border-zinc-800 px-3 py-2">
         <span className="text-emerald-400">⬡</span>
         <h2 className="min-w-0 flex-1 truncate text-xs font-medium" data-testid="thread-title">{threadTitle}</h2>
+        <button onClick={() => setSettingsOpen(true)} aria-label="Settings" data-testid="settings-button" className="text-xs text-zinc-500 hover:text-zinc-300">⚙</button>
         <button onClick={newChat} aria-label="New chat" data-testid="new-chat" className="text-xs text-zinc-500 hover:text-zinc-300">
           ＋
         </button>
       </header>
+      {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
 
       {!hasMessages ? (
         <EmptyState />

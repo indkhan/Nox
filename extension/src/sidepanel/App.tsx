@@ -3,12 +3,23 @@ import { hydrateCurrentPage, useNoxStore } from './store'
 import { ConnectionCard } from './ConnectionCard'
 import { BridgeCard } from './BridgeCard'
 import { ChatPanel } from './ChatPanel'
+import { loadSettings } from '../lib/settings'
+import { agentLoop } from '../lib/agent/panel'
 
 export function App() {
   const currentPage = useNoxStore((s) => s.currentPage)
 
   useEffect(() => {
     void hydrateCurrentPage()
+    void (async () => {
+      const settings = await loadSettings()
+      if (settings.model || settings.effort) {
+        agentLoop.setOverrides({ model: settings.model, effort: settings.effort })
+      }
+      const stored = await chrome.storage.local.get('nox_thread_title')
+      const title = stored['nox_thread_title']
+      if (typeof title === 'string' && title) useNoxStore.getState().setThreadTitle(title)
+    })()
   }, [])
 
   return (
