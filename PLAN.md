@@ -20,9 +20,9 @@ Each produces a one-paragraph verdict in `docs/spikes/`.
 | 0.3 | Force a >1 MB host→extension message and observe the failure | the bridge's framing design | Chunking becomes mandatory rather than defensive. |
 | 0.4 | Does the panel document survive a tab switch with the panel enabled **globally**? Does it survive a window switch? | where the agent loop lives | Move the loop to an offscreen document; panel becomes a view. |
 | 0.5 | Which models does the subscription expose through app-server, and how slow is each on "draft an outline for this page"? | the default model and reasoning effort | Pick the fastest usable; if all are slow, set expectations in the UI. |
-| 0.6 | `notion-fetch` → `replace_content` round-trip on a complex page (toggles, columns, callouts, synced blocks, embedded database) | how far undo can be trusted | Restrict content-replace to pages under a complexity threshold and warn. |
+| 0.6 | `notion-fetch` → `replace_content` round-trip on a complex page (toggles, columns, callouts, synced blocks, embedded database) | how far undo can be trusted | Mark rich-page full replacement not-undoable; use targeted inverses. |
 
-**Status (2026-08-21):** five of six closed — verdicts in `docs/spikes/`.
+**Status (2026-08-21): all six closed** — verdicts in `docs/spikes/`.
 
 - **0.1 pass** — Notion OAuth end to end from a real extension, once a `declarativeNetRequest`
   rule strips the `Origin` header (`403 Invalid Origin` otherwise). The rule is load-bearing.
@@ -31,9 +31,13 @@ Each produces a one-paragraph verdict in `docs/spikes/`.
 - **0.3 pass** — the 1 MB host→extension cap is real; chunking reassembles exactly.
 - **0.4 pass** — the panel survives tab and window switches, so the agent loop lives there.
   **No offscreen document needed.**
-- **0.5 done** — `gpt-5.4` is the fastest (2.6 s trivial, 9.2 s with a tool call, 26 s with web
-  search). Web search and image input both work. Latency is the product risk.
-- **0.6 blocked** — needs a Notion MCP token; one browser approval away.
+- **0.5 done** — all account models are discoverable at runtime; trivial timings were too close
+  and noisy to justify hardcoding a default. One tool call took 9.2 s and web search 26 s. Web
+  search and image input both work. Latency is the product risk.
+- **0.6 fail** — repeated `fetch → replace_content → fetch` passes changed a complex duplicate
+  each time, including removal of an `<empty-block/>`. Full-page replacement is not a safe inverse
+  for structurally rich pages. The MCP token also returned `401` from `api.notion.com/v1`, so the
+  REST API cannot provide archive/delete as a workaround.
 
 **Exit:** verdicts written; runtime location fixed; undo scope fixed.
 
@@ -160,7 +164,9 @@ streaming; fully keyboard operable.
 6. Undo UI: per-action and per-turn, newest-first, explicit partial-failure reporting.
 7. Not-undoable handling for creations: clear marking, deep link, "delete in Notion" step.
 8. Block-identity warning surfaced wherever undo is offered.
-9. Complexity guard before `replace_content` on rich pages (per spike 0.6).
+9. **No full-page `replace_content` undo for structurally rich pages** (columns, synced blocks,
+   child pages/databases, or other non-trivial block markup). Mark these content writes
+   not-undoable; use targeted inverses where the original mutation permits one.
 
 **AC:** every write appears in the stream; reversible writes reverse and the Notion tab reflects it;
 Ask mode cannot write unapproved; the write guard demonstrably prevents a mid-turn overwrite.

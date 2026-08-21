@@ -11,7 +11,7 @@ Research date: **2026-08-19**. Claims are tagged:
 **Contents:** [1 Summary](#1-summary) · [2 Notion](#2-notion-via-hosted-mcp) ·
 [3 Codex](#3-codex-via-app-server) · [4 Chrome constraints](#4-chrome-extension-constraints-mv3) ·
 [5 UI reference](#5-notion-ai-ui-reference) · [6 Limits and risks](#6-limits-and-risks) ·
-[7 Design conclusions](#7-design-conclusions) · [8 Still unverified](#8-still-unverified) ·
+[7 Design conclusions](#7-design-conclusions) · [8 E0 closure](#8-e0-closure) ·
 [9 Sources](#9-sources)
 
 ---
@@ -175,7 +175,7 @@ DCR → launchWebAuthFlow(/authorize?...&code_challenge=S256...) → user consen
 | `notion-search` | Workspace plus connected apps (Slack/Drive/Jira). **Connected-app search needs a Notion AI plan**; otherwise workspace-only. **30 req/min cap.** |
 | `notion-fetch` | By URL or id. Special id **`self`** returns workspace and user identity plus **`current_tool_access`** — a per-tool map of `available` / `available_with_limit` / `upgrade_required` / `not_enabled`. Large pages return `truncated:true` with `unknown_block_ids` to re-fetch. |
 | `notion-create-pages` | One or many; parent, icon, cover, database templates, `allow_async`. |
-| `notion-update-page` | Command-based: `{"command":"replace_content","new_str":"..."}`, plus properties/icon/cover, `allow_async`. **This is what makes content undo possible.** |
+| `notion-update-page` | Command-based: targeted `update_content`, full `replace_content`, properties/icon/cover, and `allow_async`. Full replacement is not round-trip safe on complex pages (spike 0.6), so it is not a general undo mechanism. |
 | `notion-move-pages` | Multiple pages or databases to a new parent. Reversible. |
 | `notion-duplicate-page` | Async. |
 | `notion-create-database` / `notion-update-data-source` | Schema creation and edits. |
@@ -213,9 +213,9 @@ has `PATCH /v1/pages {in_trash:true}` and block-level operations that MCP lacks.
 OAuth integration exchanges its code using a client secret, which cannot ship in an open-source
 extension. So V1 is MCP-only.
 
-**[unverified]** One experiment worth running: is the token from `mcp.notion.com/token` also
-accepted by `api.notion.com/v1/*`? If yes, delete/archive becomes possible and undo improves. Do not
-design around it until proven.
+**[verified — spike 0.6]** The token from `mcp.notion.com/token` returned `401 unauthorized` from
+`GET api.notion.com/v1/users/me`. It is not a public REST API token. Delete/archive therefore
+remains unavailable and creations cannot be undone by crossing over to the REST API.
 
 ---
 
@@ -399,7 +399,7 @@ but its licence forbids commercial use.
 | Constraint | Consequence for Nox |
 |---|---|
 | **Service workers die at 30s idle / 5min hard; a `fetch()` taking >30s to respond kills them.** **[doc]** | The agent loop **cannot** live in the service worker. It lives in the side panel document. The SW is a router: action clicks, panel enablement, OAuth launch. |
-| **CORS**: extension pages and SWs with `host_permissions` bypass it; **content scripts do not** — they inherit the page origin. **[doc]** | All network calls happen in the panel. The content script only reads the URL and relays it. |
+| **CORS**: extension pages and SWs with `host_permissions` bypass it; **content scripts do not** — they inherit the page origin. **[doc]** | All network calls happen in the panel. Current-page URL/title come from `chrome.tabs` in the service worker; no content script is needed. |
 | **Side panel lifecycle** | With the panel enabled **globally**, the document **survives tab and window switches** — an in-flight turn is not interrupted by browsing. It is destroyed when the user closes the panel. **[verified — spike 0.4]** Per-tab enabling was not tested and is not needed. |
 | **No remotely hosted code** **[doc]** | Everything bundled. No CDN libraries, no `eval`. |
 | **Offscreen documents** | Considered as the runtime, **not needed** — spike 0.4 showed the panel is stable enough. Kept in reserve only. **[doc]** |
@@ -440,11 +440,11 @@ Nox mirrors this, replacing `Auto` with `Auto | Ask before changes` and dropping
 | Item | Why | What we do instead |
 |---|---|---|
 | **Undoing any creation** (page, database, folder, comment, duplicate) | Notion MCP has no delete, trash or archive tool | Journal it, mark `not-undoable`, deep-link the page with a "delete in Notion" step |
-| **Undo that restores block identity** | `replace_content` writes new blocks with new ids | Block-anchored comments and block links do not survive undo. Said plainly in the UI |
+| **Undo that restores rich-page structure or block identity** | Repeated complex-page `fetch → replace_content → fetch` changed content each time; replacement also writes new block ids | No full-page replacement undo for structurally rich pages. Use targeted inverses or mark not-undoable; explain simple-page identity loss in the UI |
 | **Undo of exotic properties** | Rollups and formulas aren't writable; relations return titles but must be written as ids; deleted select options can't be restored | Whitelist: text, number, select, date, checkbox |
 | **Transactional multi-step undo** | Notion has no transactions | Per-operation inverse journal, newest-first, explicit partial-failure reporting |
 | **Conditional writes** | Not in the tool surface (§2.7) | Re-fetch + hash compare before writing |
-| **Block-level surgical edits** | MCP works at page + markdown-command granularity | `replace_content` with a full-page pre-image |
+| **General block-level surgical undo** | MCP exposes markdown search/replace, not stable block-level inverse operations | Use a targeted inverse only when the exact prior text is known and unambiguous; otherwise mark not-undoable |
 | **Rich-text diff preview** | Notion-flavoured markdown round-trip isn't guaranteed lossless | Preview the markdown we will send, not a rendered Notion diff |
 | **Background/headless operation** | MCP OAuth needs human consent; the bridge dies with the panel | Everything is user-initiated with the panel open |
 
@@ -477,8 +477,9 @@ Nox mirrors this, replacing `Auto` with `Auto | Ask before changes` and dropping
 
 The plan originally proposed harvesting the Notion sidebar DOM to build a page index for free.
 Rejected: the sidebar is **virtualized** (only visible rows exist in the DOM) and the class names
-are obfuscated, so it yields a small and unstable subset. Page discovery goes through MCP. The
-content script does exactly one thing — parse the current page id from the URL, which is stable.
+are obfuscated, so it yields a small and unstable subset. Page discovery goes through MCP.
+Current-page context comes from the active tab URL/title through `chrome.tabs`; no content script
+or DOM scraping is needed.
 
 ---
 
@@ -501,18 +502,23 @@ content script does exactly one thing — parse the current page id from the URL
 
 ---
 
-## 8. Still unverified
+## 8. E0 closure
 
-E0 exists to close these. Ranked by how much damage a wrong assumption does.
+All architecture-blocking spikes are closed; see `docs/spikes/` for evidence.
 
-Everything else in E0 is closed — see `docs/spikes/`. Both remaining items need one browser
-approval to produce a Notion MCP token (`node spikes/notion-auth.mjs`); nothing else blocks them.
-
-| # | Question | If wrong |
+| Question | Verdict | Design consequence |
 |---|---|---|
-| 1 | How lossy is `notion-fetch` → `replace_content` on a complex page (toggles, columns, callouts, synced blocks, embedded database)? | Bounds how far undo can be trusted; may force a complexity threshold and a warning |
-| 2 | Is the `mcp.notion.com` token also accepted by `api.notion.com/v1`? | Would unlock delete/archive, and therefore real undo of creations |
-| 3 | What does `current_tool_access` report for this workspace's plan? | Decides which E7 database features can even be built against |
+| Browser-native Notion OAuth/MCP | Pass with a load-bearing DNR Origin-strip rule | No Nox backend required |
+| Codex `dynamicTools` callback and result round trip | Pass | Nox owns the agent loop, approvals, journal and undo |
+| Native-messaging 1 MB boundary | Confirmed | Chunk every large host-to-extension frame |
+| Globally enabled side-panel lifetime | Pass across tab/window switches | Agent loop stays in the panel; closing it ends the run |
+| Models, web search, images and latency | Pass; realistic tool call ~9 s, web search ~26 s | Runtime model discovery and immediate progress UI |
+| Complex-page full replacement | Fail; repeated round trips kept changing structure | No `replace_content` undo for structurally rich pages |
+| MCP token against public Notion API | Fail with `401` | No archive/delete workaround; creations remain not-undoable |
+| Workspace capability discovery | Pass; limits vary by plan | Gate every tool from runtime `current_tool_access` |
+
+E1 can begin without further exploratory work. Remaining tests belong beside the implementation
+epics and release checklist in `PLAN.md`, not in another research phase.
 
 ---
 

@@ -191,15 +191,16 @@ inverse where one exists.
 
 | Mutation | Inverse |
 |---|---|
-| `notion-update-page` content | `replace_content` with the pre-image markdown |
+| `notion-update-page` content | targeted inverse where possible; full-page `replace_content` only for simple pages without structural block markup. Rich-page content writes are marked not-undoable |
 | `notion-update-page` properties | restore **safe types only**: text, number, select, date, checkbox. Relations, rollups and formulas are marked not-undoable |
 | `notion-move-pages` | move back to the recorded parent |
 | `notion-update-view` / `notion-update-data-source` | restore the recorded config |
 | any create (`create-pages`, `duplicate-page`, `create-database`, `create-folder`, `create-comment`) | **none — Notion MCP has no delete tool.** Marked not-undoable with a deep link |
 
-Undo applies newest-first and reports partial failures. **Undo restores text, not block identity** —
-new blocks get new ids, so block-anchored comments and block links do not survive. Said plainly in
-the UI.
+Undo applies newest-first and reports partial failures. Full-page replacement is deliberately
+limited: spike 0.6 changed a complex page on every round trip. Even on simple pages, undo restores
+text, not block identity — new blocks get new ids, so block-anchored comments and block links do
+not survive. Said plainly in the UI.
 
 ### 6.6 Databases
 
@@ -303,8 +304,8 @@ Thread search runs over titles and message text. Export writes a thread as JSON 
 - Property undo covers safe types only.
 - `notion-search` is capped by Notion at 30 requests/minute; SQL queries and connected-app search
   are gated by the Notion plan. Nox disables what the plan does not allow and says why.
-- `replace_content` on a very complex page can lose exotic block formatting; Nox warns and keeps a
-  snapshot.
+- Full-page content undo is unavailable on structurally rich pages because `replace_content` is
+  not round-trip safe. Nox keeps the journal and marks the action not-undoable.
 - Closing the panel stops any running job.
 - Codex stores conversation history under `~/.codex`.
 - `dynamicTools` is an experimental Codex API and can change.

@@ -1,4 +1,4 @@
-// Notion MCP: OAuth (DCR + PKCE via chrome.identity) and a minimal Streamable HTTP client.
+// E0 Notion MCP spike: OAuth (DCR + PKCE via chrome.identity) and a minimal Streamable HTTP client.
 // Runs in the side panel document — extension pages bypass CORS via host_permissions,
 // so no proxy and no CORS headers are needed on Notion's side.
 

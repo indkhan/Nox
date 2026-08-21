@@ -13,8 +13,9 @@ official hosted MCP server, and drives **your local Codex install** through Open
 - **The `codex` CLI installed and logged in** (`codex login`) with an active ChatGPT Plus/Pro plan
 - The Nox bridge installed — one script, Windows / macOS / Linux
 
-> **Status: pre-alpha.** Research is done and the plan is written; the code is not built yet.
-> Start with [RESEARCH.md](RESEARCH.md), [MVP.md](MVP.md) and [PLAN.md](PLAN.md).
+> **Status: pre-alpha. E0 complete; E1 is next.** Architecture research and spikes are closed;
+> production extension code has not started. Start with [RESEARCH.md](RESEARCH.md),
+> [MVP.md](MVP.md) and [PLAN.md](PLAN.md).
 
 ---
 
@@ -35,7 +36,7 @@ official hosted MCP server, and drives **your local Codex install** through Open
 ## How it works
 
 ```
-Notion tab ──content script──► Side panel (agent loop, MCP client, IndexedDB)
+Notion tab ──chrome.tabs/SW──► Side panel (agent loop, MCP client, IndexedDB)
    (which page                        │                    │
     you're on)                        ▼                    ▼
                        https://mcp.notion.com/mcp    nox-bridge (native messaging)
@@ -59,8 +60,9 @@ cards, the action stream and undo possible. No OpenAI credential ever exists ins
 
 - **Creating a page cannot be undone** — Notion's MCP server has no delete tool. Nox marks
   creations as not-undoable and links you straight to the page.
-- **Undo restores text, not block identity.** New blocks get new ids, so block-anchored comments
-  and block links don't survive an undo.
+- Full-page content undo is unavailable on structurally rich pages because Notion's markdown
+  round trip is lossy. On simple pages, undo restores text but not block identity, so block-anchored
+  comments and block links do not survive.
 - Property undo covers safe types only (text, number, select, date, checkbox).
 - Workspace search is capped by Notion at **30 requests/minute**; SQL queries and connected-app
   search are gated by your Notion plan. Nox disables what your plan can't do and says why.

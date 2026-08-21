@@ -4,10 +4,13 @@
 //   3. Does Codex's own web search fire, and does it show up as an item we can render?
 // Run: node spikes/codex-full.mjs [model]
 import { spawn } from 'node:child_process';
+import { resolveCodex } from '../bridge/resolve-codex.mjs';
 
 const MODEL = process.argv[2] || null; // null = account default
 const log = (...a) => console.log(...a);
-const child = spawn('codex', ['app-server'], { stdio: ['pipe', 'pipe', 'pipe'] });
+const CODEX = resolveCodex();
+if (!CODEX.path) throw new Error('Codex not found');
+const child = spawn(CODEX.path, ['app-server'], { stdio: ['pipe', 'pipe', 'pipe'] });
 
 let nextId = 1;
 const pending = new Map();

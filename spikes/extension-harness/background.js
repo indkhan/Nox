@@ -1,4 +1,4 @@
-// Thin router. No agent logic — MV3 service workers die at 30s idle and 5min hard,
+// E0 spike router. No agent logic — MV3 service workers die at 30s idle and 5min hard,
 // so anything long-running lives in the side panel document (RESEARCH §4).
 
 chrome.runtime.onInstalled.addListener(() => {
