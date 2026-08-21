@@ -1,5 +1,26 @@
 import { parseNotionUrl } from '../shared/notion-page'
 import type { CurrentPage } from '../shared/notion-page'
+import { buildOriginStripRule, originStripRuleIsActive } from './dnr'
+
+// ── DNR Origin strip (load-bearing, RESEARCH §2.1) ──────────────────────────
+async function ensureOriginStripRule(): Promise<boolean> {
+  try {
+    const existing = await chrome.declarativeNetRequest.getDynamicRules()
+    if (!originStripRuleIsActive(existing)) {
+      await chrome.declarativeNetRequest.updateDynamicRules({
+        removeRuleIds: [1],
+        addRules: [buildOriginStripRule(chrome.runtime.id)],
+      })
+    }
+    const after = await chrome.declarativeNetRequest.getDynamicRules()
+    const active = originStripRuleIsActive(after)
+    if (!active) console.error('[nox] DNR origin-strip rule failed to install — Notion MCP calls will 403')
+    return active
+  } catch (error) {
+    console.error('[nox] DNR rule installation threw', error)
+    return false
+  }
+}
 
 const STORAGE_KEY = 'nox.currentPage'
 
@@ -57,6 +78,8 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) =
 })
 
 void (async () => {
+  // The origin-strip rule must exist before the panel can talk to Notion.
+  await ensureOriginStripRule()
   // Warm the session storage on startup.
   await setActiveTab(await getActiveTabId())
 })()
