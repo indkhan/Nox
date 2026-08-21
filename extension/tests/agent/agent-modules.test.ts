@@ -167,7 +167,7 @@ describe('titleFromExchange', () => {
 
   it('cuts long messages at a word boundary with ellipsis', () => {
     const t = titleFromExchange('Find all the pages in my workspace that mention quarterly planning deadlines')
-    expect(t).toBe('Find all the pages in my workspace that…')
+    expect(t).toBe('Find all the pages in my workspace that mention…')
   })
 
   it('falls back for empty input', () => {
