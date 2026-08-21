@@ -2,7 +2,7 @@
 // Chrome frames every message as 4-byte little-endian length + UTF-8 JSON.
 // Host → extension is capped at 1 MB; extension → host at 64 MiB (RESEARCH §3.5),
 // which is why anything large goes out as chunks.
-import { execFileSync } from 'node:child_process';
+import { resolveCodex } from './resolve-codex.mjs';
 
 const MAX = 1024 * 1024;
 const SAFE_CHUNK = 512 * 1024; // comfortably under the cap once JSON-escaped
@@ -22,12 +22,10 @@ function sendChunked(id, text) {
 }
 
 function codexInfo() {
-  try {
-    const version = execFileSync('codex', ['--version'], { encoding: 'utf8' }).trim();
-    return { found: true, version };
-  } catch (e) {
-    return { found: false, error: e.message };
-  }
+  const codex = resolveCodex();
+  return codex.path
+    ? { found: true, version: codex.version, path: codex.path }
+    : { found: false, error: 'Codex not found' };
 }
 
 function handle(msg) {

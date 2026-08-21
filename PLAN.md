@@ -22,10 +22,18 @@ Each produces a one-paragraph verdict in `docs/spikes/`.
 | 0.5 | Which models does the subscription expose through app-server, and how slow is each on "draft an outline for this page"? | the default model and reasoning effort | Pick the fastest usable; if all are slow, set expectations in the UI. |
 | 0.6 | `notion-fetch` → `replace_content` round-trip on a complex page (toggles, columns, callouts, synced blocks, embedded database) | how far undo can be trusted | Restrict content-replace to pages under a complexity threshold and warn. |
 
-**Status (2026-08-20):** 0.1 **pass** (needed a `declarativeNetRequest` Origin strip — see
-`docs/spikes/`), 0.3 **pass** (chunking mandatory), 0.4 **pass** (panel survives tab switches →
-the agent loop lives there, no offscreen document). 0.2 partially proven — `dynamicTools` accepted,
-the `item/tool/call` round trip still blocked on Codex quota. 0.5 and 0.6 outstanding.
+**Status (2026-08-21):** five of six closed — verdicts in `docs/spikes/`.
+
+- **0.1 pass** — Notion OAuth end to end from a real extension, once a `declarativeNetRequest`
+  rule strips the `Origin` header (`403 Invalid Origin` otherwise). The rule is load-bearing.
+- **0.2 pass** — `item/tool/call` round trip verified: Codex called our tool, our result reached
+  the model, the answer used it. Nox keeps the agent loop.
+- **0.3 pass** — the 1 MB host→extension cap is real; chunking reassembles exactly.
+- **0.4 pass** — the panel survives tab and window switches, so the agent loop lives there.
+  **No offscreen document needed.**
+- **0.5 done** — `gpt-5.4` is the fastest (2.6 s trivial, 9.2 s with a tool call, 26 s with web
+  search). Web search and image input both work. Latency is the product risk.
+- **0.6 blocked** — needs a Notion MCP token; one browser approval away.
 
 **Exit:** verdicts written; runtime location fixed; undo scope fixed.
 
@@ -74,7 +82,12 @@ self-heals; 200 rapid searches throttle instead of erroring.
 
 ## E3 — Bridge + Codex (M)
 
-1. `nox-bridge`: dependency-free Node script, spawns `codex app-server --stdio`, relays JSON-RPC.
+1. `nox-bridge`: dependency-free Node script, relays JSON-RPC over stdio.
+1b. **Resolve the codex binary deliberately** (`bridge/resolve-codex.mjs`) — never `spawn('codex')`.
+   Multiple installs coexist and PATH can pick an old one whose `model/list` hides newer models.
+   Enumerate candidates, compare `--version`, take the newest, and report the running version from
+   `initialize.userAgent`. Pass an explicit non-writable `cwd`, or the thread inherits the
+   browser's working directory.
 2. **Chunked framing** for the 1 MB host→extension cap; reassembly in the panel.
 3. Install scripts: Windows (`REG ADD` + manifest), macOS and Linux (manifest file). One command
    each, documented per OS.
@@ -124,7 +137,10 @@ unapproved write. **This is the milestone where the product exists.**
    send ⇄ stop; Enter / Shift+Enter / `@` / Esc.
 6. Job bar pinned to the top of the panel for bulk runs.
 7. Interrupted-turn banner on reopen.
-8. Settings: model, reasoning effort, default mode, escalation threshold, bridge status, data controls.
+8. Settings: **model picker built from `model/list`** — every model the account exposes, shown
+   with Codex's own `displayName`/`description`, account default marked, effort filtered by
+   `supportedReasoningEfforts`. Plus default mode, escalation threshold, bridge status, data
+   controls.
 9. Accessibility: keyboard-only operation, focus management, `aria-live` stream, reduced motion.
 
 **AC:** side-by-side with the reference screenshots, layout and states match; no layout shift while

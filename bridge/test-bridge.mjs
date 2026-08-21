@@ -5,6 +5,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import assert from 'node:assert';
+import { resolveCodex } from './resolve-codex.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const child = spawn(process.execPath, [join(HERE, 'nox-bridge.mjs')], { stdio: ['pipe', 'pipe', 'inherit'] });
@@ -32,11 +33,24 @@ child.stdout.on('data', (c) => {
 send({ type: 'ping' });
 send({ type: 'big', bytes: 2 * 1024 * 1024, mode: 'chunked', id: 7 });
 
-setTimeout(() => {
-  child.kill();
+await new Promise((resolve, reject) => {
+  const deadline = setTimeout(() => reject(new Error('bridge test timed out')), 15000);
+  const poll = setInterval(() => {
+    if (!messages.some((m) => m.type === 'pong') || !messages.some((m) => m.type === 'chunkEnd' && m.id === 7)) return;
+    clearTimeout(deadline);
+    clearInterval(poll);
+    resolve();
+  }, 10);
+});
+child.kill();
 
   const pong = messages.find((m) => m.type === 'pong');
   assert(pong, 'no pong received');
+  const expectedCodex = resolveCodex();
+  assert(
+    pong.codex.version?.includes(expectedCodex.version),
+    `bridge used ${pong.codex.version}; newest resolved Codex is ${expectedCodex.version}`,
+  );
   assert.equal(pong.maxMessageBytes, 1024 * 1024);
   console.log('✔ ping/pong framing ok — node', pong.node, '| codex', pong.codex.found ? pong.codex.version : 'NOT FOUND');
 
@@ -52,5 +66,3 @@ setTimeout(() => {
   }
   console.log(`✔ 2 MB chunked into ${chunks.length} messages, largest well under 1 MB, reassembled exactly`);
   console.log('\nall bridge checks passed');
-  process.exit(0);
-}, 2500);

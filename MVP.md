@@ -30,6 +30,7 @@ Read [RESEARCH.md](RESEARCH.md) for the evidence behind these decisions.
 | 8 | **Auto mode / Ask-before-changes mode** | Selector in the composer. Ask = approval card per write. Auto = writes run immediately except escalations (§6.3). |
 | 9 | **Action stream + Undo** | Every tool call in a collapsible progress row. Mutations journalled with inverse operations. Per-action and per-turn undo. |
 | 10 | **Web search** | Codex's own `web_search` tool, on by default. |
+| 10b | **Model choice** | Every model the account exposes, listed from `model/list` with Codex's own names and descriptions, plus reasoning effort. Default is the account default. Nox never hardcodes a model. |
 | 11 | **File input to the model** | Drag/drop, paste or `+`. Images (PNG/JPEG) go to Codex as `input_image`. **Nox does not upload files into Notion** — users do that in Notion directly. |
 | 12 | **Local chat history** | Threads, messages and the action journal in IndexedDB, with **search** and **export**. Survives browser restart and extension update. |
 | 13 | **No backend** | Outbound: `mcp.notion.com` and the local Codex bridge. Nothing operated by the project. |
@@ -128,11 +129,12 @@ relays JSON-RPC frames. Installers for Windows (registry key), macOS and Linux (
 | `capabilities.experimentalApi` | `true` | Required for `dynamicTools`. |
 | `dynamicTools` | Notion MCP tool schemas | Codex decides; **Nox executes**, which is what preserves approvals, the action stream and undo. |
 | `permissionProfile` | `":read-only"` | Codex must not shell out or patch files. |
-| `cwd` | omitted / non-writable | A writable `cwd` silently marks the project trusted in the user's `config.toml`. |
 | `ephemeral` | `false` (persistent) | Faster and cheaper — prompt caching works and threads survive a crash. Documented honestly: Codex keeps history under `~/.codex`. |
 | `developer_instructions` | ours | Otherwise Codex answers like a coding agent. |
 | `personality` | `"pragmatic"` | Tone closer to Notion AI. |
-| `model` / `reasoningEffort` | fastest acceptable default | Latency is the main product risk. |
+| `model` | **whatever the user picked; default = the account default** | Never hardcoded. `model/list` is fetched at connect and every model is offered, using Codex's own `displayName` and `description`. Today that is `gpt-5.6-sol` (default), `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini` — but the list is whatever the account exposes, so new models appear without a Nox release. |
+| `effort` | user-selectable, default `low` | `low` / `medium` / `high` / `xhigh`, filtered per model from `supportedReasoningEfforts`. |
+| `cwd` | explicit temp dir | Omitting it inherits whatever directory the browser launched the bridge from (verified). |
 
 **Bridge requirements:**
 

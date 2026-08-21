@@ -22,10 +22,10 @@ Research date: **2026-08-19**. Claims are tagged:
 |---|---|
 | Can the Notion half run entirely in the browser with no server of ours? | **Yes, with one caveat.** OAuth 2.1 + PKCE + Dynamic Client Registration works as a **public client (no secret)**. But `mcp.notion.com` **rejects authenticated requests carrying a `chrome-extension://` Origin** — the extension must strip that header via `declarativeNetRequest`. Both halves verified end to end from a real extension. **[verified — spike 0.1]** |
 | How does Nox reach Codex? | Through a **native-messaging bridge** to `codex app-server` — OpenAI's own binary, the user's own login. A browser cannot reach app-server directly: its WebSocket listener rejects any request carrying an `Origin` header with 403, by design. **[doc]** |
-| Who runs the agent loop? | **Nox.** Codex's experimental `dynamicTools` lets a client register its own tools; Codex asks the client to execute them via `item/tool/call`. That is what preserves approval cards, the action stream and undo. **[doc]** |
+| Who runs the agent loop? | **Nox.** Codex's experimental `dynamicTools` lets a client register its own tools; Codex asks the client to execute them via `item/tool/call`, and the client's result reaches the model. Verified end to end. This is what preserves approval cards, the action stream and undo. **[verified — spike 0.2]** |
 | Is a local component required? | **Yes.** `codex` CLI plus a small bridge script. Notion, storage, UI and the agent loop stay in the browser. |
 | Biggest hard limits | Notion MCP has **no delete tool** (creations can't be undone) and **no conditional writes** (overwrite races are possible); `notion-search` is capped at **30 req/min**; native messaging caps host→extension messages at **1 MB**; MV3 service workers die at 30s idle. |
-| Biggest risks | `dynamicTools` is experimental and can change; Codex persists conversation history under `~/.codex`; a Chrome Web Store listing requiring separately-installed software plus `nativeMessaging` draws review scrutiny. |
+| Biggest risks | `dynamicTools` is experimental and can change; Codex persists conversation history under `~/.codex`; **latency** — ~2.5 s floor on a trivial prompt and ~9 s with one tool call, against a product people compare to Notion AI; a Chrome Web Store listing requiring separately-installed software plus `nativeMessaging` draws review scrutiny. |
 
 ---
 
@@ -275,25 +275,51 @@ side panel ──connectNative──► nox-bridge ──stdio JSON-RPC──►
 The alternative — configuring Notion MCP inside Codex and letting Codex call it directly — would
 cost us every one of those features. Rejected.
 
-### 3.4 Thread configuration **[verified — spike 0.2]**
+### 3.4 Thread configuration **[verified — spikes 0.2 / 0.5]**
 
 | Setting | Value | Why |
 |---|---|---|
 | `capabilities.experimentalApi` | `true` | Required for `dynamicTools`. |
 | `dynamicTools` | Notion tool schemas | The whole architecture. |
 | `permissionProfile` | `":read-only"` | Codex must not shell out or patch files. (`sandboxPolicy` is the deprecated equivalent and **cannot be combined** with `permissions`.) |
-| `cwd` | **explicit, controlled, non-writable** | **Omitting it does not help — the thread inherits the process cwd** (spike 0.2 got `cwd: "C:\codebases\Nox"` with no `cwd` passed), so the bridge must pass one deliberately. And per the docs, a `cwd` with a `workspace-write` or full-access sandbox **"marks that project as trusted in the user `config.toml`"** — never acceptable as a side effect of opening a chat. |
-| `ephemeral` | `false` | Persistent threads: prompt caching works, quota goes further, threads survive a crash. Trade-off in §3.6. |
+| `cwd` | **explicit, controlled, non-writable** | **Omitting it does not help — the thread inherits the app-server process's cwd** (spike 0.2 got `cwd: "C:\codebases\Nox"` with none passed). An explicit `cwd` **is** honoured (verified). And per the docs, a `cwd` with a `workspace-write` or full-access sandbox **"marks that project as trusted in the user `config.toml`"** — never acceptable as a side effect of opening a chat. |
+| `ephemeral` | `false` | Persistent threads: prompt caching works, quota goes further, threads survive a crash. `true` genuinely writes nothing (`thread.path` is `null`, verified), so the privacy switch is available if wanted. Trade-off in §3.6. |
 | `developerInstructions` | ours | Otherwise Codex answers like a coding agent. **Field name verified in 0.143.0 bindings — it is a top-level `thread/start` string, not the `collaborationMode.settings.developer_instructions` shape the `main` README describes.** |
 | `effort` | `"low"` to start | `low` / `medium` / `high` / `xhigh` on every current model. |
 | `personality` | `"pragmatic"` | Valid values are `"friendly"`, `"pragmatic"`, `"none"`. |
-| `model` | pinned explicitly | **Never rely on the account default.** Spike 0.2 hit `400 "The 'gpt-5.6-sol' model requires a newer version of Codex"` because the account default outran the installed binary. |
+| `model` | **user's choice; default = the account default** | Fetch `model/list` at connect and offer all of them. Do **not** hardcode one — the earlier "pick the fastest" idea was measuring round-trip noise (§3.4b). Do pin the chosen id explicitly on `thread/start` rather than letting the server default, so a stale binary fails loudly instead of 400-ing mid-turn. |
 | `model` / `reasoningEffort` | fastest acceptable | Latency is the main product risk (§6.2). |
 
 Other useful facts: `turn/start` can override model, cwd, permissions and approval policy per turn;
 `turn/interrupt` cancels; `thread/resume` continues after a bridge restart; the server returns JSON-RPC
 error **-32001 "Server overloaded; retry later"** under backpressure, which clients should retry with
 jittered backoff.
+
+### 3.4b Measured behaviour **[verified — spikes 0.2 / 0.5]**
+
+- **Item stream**: `userMessage`, `reasoning`, `dynamicToolCall`, `webSearch`, `agentMessage`.
+  `dynamicToolCall` is the action-stream row; `reasoning` feeds the "Thought" collapsible.
+- **Web search is on by default** — no config needed. But the `webSearch` item carries an **empty
+  `query`** and `action:{type:'other'}`, so the UI can show "Searching the web" and a count, not
+  the query itself. Answers do cite real URLs.
+- **Image input** works via `UserInput {type:'image', url:<data url>}` — no temp file, so browser
+  attachments pass straight through. Other variants: `text`, `localImage`, `audio`, `localAudio`,
+  `skill`, `mention`.
+- **Models** (`model/list`, 0.149.0): `gpt-5.6-sol` (account default), `gpt-5.6-terra`,
+  `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`. Each entry carries `displayName`,
+  `description`, `inputModalities`, `supportedReasoningEfforts` and `serviceTiers` — enough to
+  render a picker without Nox knowing anything about the models. OpenAI positions the 5.6 tier as
+  Sol = flagship, Terra = balanced, Luna = fastest/cheapest.
+- **Latency** (`effort: low`, trivial prompt): sol 3.1 s · terra 2.8 s · luna 3.4 s · 5.5 2.5 s ·
+  5.4 2.7 s · 5.4-mini 4.6 s. **The spread is round-trip overhead, not model speed** — do not pick
+  a default from it. Real work is what separates them: one tool call plus answer took **9.2 s**,
+  a web-search turn **26 s**.
+- **Binary resolution is a real hazard.** `spawn('codex')` is ambiguous. On this machine PATH
+  resolved to the desktop app's **0.143.0**, whose `model/list` hides every `gpt-5.6` model and
+  whose app-server 400s on the account default. The npm-vendored binary at
+  `node_modules/@openai/codex/node_modules/@openai/codex-win32-x64/vendor/<triple>/bin/codex.exe`
+  was **0.149.0** with all six. `bridge/resolve-codex.mjs` enumerates candidates, asks each
+  `--version`, and takes the newest. Always read the running version from `initialize.userAgent`.
 
 ### 3.5 Native messaging constraints **[doc]**
 
@@ -479,14 +505,14 @@ content script does exactly one thing — parse the current page id from the URL
 
 E0 exists to close these. Ranked by how much damage a wrong assumption does.
 
+Everything else in E0 is closed — see `docs/spikes/`. Both remaining items need one browser
+approval to produce a Notion MCP token (`node spikes/notion-auth.mjs`); nothing else blocks them.
+
 | # | Question | If wrong |
 |---|---|---|
-| 1 | **Does `item/tool/call` actually come back?** Spike 0.2 confirmed `thread/start` *accepts* `dynamicTools` and the whole config, but the turn never reached the model (quota exhausted), so the round trip is unproven. `ThreadStartParams` doesn't list `dynamicTools` in the generated bindings, so it may be accepted-and-ignored. | Fall back to the OSS proxy (§3.7); UI unchanged, one file different |
-| 3 | What exactly happens at the 1 MB native-messaging boundary? | Determines the framing design |
-| 4 | Does the full Notion OAuth flow work from a real unpacked extension? | Manual token fallback; expected to pass |
-| 5 | Which models does the subscription expose, and how slow is each? | Sets the default model and the latency expectation |
-| 6 | How lossy is `fetch` → `replace_content` on a complex page? | Bounds how far undo can be trusted |
-| 7 | Is the `mcp.notion.com` token accepted by `api.notion.com`? | Would unlock delete, and real undo of creations |
+| 1 | How lossy is `notion-fetch` → `replace_content` on a complex page (toggles, columns, callouts, synced blocks, embedded database)? | Bounds how far undo can be trusted; may force a complexity threshold and a warning |
+| 2 | Is the `mcp.notion.com` token also accepted by `api.notion.com/v1`? | Would unlock delete/archive, and therefore real undo of creations |
+| 3 | What does `current_tool_access` report for this workspace's plan? | Decides which E7 database features can even be built against |
 
 ---
 
