@@ -13,6 +13,7 @@ export interface JournalEntry {
 export interface JournalStore {
   append(entry: JournalEntry): Promise<void>
   list(): Promise<JournalEntry[]>
+  remove?(id: number): Promise<void>
 }
 
 export function memoryJournalStore(): JournalStore {
@@ -23,6 +24,9 @@ export function memoryJournalStore(): JournalStore {
     },
     async list() {
       return [...entries]
+    },
+    async remove(id) {
+      entries = entries.filter((e) => e.id !== id)
     },
   }
 }
@@ -46,6 +50,11 @@ export class MutationJournal {
   /** Entries that carry a runnable inverse. */
   async undoable(): Promise<JournalEntry[]> {
     return (await this.newestFirst()).filter((e) => e.inverse != null)
+  }
+
+  /** Removes an entry after it was undone (or explicitly dismissed). */
+  async drop(id: number): Promise<void> {
+    await this.store.remove?.(id)
   }
 
   get size(): number {

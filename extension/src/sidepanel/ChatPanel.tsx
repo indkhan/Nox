@@ -5,6 +5,7 @@ import { AssistantMarkdown, ProgressBlock, type ProgressStep } from './MessagePa
 import { Composer } from './Composer'
 import { EmptyState } from './EmptyState'
 import { SettingsModal } from './SettingsModal'
+import { ApprovalCards, UndoBar } from './ApprovalCards'
 
 interface TurnView {
   progress: ProgressStep[]
@@ -134,6 +135,9 @@ export function ChatPanel() {
           ))}
         </div>
       )}
+
+      <ApprovalCards />
+      {hasMessages && <UndoBar />}
 
       <Composer busy={busy} onSend={(t) => void send(t)} onCancel={() => agentLoop.cancel()} />
     </section>

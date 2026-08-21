@@ -30,6 +30,10 @@ interface NoxState {
   mode: Mode
   setMode: (mode: Mode) => void
 
+  pendingApprovals: Array<{ id: number; tool: string; summary: string; payloadJson: string; reasons: string[] }>
+  addApproval: (a: { id: number; tool: string; summary: string; payloadJson: string; reasons: string[] }) => void
+  removeApproval: (id: number) => void
+
   threadTitle: string
   setThreadTitle: (title: string) => void
 }
@@ -51,7 +55,15 @@ export const useNoxStore = create<NoxState>((set) => ({
   setCodex: (update) => set(update),
 
   mode: 'ask',
-  setMode: (mode) => set({ mode }),
+  setMode: (mode) => {
+    set({ mode })
+    // Keep the write gate's escalation mode in sync (E6).
+    void import('../lib/agent/panel').then(({ setAgentMode }) => setAgentMode(mode))
+  },
+
+  pendingApprovals: [],
+  addApproval: (a) => set((s) => ({ pendingApprovals: [...s.pendingApprovals, a] })),
+  removeApproval: (id) => set((s) => ({ pendingApprovals: s.pendingApprovals.filter((p) => p.id !== id) })),
 
   threadTitle: 'New chat',
   setThreadTitle: (threadTitle) => set({ threadTitle }),

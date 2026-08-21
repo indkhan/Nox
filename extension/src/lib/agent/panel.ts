@@ -4,14 +4,51 @@ import { AgentLoop } from './loop'
 import { ToolExecutor } from './executor'
 import { buildDeveloperInstructions } from './instructions'
 import { toDynamicTools } from './dynamic-tools'
+import { WriteGate } from '../writes/gate'
+import type { Mode } from '../writes/approvals'
 import type { CurrentPage } from '../../shared/notion-page'
 
-/** Production assembly: real Notion facade + real Codex client in one loop. */
+// The store dynamically imports this module, so a static import back is cycle-free.
+import { useNoxStore } from '../../sidepanel/store'
+
+let currentMode: Mode = 'ask'
+let contextSet = new Set<string>()
+
+export function setAgentMode(mode: Mode): void {
+  currentMode = mode
+}
+
+export function setTurnContext(page: CurrentPage | null): void {
+  contextSet = page ? new Set([page.pageId]) : new Set<string>()
+}
+
+export const writeGate = new WriteGate({
+  callTool: (name, args) => notion.scheduleCallTool(name, args),
+  fetchPageMarkdown: async (pageId) => {
+    const result = await notion.scheduleCallTool('notion-fetch', { id: pageId })
+    return result.content.filter((c) => c.type === 'text').map((c) => c.text ?? '').join('\n')
+  },
+  getMode: () => currentMode,
+  getContextSet: () => contextSet,
+  onApproval: (approval) => useNoxStore.getState().addApproval(approval),
+})
+
+/** Production assembly: real Notion facade + real Codex client behind the gate. */
 export const agentLoop = new AgentLoop({
   bridge,
   codex,
   executor: new ToolExecutor({
-    callTool: (name, args) => notion.scheduleCallTool(name, args),
+    callTool: async (name, args) => {
+      const result = (await writeGate.handle({ rid: 0, tool: name, args, namespace: null })) as {
+        content?: Array<{ type: string; text?: string }>
+        isError?: boolean
+      }
+      if (result?.isError && Array.isArray(result.content)) {
+        // Guard/refusal outcomes flow back to the model as data (MVP §6).
+        throw Object.assign(new Error(result.content.map((c) => c.text).join('\n')), { handledByGate: true })
+      }
+      return { content: result.content ?? [] }
+    },
     assertToolAllowed: (name) => {
       const verdict = notion.capabilities.can(name)
       if (!verdict.allowed) throw new Error(`"${name}" ${verdict.reason ?? 'is unavailable'}`)
@@ -44,3 +81,4 @@ export async function fetchCurrentPageContext(page: CurrentPage): Promise<PageWi
     return page // content is optional context; never block the turn on it
   }
 }
+
