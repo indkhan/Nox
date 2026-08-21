@@ -1,0 +1,16 @@
+@import "tailwindcss";
+
+@theme {
+  --color-surface: #09090b;
+  --color-surface-raised: #18181b;
+  --color-border: #27272a;
+  --color-text: #fafafa;
+  --color-text-muted: #71717a;
+  --color-accent: #34d399;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
