@@ -58,6 +58,7 @@ describe('Notion facade', () => {
       if (url.includes('protected-resource')) return jsonRes(PRM)
       if (url.includes('oauth-authorization-server')) return jsonRes(AS)
       if (url.endsWith('/register')) return jsonRes({ client_id: 'cid-1' }, 201)
+      if (url.endsWith('/token')) return jsonRes({ access_token: 'at-1', refresh_token: 'rt-1', expires_in: 3600 })
       if (url.endsWith('/authorize')) throw new Error('not fetched server-side')
       if (typeof body.method === 'string') {
         if (body.method === 'initialize') return jsonRes({ jsonrpc: '2.0', id: body.id as number, result: {} }, 200, { 'mcp-session-id': 's1' })
