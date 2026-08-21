@@ -6,6 +6,7 @@ import { Composer } from './Composer'
 import { EmptyState } from './EmptyState'
 import { SettingsModal } from './SettingsModal'
 import { ApprovalCards, UndoBar } from './ApprovalCards'
+import { historyRepo } from '../lib/history/panel'
 
 interface TurnView {
   progress: ProgressStep[]
@@ -18,12 +19,16 @@ export function ChatPanel() {
   const [busy, setBusy] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
+  const currentThreadIdRef = useRef<string | null>(null)
+  const lastUsageRef = useRef<Record<string, number> | null>(null)
   const currentPage = useNoxStore((s) => s.currentPage)
   const connectionStatus = useNoxStore((s) => s.connectionStatus)
   const threadTitle = useNoxStore((s) => s.threadTitle)
   const setThreadTitle = useNoxStore((s) => s.setThreadTitle)
 
   const scrollToEnd = () => requestAnimationFrame(() => scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }))
+
+  const v_error_placeholder = () => '(no content)'
 
   async function send(text: string) {
     if (busy) return
@@ -68,6 +73,9 @@ export function ChatPanel() {
             patch((v) => ({ ...v, progress: [...v.progress, ...steps] }))
             break
           }
+          case 'usage':
+            lastUsageRef.current = (event.usage as Record<string, number> | null) ?? null
+            break
           case 'text-delta':
             patch((v) => ({ ...v, answer: v.answer + event.text }))
             scrollToEnd()
@@ -79,10 +87,26 @@ export function ChatPanel() {
       if (currentPage) pageContext = await fetchCurrentPageContext(currentPage)
 
       const result = await agentLoop.sendUserMessage(text, { currentPage: pageContext ?? undefined })
+
+      // Persist the exchange (MVP §8): incremental, survives restarts.
+      try {
+        if (!currentThreadIdRef.current) currentThreadIdRef.current = (await historyRepo.createThread()).id
+        const threadId = currentThreadIdRef.current
+        await historyRepo.appendMessage(threadId, { role: 'user', text })
+        await historyRepo.appendMessage(threadId, {
+          role: 'assistant',
+          text: result.text || v_error_placeholder(),
+          usage: lastUsageRef.current ?? undefined,
+        })
+      } catch {
+        /* persistence is best-effort; never block the chat */
+      }
+
       if (threadTitle === 'New chat') {
         const title = text.replace(/\s+/g, ' ').trim().slice(0, 48) || 'New chat'
         setThreadTitle(title)
         void chrome.storage.local.set({ nox_thread_title: title })
+        if (currentThreadIdRef.current) void historyRepo.renameThread(currentThreadIdRef.current, title)
       }
       patch((v) => ({ ...v, answer: result.text || v.answer || '(no content)' }))
     } catch (e) {
