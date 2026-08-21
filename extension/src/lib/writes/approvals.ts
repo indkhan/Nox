@@ -35,7 +35,7 @@ export function evaluateApproval(call: CallClassification & { name: string; args
   }
 
   if (call.kind === 'move') reasons.push('moving pages is always confirmed')
-  if ((call.kind === 'schema' || call.kind === 'view') && targetPageId) reasons.push('schema and view changes are always confirmed')
+  if (call.kind === 'schema' || call.kind === 'view') reasons.push('schema and view changes are always confirmed')
   if (typeof ctx.rowCount === 'number' && ctx.rowCount > BULK_CONFIRM_ROWS) {
     reasons.push(`bulk runs over ${BULK_CONFIRM_ROWS} rows are always confirmed`)
   }
