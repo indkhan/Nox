@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { CurrentPage } from '../shared/notion-page'
 import { isNoxMessage } from '../shared/messages'
+import type { Mode } from './Composer'
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error'
 
@@ -25,6 +26,12 @@ interface NoxState {
   codexModelCount: number
   codexHint: string | null
   setCodex: (update: Partial<Pick<NoxState, 'codexStatus' | 'codexVersion' | 'codexModelCount' | 'codexHint'>>) => void
+
+  mode: Mode
+  setMode: (mode: Mode) => void
+
+  threadTitle: string
+  setThreadTitle: (title: string) => void
 }
 
 export const useNoxStore = create<NoxState>((set) => ({
@@ -42,6 +49,12 @@ export const useNoxStore = create<NoxState>((set) => ({
   codexModelCount: 0,
   codexHint: null,
   setCodex: (update) => set(update),
+
+  mode: 'ask',
+  setMode: (mode) => set({ mode }),
+
+  threadTitle: 'New chat',
+  setThreadTitle: (threadTitle) => set({ threadTitle }),
 }))
 
 chrome.runtime.onMessage.addListener((message) => {
