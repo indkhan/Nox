@@ -74,6 +74,23 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) =
     })()
     return true
   }
+  if (
+    typeof message === 'object' &&
+    message !== null &&
+    (message as { type?: string }).type === 'nox/get-dnr-status'
+  ) {
+    void (async () => {
+      let dnrActive = false
+      try {
+        dnrActive = originStripRuleIsActive(await chrome.declarativeNetRequest.getDynamicRules())
+        if (!dnrActive) dnrActive = await ensureOriginStripRule()
+      } catch (error) {
+        console.error('[nox] dnr status check failed', error)
+      }
+      sendResponse({ active: dnrActive } satisfies { active: boolean })
+    })()
+    return true
+  }
   return false
 })
 

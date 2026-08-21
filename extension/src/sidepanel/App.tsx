@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { hydrateCurrentPage, useNoxStore } from './store'
+import { ConnectionCard } from './ConnectionCard'
 
 export function App() {
   const currentPage = useNoxStore((s) => s.currentPage)
@@ -13,7 +14,8 @@ export function App() {
       <header className="border-b border-zinc-800 px-4 py-3">
         <h1 className="text-sm font-semibold tracking-tight">Nox</h1>
       </header>
-      <main className="flex flex-1 flex-col gap-2 p-4">
+      <main className="flex flex-1 flex-col gap-2 overflow-y-auto p-4">
+        <ConnectionCard />
         {currentPage ? (
           <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-3">
             <p className="mb-1 text-xs uppercase tracking-wide text-zinc-500">
