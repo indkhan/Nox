@@ -207,7 +207,9 @@ function pong() {
 function handle(msg) {
   switch (msg?.t) {
     case 'ping':
-      return write(pong());
+      // Echo the caller's cid so the extension can correlate health checks.
+      write({ ...pong(), ...(msg.cid !== undefined ? { __cid: String(msg.cid) } : {}) });
+      return;
 
     case 'rpc': {
       startCodex();
