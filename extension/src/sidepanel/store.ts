@@ -19,6 +19,12 @@ interface NoxState {
   limitations: Array<{ tool: string; reason: string }>
   connectionError: string | null
   setConnection: (update: Partial<Pick<NoxState, 'connectionStatus' | 'identity' | 'limitations' | 'connectionError'>>) => void
+
+  codexStatus: ConnectionStatus | 'unknown'
+  codexVersion: string | null
+  codexModelCount: number
+  codexHint: string | null
+  setCodex: (update: Partial<Pick<NoxState, 'codexStatus' | 'codexVersion' | 'codexModelCount' | 'codexHint'>>) => void
 }
 
 export const useNoxStore = create<NoxState>((set) => ({
@@ -30,6 +36,12 @@ export const useNoxStore = create<NoxState>((set) => ({
   limitations: [],
   connectionError: null,
   setConnection: (update) => set(update),
+
+  codexStatus: 'unknown',
+  codexVersion: null,
+  codexModelCount: 0,
+  codexHint: null,
+  setCodex: (update) => set(update),
 }))
 
 chrome.runtime.onMessage.addListener((message) => {
