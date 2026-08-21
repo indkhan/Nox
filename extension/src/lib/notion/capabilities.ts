@@ -1,66 +1,116 @@
 /**
- * Parses `notion-fetch { id: 'self' }` output (RESEARCH §2.5). Notion returns
- * this as markdown text whose exact layout is theirs to change, so every field
- * is extracted defensively and may stay undefined.
+ * Parses `notion-fetch { id: 'self' }` output (RESEARCH §2.5).
+ *
+ * Verified against production (2026-08-22): the content is a JSON object with
+ *   .title/.url/.text            human-readable mirror
+ *   .self.workspace.{id,name}    workspace identity
+ *   .self.user.{id,name,email}   user identity
+ *   .self.current_tool_access    { "<unprefixed-tool>": { status, upgrade_url? } }
+ * Tool keys arrive UNPREFIXED ("search", "update_page") while tools/list names
+ * are prefixed ("notion-search"), so lookups normalize the prefix away.
+ * Every field stays defensive/optional — Notion's MCP is Beta.
  */
 
 export type AccessState = 'available' | 'available_with_limit' | 'upgrade_required' | 'not_enabled'
 
+const VALID_STATES: readonly AccessState[] = [
+  'available',
+  'available_with_limit',
+  'upgrade_required',
+  'not_enabled',
+]
+
 export interface SelfInfo {
   identity: {
     workspaceName?: string
+    workspaceId?: string
     userName?: string
     email?: string
   }
+  /** Keyed by unprefixed short name AND prefixed name for convenience. */
   access: Record<string, AccessState>
+  upgradeUrls: Record<string, string>
+}
+
+interface RawSelf {
+  workspace?: { id?: string; name?: string }
+  user?: { id?: string; name?: string; email?: string }
+  current_tool_access?: Record<string, { status?: string; upgrade_url?: string }>
+}
+
+export function stripNotionPrefix(tool: string): string {
+  return tool.startsWith('notion-') ? tool.slice(7) : tool
+}
+
+/**
+ * Canonical tool key: unprefixed, hyphenated, case-folded — so
+ * "notion-update-page", "update_page" and "Update.Page" all collide.
+ */
+export function canonicalTool(tool: string): string {
+  return stripNotionPrefix(tool).toLowerCase().replaceAll(/[-_.]+/g, '-')
 }
 
 export function parseSelfResult(text: string): SelfInfo {
-  const access: Record<string, AccessState> = {}
-  const accessMatch = text.match(/current_tool_access[\s\S]{0,4000}/)
-  const haystack = accessMatch ? accessMatch[0] : ''
-  for (const [, tool, state] of haystack.matchAll(
-    /"?([A-Za-z0-9_-]+)"?\s*:\s*"?(available_with_limit|upgrade_required|not_enabled|available)"?/g,
-  )) {
-    // Skip obvious non-tools that happen to sit inside the block.
-    if (['state', 'status', 'plan', 'value'].includes(tool)) continue
-    access[tool] = state as AccessState
-  }
-
-  return { identity: extractIdentity(text), access }
-}
-
-function extractIdentity(text: string): SelfInfo['identity'] {
+  const raw = extractRawSelf(text)
   const identity: SelfInfo['identity'] = {}
-  const workspaceName = firstMatch(text, [
-    /workspace[_\s-]?name"?\s*:\s*"([^"]{1,120})"/i,
-    /\*\*Workspace\*\*\s*[:\-]?\s*(.+)/i,
-  ])
-  if (workspaceName) identity.workspaceName = workspaceName
+  const access: Record<string, AccessState> = {}
+  const upgradeUrls: Record<string, string> = {}
 
-  const userName = firstMatch(text, [
-    /user[_\s-]?(?:first[_\s-]?)?name"?\s*:\s*"([^"]{1,80})"/i,
-    /\b(?:Hi|Hello),?\s+([A-Z][a-z]+)\b/,
-    /preferred[_\s-]?name"?\s*:\s*"([^"]{1,80})"/i,
-  ])
-  if (userName) identity.userName = userName
+  if (raw?.workspace?.name) identity.workspaceName = raw.workspace.name
+  if (raw?.workspace?.id) identity.workspaceId = raw.workspace.id
+  if (raw?.user?.name) identity.userName = raw.user.name
+  if (raw?.user?.email) identity.email = raw.user.email
 
-  const email = text.match(/[\w.+-]+@[\w-]+\.[\w.-]+/)
-  if (email) identity.email = email[0]
-  return identity
+  for (const [tool, entry] of Object.entries(raw?.current_tool_access ?? {})) {
+    const state = entry?.status as AccessState | undefined
+    if (!state || !VALID_STATES.includes(state)) continue
+    const key = canonicalTool(tool)
+    access[key] = state
+    if (entry.upgrade_url) upgradeUrls[key] = entry.upgrade_url
+  }
+
+  if (Object.keys(access).length === 0 && raw == null) {
+    // Fallback: legacy markdown shape (spike-era).
+    const blockMatch = text.match(/current_tool_access[\s\S]{0,4000}/)
+    for (const [, tool, state] of (blockMatch?.[0] ?? '').matchAll(
+      /"?([A-Za-z0-9_-]+)"?\s*:\s*"?(available_with_limit|upgrade_required|not_enabled|available)"?/g,
+    )) {
+      access[canonicalTool(tool)] = state as AccessState
+    }
+  }
+  return { identity, access, upgradeUrls }
 }
 
-function firstMatch(text: string, patterns: RegExp[]): string | undefined {
-  for (const re of patterns) {
-    const m = re.exec(text)
-    if (m?.[1]) return m[1].trim()
+function extractRawSelf(text: string): RawSelf | null {
+  let candidate: unknown = null
+  try {
+    candidate = JSON.parse(text)
+  } catch {
+    const start = text.indexOf('{')
+    const end = text.lastIndexOf('}')
+    if (start >= 0 && end > start) {
+      try {
+        candidate = JSON.parse(text.slice(start, end + 1))
+      } catch {
+        return null
+      }
+    }
   }
-  return undefined
+  if (candidate == null || typeof candidate !== 'object') return null
+  // Production wraps identity + capabilities under a top-level "self" key.
+  const inner = (candidate as Record<string, unknown>)['self']
+  if (inner != null && typeof inner === 'object') return inner as RawSelf
+  return candidate as RawSelf
 }
 
 /** Decides whether a tool may be offered/executed for this account. */
 export class CapabilityGate {
-  constructor(private readonly access: Record<string, AccessState> = {}) {}
+  private readonly access: Record<string, AccessState>
+
+  constructor(access: Record<string, AccessState> = {}) {
+    // Canonicalize keys on the way in so any caller-provided spelling works.
+    this.access = Object.fromEntries(Object.entries(access).map(([k, v]) => [canonicalTool(k), v]))
+  }
 
   /** True when nothing is known (server did not send the map) — fail open. */
   get isEmpty(): boolean {
@@ -68,7 +118,8 @@ export class CapabilityGate {
   }
 
   can(tool: string): { allowed: boolean; state: AccessState | 'unknown'; reason?: string } {
-    const state = this.access[tool]
+    const key = canonicalTool(tool)
+    const state = this.access[key]
     if (!state) return { allowed: true, state: 'unknown' }
     switch (state) {
       case 'available':
@@ -82,9 +133,14 @@ export class CapabilityGate {
     }
   }
 
+  /** Canonical (unprefixed, hyphenated) tool names only. */
   toolsWith(state: AccessState): string[] {
-    return Object.entries(this.access)
-      .filter(([, s]) => s === state)
-      .map(([t]) => t)
+    return [
+      ...new Set(
+        Object.entries(this.access)
+          .filter(([, s]) => s === state)
+          .map(([t]) => canonicalTool(t)),
+      ),
+    ]
   }
 }

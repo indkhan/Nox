@@ -10,12 +10,17 @@ const AS = {
   registration_endpoint: 'https://mcp.notion.com/register',
 }
 
-const SELF_TEXT = `**Workspace**: Acme
-Hi, Dana
-current_tool_access:
-"notion-search": "available"
-"notion-query-meeting-notes": "upgrade_required"
-`
+const SELF_TEXT = JSON.stringify({
+  title: 'Acme',
+  self: {
+    workspace: { id: '11111111-2222-3333-4444-555555555555', name: 'Acme' },
+    user: { id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', name: 'Dana', email: 'dana@example.com' },
+    current_tool_access: {
+      search: { status: 'available' },
+      query_meeting_notes: { status: 'upgrade_required' },
+    },
+  },
+})
 
 function jsonRes(body: unknown, status = 200, headers: Record<string, string> = {}) {
   return new Response(JSON.stringify(body), { status, headers })
@@ -108,7 +113,7 @@ describe('Notion facade', () => {
   it('importToken() skips consent and loads identity', async () => {
     standardServer()
     const info = await notion.importToken({ access_token: 'at', refresh_token: 'rt', expires_in: 3600 })
-    expect(info.access['notion-search']).toBe('available')
+    expect(info.access['search']).toBe('available')
   })
 
   it('scheduleCallTool routes search through the search bucket and others globally', async () => {

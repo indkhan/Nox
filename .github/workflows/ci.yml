@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    paths: ["extension/**", ".github/workflows/ci.yml"]
+    paths: ["extension/**", "bridge/**", ".github/workflows/ci.yml"]
   pull_request:
 
 jobs:
@@ -25,3 +25,15 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
+
+  bridge:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --test bridge/test-bridge.mjs

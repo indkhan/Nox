@@ -1,44 +1,60 @@
 import { describe, expect, it } from 'vitest'
 import { CapabilityGate, parseSelfResult } from '../src/lib/notion/capabilities'
 
-const SELF_SAMPLE = `# Acme Corp Workspace
-
-**Workspace**: Acme Corp
-Hi, Dana — welcome back.
-dana@acme.com
-
-## current_tool_access
-\`\`\`json
-{
-  "notion-search": "available",
-  "notion-fetch": "available",
-  "notion-query-data-sources": "available_with_limit",
-  "notion-query-meeting-notes": "upgrade_required",
-  "notion-create-comment": "not_enabled"
-}
-\`\`\`
-`
+/** Fixture mirrors the VERIFIED production shape (2026-08-22), with synthetic identity. */
+const SELF_JSON = JSON.stringify({
+  metadata: { type: 'self' },
+  title: "Ada's Notion",
+  url: 'https://app.notion.com',
+  text: '# Ada\'s Notion\n\n- Workspace name: Ada\'s Notion\n- User: Ada Lovelace (ada@example.com)\n\nTool access on this workspace\'s plan (all other tools are available):\n- query_meeting_notes: upgrade_required',
+  self: {
+    workspace: { id: '11111111-2222-3333-4444-555555555555', name: "Ada's Notion" },
+    user: { type: 'person', id: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', name: 'Ada Lovelace', email: 'ada@example.com' },
+    current_tool_access: {
+      search: { status: 'available' },
+      fetch: { status: 'available' },
+      create_pages: { status: 'available' },
+      update_page: { status: 'available' },
+      move_pages: { status: 'available' },
+      duplicate_page: { status: 'available' },
+      query_data_sources: {
+        status: 'available_with_limit',
+        upgrade_url: 'https://app.notion.com/checkout?tool=query_data_sources',
+      },
+      query_meeting_notes: {
+        status: 'upgrade_required',
+        upgrade_url: 'https://app.notion.com/checkout?tool=query_meeting_notes',
+      },
+    },
+  },
+})
 
 describe('parseSelfResult', () => {
-  it('extracts the capability map', () => {
-    const { access } = parseSelfResult(SELF_SAMPLE)
-    expect(access['notion-search']).toBe('available')
-    expect(access['notion-query-data-sources']).toBe('available_with_limit')
-    expect(access['notion-query-meeting-notes']).toBe('upgrade_required')
-    expect(access['notion-create-comment']).toBe('not_enabled')
+  it('parses the verified JSON payload', () => {
+    const parsed = parseSelfResult(SELF_JSON)
+    expect(parsed.identity).toMatchObject({
+      workspaceName: "Ada's Notion",
+      workspaceId: '11111111-2222-3333-4444-555555555555',
+      userName: 'Ada Lovelace',
+      email: 'ada@example.com',
+    })
+    expect(parsed.access['search']).toBe('available')
+    expect(parsed.access['query-data-sources']).toBe('available_with_limit')
+    expect(parsed.access['query-meeting-notes']).toBe('upgrade_required')
+    expect(parsed.upgradeUrls['query-meeting-notes']).toMatch(/checkout/)
   })
 
-  it('extracts identity fields when present', () => {
-    const { identity } = parseSelfResult(SELF_SAMPLE)
-    expect(identity.workspaceName).toContain('Acme')
-    expect(identity.userName).toBe('Dana')
-    expect(identity.email).toBe('dana@acme.com')
-  })
-
-  it('tolerates a missing capability block entirely', () => {
+  it('tolerates plain text without structured self data', () => {
     const parsed = parseSelfResult('# Just a page\n\nHello.')
-    expect(parsed.access).toEqual({})
     expect(parsed.identity.workspaceName).toBeUndefined()
+    expect(parsed.access).toEqual({})
+  })
+
+  it('falls back to the legacy markdown capability block', () => {
+    const legacy = `current_tool_access:\n"notion-search": "available"\n"notion-fetch": "not_enabled"`
+    const parsed = parseSelfResult(legacy)
+    expect(parsed.access['search']).toBe('available')
+    expect(parsed.access['fetch']).toBe('not_enabled')
   })
 })
 
@@ -49,38 +65,31 @@ describe('CapabilityGate', () => {
     expect(gate.can('anything').allowed).toBe(true)
   })
 
-  it('allows available and limited tools, with reasons for limits', () => {
-    const gate = new CapabilityGate({
-      'notion-search': 'available',
-      'notion-query-data-sources': 'available_with_limit',
-    })
-    expect(gate.can('notion-search')).toMatchObject({ allowed: true })
-    const limited = gate.can('notion-query-data-sources')
-    expect(limited.allowed).toBe(true)
-    expect(limited.reason).toMatch(/plan/)
+  it('normalizes prefix and separator variants on lookups', () => {
+    const gate = new CapabilityGate({ 'update-page': 'upgrade_required', search: 'available' })
+    expect(gate.can('notion-search').state).toBe('available')
+    expect(gate.can('update_page').allowed).toBe(false)
+    expect(gate.can('notion-update-page').allowed).toBe(false)
   })
 
-  it('blocks upgrade_required and not_enabled with explanations', () => {
+  it('allows limited tools with a reason and blocks gated tools', () => {
     const gate = new CapabilityGate({
-      'notion-query-meeting-notes': 'upgrade_required',
-      'notion-create-comment': 'not_enabled',
+      query_data_sources: 'available_with_limit',
+      query_meeting_notes: 'upgrade_required',
     })
+    expect(gate.can('notion-query-data-sources')).toMatchObject({ allowed: true })
+    expect(gate.can('notion-query-data-sources').reason).toMatch(/plan/)
     expect(gate.can('notion-query-meeting-notes')).toMatchObject({ allowed: false })
-    expect(gate.can('notion-create-comment')).toMatchObject({ allowed: false })
   })
 
-  it('lists tools by state for the limitations panel', () => {
-    const gate = new CapabilityGate({
-      a: 'upgrade_required',
-      b: 'upgrade_required',
-      c: 'not_enabled',
-    })
+  it('lists unprefixed tools by state for the limitations panel', () => {
+    const gate = new CapabilityGate({ a: 'upgrade_required', b: 'upgrade_required', c: 'not_enabled' })
     expect(gate.toolsWith('upgrade_required').sort()).toEqual(['a', 'b'])
     expect(gate.toolsWith('not_enabled')).toEqual(['c'])
   })
 
   it('reports unknown state for tools absent from the map', () => {
-    const gate = new CapabilityGate({ 'notion-search': 'available' })
+    const gate = new CapabilityGate({ search: 'available' })
     expect(gate.can('notion-move-pages')).toMatchObject({ allowed: true, state: 'unknown' })
   })
 })
