@@ -95,8 +95,9 @@ describe('NativeBridge', () => {
   it('times out rpc calls that never answer', async () => {
     const p = bridge.rpc('slow/method', {}, 50)
     await vi.waitFor(() => expect(harness.sent.length).toBeGreaterThan(0))
+    const assertion = expect(p).rejects.toThrow(/timeout/)
     await vi.advanceTimersByTimeAsync(60)
-    await expect(p).rejects.toThrow(/timeout/)
+    await assertion
   })
 
   it('reassembles a chunked resp before dispatch', async () => {
