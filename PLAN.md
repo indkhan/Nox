@@ -265,8 +265,10 @@ E9 gates release
 
 ## Open questions
 
-1. Do we ship a GitHub release at M2 to get real usage before E7–E9?
-2. Is 25 rows the right "always confirm" line for bulk runs?
-3. Framework: Vite + CRXJS, or WXT?
-4. Do we want a "dry run" mode (show every planned write without executing) as a third mode, or is
-   Ask-before-changes enough?
+**Closed 2026-08-22** (decisions in docs/plans/E2.md):
+
+1. ~~Do we ship a GitHub release at M2 to get real usage before E7–E9?~~ → Release
+   artifacts prepared in E9; publishing stays manual.
+2. ~~Is 25 rows the right "always confirm" line for bulk runs?~~ → Yes, 25 rows.
+3. ~~Framework: Vite + CRXJS, or WXT?~~ → Vite + CRXJS (E1's choice).
+4. ~~Dry-run mode as a third mode?~~ → No; Ask-before-changes is enough for V1.
