@@ -63,6 +63,10 @@ export class AgentLoop {
     this.threadId = null
   }
 
+  restoreThread(threadId: string | null): void {
+    this.threadId = threadId
+  }
+
   /** Model/effort changes land on the next turn via thread resume. */
   setOverrides(overrides: Partial<ThreadSettings>): void {
     this.overrides = { ...this.overrides, ...overrides }

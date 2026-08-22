@@ -21,8 +21,9 @@ interface TurnView {
 }
 
 export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
-  const [turns, setTurns] = useState<Array<{ userText: string; view: TurnView }>>([])
+  const [turns, setTurns] = useState<Array<{ id: string; userText: string; view: TurnView }>>([])
   const [busy, setBusy] = useState(false)
+  const busyRef = useRef(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const currentThreadIdRef = useRef<string | null>(null)
   const lastUsageRef = useRef<Record<string, number> | null>(null)
@@ -38,11 +39,17 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
     void chrome.storage.local.get('nox_thread_id').then(async (stored) => {
       const threadId = stored['nox_thread_id']
       if (typeof threadId !== 'string' || !threadId) return
-      const messages = await historyRepo.getMessages(threadId)
+      const [messages, thread] = await Promise.all([historyRepo.getMessages(threadId), historyRepo.getThread(threadId)])
       if (cancelled || historyRestoreCancelledRef.current) return
       currentThreadIdRef.current = threadId
       setAgentHistoryThread(threadId)
-      setTurns(restoreTurns(messages))
+      agentLoop.restoreThread(thread?.codexThreadId ?? null)
+      const restored = await Promise.all(restoreTurns(messages).map(async (turn) => ({
+        ...turn,
+        view: { ...turn.view, activity: await attachJournalEntries(turn.view.activity) },
+      })))
+      if (cancelled || historyRestoreCancelledRef.current) return
+      setTurns(restored)
     }).catch(() => undefined)
     return () => { cancelled = true }
   }, [])
@@ -64,20 +71,19 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
   const v_error_placeholder = () => '(no content)'
 
   async function send(text: string) {
-    if (busy || readOnly) return
+    if (busyRef.current || readOnly) return
+    historyRestoreCancelledRef.current = true
     if (connectionStatus !== 'connected') {
-      setTurns((t) => [...t, { userText: text, view: { activity: [], answer: '', error: 'Connect Notion first — open Settings (top right) to connect.', pending: false } }])
+      setTurns((t) => [...t, { id: crypto.randomUUID(), userText: text, view: { activity: [], answer: '', error: 'Connect Notion first — open Settings (top right) to connect.', pending: false } }])
       return
     }
+    busyRef.current = true
     setBusy(true)
     logInfo(`Send: ${text.slice(0, 120)}`)
-    setTurns((t) => [...t, { userText: text, view: { activity: [], answer: '', error: null, pending: true } }])
+    const turnId = crypto.randomUUID()
+    setTurns((t) => [...t, { id: turnId, userText: text, view: { activity: [], answer: '', error: null, pending: true } }])
     const patch = (fn: (v: TurnView) => TurnView) =>
-      setTurns((all) => {
-        const copy = [...all]
-        copy[copy.length - 1] = { ...copy[copy.length - 1], view: fn(copy[copy.length - 1].view) }
-        return copy
-      })
+      setTurns((all) => all.map((turn) => turn.id === turnId ? { ...turn, view: fn(turn.view) } : turn))
     let pendingReasoning = ''
     let currentActivity: ActivityItem[] = []
     let streamedAnswer = ''
@@ -95,6 +101,11 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
       }
       unsubscribe = agentLoop.onTurnEvent((event) => {
         switch (event.kind) {
+          case 'turn-started':
+            if (currentThreadIdRef.current) {
+              void historyRepo.setCodexThreadId(currentThreadIdRef.current, event.threadId).catch(() => undefined)
+            }
+            break
           case 'reasoning-started':
             pendingReasoning = ''
             break
@@ -157,7 +168,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
         void chrome.storage.local.set({ nox_thread_title: title })
         if (currentThreadIdRef.current) void historyRepo.renameThread(currentThreadIdRef.current, title)
       }
-      patch((v) => ({ ...v, answer: result.text || v.answer || '(no content)', pending: false }))
+      patch((v) => ({ ...v, activity: currentActivity, answer: result.text || v.answer || '(no content)', pending: false }))
       logInfo('Turn complete')
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e)
@@ -165,6 +176,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
       logError(`Turn failed: ${message}`)
     } finally {
       unsubscribe?.()
+      busyRef.current = false
       setBusy(false)
       scrollToEnd()
     }
@@ -178,8 +190,8 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
         <EmptyState onSend={(t) => void send(t)} />
       ) : (
         <div ref={scrollRef} className="min-h-0 flex-1 space-y-5 overflow-y-auto px-3 pb-2 pt-1" aria-live="polite" data-testid="chat-messages">
-          {turns.map(({ userText, view }, i) => (
-            <div key={i} className="space-y-1.5">
+          {turns.map(({ id, userText, view }) => (
+            <div key={id} className="space-y-1.5">
               <div className="flex justify-end">
                 <span className="max-w-[85%] whitespace-pre-wrap rounded-2xl bg-zinc-800 px-3.5 py-2 text-sm leading-relaxed">{userText}</span>
               </div>
@@ -187,7 +199,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
                 <ActivityTimeline items={view.activity} active={view.pending} onUndo={(id) => void undoActivity(id, setTurns)} />
               )}
               {view.answer && <AssistantMarkdown markdown={view.answer} />}
-              {!view.pending && view.answer && (
+              {!readOnly && !view.pending && view.answer && (
                 <FollowUpActions suggestions={followUpsForActivity(view.activity)} onSelect={(suggestion) => void send(suggestion)} />
               )}
               {view.error && (
@@ -219,11 +231,12 @@ async function attachJournalEntries(items: ActivityItem[]): Promise<ActivityItem
 
 async function undoActivity(
   journalId: string,
-  setTurns: Dispatch<SetStateAction<Array<{ userText: string; view: TurnView }>>>,
+  setTurns: Dispatch<SetStateAction<Array<{ id: string; userText: string; view: TurnView }>>>,
 ): Promise<void> {
   let error: string | undefined
   try {
-    await undoEntry(writeGate.journal, journalId, (tool, args) => writeGate.handleUndo(tool, args))
+    const undone = await undoEntry(writeGate.journal, journalId, (tool, args) => writeGate.handleUndo(tool, args))
+    if (!undone) error = 'This change is no longer available to undo.'
   } catch (cause) {
     error = cause instanceof Error ? cause.message : String(cause)
   }

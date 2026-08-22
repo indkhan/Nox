@@ -3,6 +3,8 @@ import type { MessageRow, ThreadRow } from './schema'
 
 export interface ThreadRepository {
   createThread(title?: string): Promise<ThreadRow>
+  getThread(id: string): Promise<ThreadRow | undefined>
+  setCodexThreadId(id: string, codexThreadId: string): Promise<void>
   listThreads(): Promise<ThreadRow[]>
   searchThreads(query: string): Promise<Array<{ thread: ThreadRow; snippet: string }>>
   renameThread(id: string, title: string): Promise<void>
@@ -23,6 +25,17 @@ export function threadRepository(db: () => Promise<IDBPDatabase>): ThreadReposit
       const thread: ThreadRow = { id: uid(), title, createdAt: now, updatedAt: now, mode: 'ask', pinned: false }
       await conn.put('threads', thread)
       return thread
+    },
+
+    async getThread(id) {
+      return await (await db()).get('threads', id) as ThreadRow | undefined
+    },
+
+    async setCodexThreadId(id, codexThreadId) {
+      const conn = await db()
+      const thread = await conn.get('threads', id) as ThreadRow | undefined
+      if (!thread) throw new Error(`thread ${id} not found`)
+      await conn.put('threads', { ...thread, codexThreadId, updatedAt: Date.now() })
     },
 
     async listThreads() {

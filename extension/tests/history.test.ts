@@ -101,6 +101,13 @@ describe('ThreadRepository', () => {
     expect(messages[1].usage?.output_tokens).toBe(4)
   })
 
+  it('persists the matching Codex thread for conversation resume', async () => {
+    const thread = await repo.createThread()
+    await repo.setCodexThreadId(thread.id, 'codex-thread-1')
+
+    expect(await repo.getThread(thread.id)).toMatchObject({ id: thread.id, codexThreadId: 'codex-thread-1' })
+  })
+
   it('persists structured assistant activity', async () => {
     const t = await repo.createThread()
     await repo.appendMessage(t.id, {

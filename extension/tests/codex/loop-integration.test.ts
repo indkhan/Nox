@@ -222,6 +222,12 @@ describe('AgentLoop integration (scripted codex)', () => {
     expect(loop.currentThreadId).toBeNull()
   })
 
+  it('resumes a restored Codex thread', async () => {
+    loop.restoreThread('thr_restored')
+    await loop.sendUserMessage('continue this chat')
+    expect(loop.currentThreadId).toBe('thr_restored')
+  })
+
   it('rejects a second turn before resetting active turn state', async () => {
     let release!: () => void
     const blocked = new Promise<unknown[]>((resolve) => { release = () => resolve([]) })
