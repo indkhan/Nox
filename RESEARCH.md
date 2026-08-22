@@ -505,6 +505,15 @@ or DOM scraping is needed.
 
 ---
 
+### Agent UI implementation note (E7)
+
+**[verified]** Codex dynamic-tool failures can arrive as a normal response carrying
+`success: false`; UI status must inspect that field rather than equating promise resolution with
+success. Model-facing tool output must remain injection-wrapped, while local previews require a
+separate non-model display channel. Because Nox intentionally has no Notion content script, it
+cannot observe Notion's selected theme; system theme plus an explicit override is the honest
+boundary.
+
 ## 8. E0 closure
 
 All architecture-blocking spikes are closed; see `docs/spikes/` for evidence.

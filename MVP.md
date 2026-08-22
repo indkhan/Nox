@@ -237,7 +237,7 @@ Mirrors the reference screenshots (RESEARCH.md §5).
 - **Composer** — context pills · textarea (`Do anything with AI...`) · `+` attach · settings ·
   `Auto | Ask before changes` · send ⇄ stop. Enter sends, Shift+Enter newline, `@` mentions, Esc cancels.
 - **Interrupted-turn banner** — on reopen after a panel close mid-run: what changed, with undo.
-- **Theme** follows Notion's light/dark. Full keyboard operation, `aria-live` on the stream,
+- **Theme** follows the system by default, with an explicit Light/Dark override so users can match a Notion theme that differs from it. Full keyboard operation, `aria-live` on the stream,
   `prefers-reduced-motion` respected.
 
 ---
