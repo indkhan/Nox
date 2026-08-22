@@ -123,11 +123,6 @@ export function startCodex({ force = false } = {}) {
     state.proc = null;
     failAllPending(`codex exited (${code ?? signal})`);
     declineAllIncoming();
-    sendToExtension({
-      t: 'status',
-      state: 'exited',
-      detail: { exitCode: code, signal, restarts: state.restarts },
-    });
     // Crash restart with backoff; the extension re-initializes and resumes threads.
     state.restarts += 1;
     if (state.restarts > MAX_RESTARTS) {
@@ -136,6 +131,11 @@ export function startCodex({ force = false } = {}) {
     }
     state.spawnState = 'idle';
     setTimeout(() => startCodex(), Math.min(10_000, 1000 * state.restarts));
+    sendToExtension({
+      t: 'status',
+      state: 'exited',
+      detail: { exitCode: code, signal, restarts: state.restarts },
+    });
   });
 
   return state.spawnState;
