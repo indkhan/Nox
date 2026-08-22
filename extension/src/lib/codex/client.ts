@@ -51,6 +51,7 @@ export interface ToolCallRequest {
   rid: number
   callId?: string
   signal?: AbortSignal
+  provenance?: 'user-only' | 'untrusted-context'
 }
 
 interface ItemParams extends Record<string, unknown> {

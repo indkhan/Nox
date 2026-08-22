@@ -52,7 +52,7 @@ export class WriteGate {
       return result
     }
 
-    const verdict = evaluateApproval({ ...classification, name: req.tool, args: req.args }, {
+    const verdict = evaluateApproval({ ...classification, name: req.tool, args: req.args, provenance: req.provenance }, {
       mode: this.deps.getMode(),
       contextSet: this.deps.getContextSet(),
     })
@@ -137,8 +137,7 @@ function firstString(v: unknown): string | undefined {
 }
 
 function stripReservedArgs(args: Record<string, unknown>): Record<string, unknown> {
-  const { injected_request, _nox_untrusted_context, ...rest } = args
+  const { injected_request, ...rest } = args
   void injected_request
-  void _nox_untrusted_context
   return rest
 }

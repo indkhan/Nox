@@ -37,8 +37,9 @@ export class AgentLoop {
       this.toolUsedThisTurn = true
       const outcome = await this.deps.executor.execute({
         ...req,
-        args: { ...req.args, _nox_untrusted_context: this.untrustedContextThisTurn },
+        provenance: this.untrustedContextThisTurn ? 'untrusted-context' : 'user-only',
       })
+      this.untrustedContextThisTurn = true
       return {
         success: outcome.success,
         contentItems: outcome.contentItems,

@@ -106,15 +106,15 @@ describe('AgentLoop integration (scripted codex)', () => {
   let codex: CodexClient
   let executor: ToolExecutor
   let loop: AgentLoop
-  let notionCalls: Array<{ name: string; args: Record<string, unknown> }>
+  let notionCalls: Array<{ name: string; args: Record<string, unknown>; provenance?: string }>
   const events: string[] = []
 
   beforeEach(() => {
     bridge = new ScriptedBridge()
     codex = new CodexClient(bridge as unknown as NativeBridge)
     executor = new ToolExecutor({
-      callTool: async (name, args) => {
-        notionCalls.push({ name, args })
+      callTool: async (name, args, _signal, provenance) => {
+        notionCalls.push({ name, args, provenance })
         return { content: [{ type: 'text', text: JSON.stringify({ results: ['Task A', 'Task B', 'Task C'] }) }] }
       },
       assertToolAllowed: () => undefined,
@@ -148,7 +148,7 @@ describe('AgentLoop integration (scripted codex)', () => {
     expect(sent.endsWith('find the Projects database and tell me what is overdue')).toBe(true)
 
     // The executor actually called Notion search and returned wrapped data to Codex.
-    expect(notionCalls).toEqual([{ name: 'notion-search', args: { query: 'overdue', _nox_untrusted_context: true } }])
+    expect(notionCalls).toEqual([{ name: 'notion-search', args: { query: 'overdue' }, provenance: 'untrusted-context' }])
     const answer = bridge.toolResults[0].result as { success: boolean; contentItems: Array<{ text: string }> }
     expect(answer.success).toBe(true)
     expect(answer.contentItems[0].text).toContain('UNTRUSTED_CONTENT')

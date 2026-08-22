@@ -38,8 +38,8 @@ export const agentLoop = new AgentLoop({
   bridge,
   codex,
   executor: new ToolExecutor({
-    callTool: async (name, args, signal) => {
-      const result = (await writeGate.handle({ rid: 0, tool: name, args, namespace: null, signal })) as {
+    callTool: async (name, args, signal, provenance) => {
+      const result = (await writeGate.handle({ rid: 0, tool: name, args, namespace: null, signal, provenance })) as {
         content?: Array<{ type: string; text?: string }>
         isError?: boolean
       }

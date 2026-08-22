@@ -63,7 +63,7 @@ describe('evaluateApproval', () => {
   })
 
   it('escalates writes when trusted code marks untrusted turn context', () => {
-    const verdict = evaluateApproval({ ...WRITE_CALL, args: { ...WRITE_CALL.args, _nox_untrusted_context: true } }, { mode: 'auto', contextSet: new Set(['p1']) })
+    const verdict = evaluateApproval({ ...WRITE_CALL, provenance: 'untrusted-context' }, { mode: 'auto', contextSet: new Set(['p1']) })
     expect(verdict.action).toBe('require-approval')
   })
 

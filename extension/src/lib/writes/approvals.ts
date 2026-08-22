@@ -1,5 +1,6 @@
 import type { CallClassification } from './classify'
 import { normalizeId } from '../../shared/notion-page'
+import type { ToolCallRequest } from '../codex/client'
 
 export type Mode = 'ask' | 'auto'
 
@@ -21,7 +22,7 @@ export const BULK_CONFIRM_ROWS = 25
  * Decides whether a mutation may run immediately (MVP §6.3). Ask-before-changes
  * is the default; Auto still gates the escalation list.
  */
-export function evaluateApproval(call: CallClassification & { name: string; args: Record<string, unknown> }, ctx: ApprovalContext): ApprovalVerdict {
+export function evaluateApproval(call: CallClassification & { name: string; args: Record<string, unknown>; provenance?: ToolCallRequest['provenance'] }, ctx: ApprovalContext): ApprovalVerdict {
   if (!call.mutates) return { action: 'allow' }
 
   const reasons: string[] = []
@@ -38,7 +39,7 @@ export function evaluateApproval(call: CallClassification & { name: string; args
   if (call.kind === 'move') reasons.push('moving pages is always confirmed')
   if (call.kind === 'schema' || call.kind === 'view') reasons.push('schema and view changes are always confirmed')
   if (call.kind === 'unknown') reasons.push('unknown tools are always confirmed')
-  if (call.args._nox_untrusted_context === true) reasons.push('the turn includes untrusted Notion content')
+  if (call.provenance === 'untrusted-context') reasons.push('the turn includes untrusted Notion content')
   if (typeof ctx.rowCount === 'number' && ctx.rowCount > BULK_CONFIRM_ROWS) {
     reasons.push(`bulk runs over ${BULK_CONFIRM_ROWS} rows are always confirmed`)
   }
