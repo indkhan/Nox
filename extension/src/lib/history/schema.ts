@@ -1,8 +1,9 @@
 import { openDB, type IDBPDatabase } from 'idb'
 import type { IDBDatabase } from '../../shared/idb-types'
+import type { ActivityItem } from '../agent/activity'
 
 export const DB_NAME = 'nox'
-export const DB_VERSION = 1
+export const DB_VERSION = 2
 
 export interface ThreadRow {
   id: string
@@ -22,6 +23,7 @@ export interface MessageRow {
   text: string
   toolCalls?: Array<{ tool: string; args: unknown }>
   usage?: Record<string, number>
+  activity?: ActivityItem[]
   ts: number
 }
 
@@ -56,6 +58,7 @@ function migrations(db: IDBDatabase, oldVersion: number): void {
     const attachments = db.createObjectStore('attachments', { keyPath: 'id' })
     attachments.createIndex('by_thread', 'threadId')
   }
+  // v2 stores structured activity inside existing message records; no new store is required.
 }
 
 export async function openNoxDB(): Promise<IDBPDatabase> {

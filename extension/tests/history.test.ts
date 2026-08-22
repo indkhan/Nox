@@ -7,8 +7,9 @@ import { MutationJournal, idbJournalStore } from '../src/lib/writes/journal'
 import { startPersistedTurn } from '../src/lib/history/turn'
 
 describe('IndexedDB schema', () => {
-  it('opens at version 1 with all six stores', async () => {
+  it('opens at the current version with all six stores', async () => {
     const db = await openNoxDB()
+    expect(DB_VERSION).toBe(2)
     expect(db.version).toBe(DB_VERSION)
     for (const store of ['threads', 'messages', 'journal', 'pageCache', 'mentionCache', 'attachments']) {
       expect(db.objectStoreNames.contains(store)).toBe(true)
@@ -19,7 +20,7 @@ describe('IndexedDB schema', () => {
   it('upgrades idempotently from an older version without duplicating stores', async () => {
     const db = await openNoxDB()
     const db2 = await openNoxDB()
-    expect(db2.version).toBe(1)
+    expect(db2.version).toBe(DB_VERSION)
     db.close()
     db2.close()
   })
@@ -89,6 +90,19 @@ describe('ThreadRepository', () => {
     const messages = await repo.getMessages(t.id)
     expect(messages.map((m) => m.text)).toEqual(['hello', 'hi there'])
     expect(messages[1].usage?.output_tokens).toBe(4)
+  })
+
+  it('persists structured assistant activity', async () => {
+    const t = await repo.createThread()
+    await repo.appendMessage(t.id, {
+      role: 'assistant',
+      text: 'Done',
+      activity: [{ kind: 'tool', id: 'call-1', tool: 'notion-fetch', args: {}, status: 'completed' }],
+    })
+
+    expect((await repo.getMessages(t.id))[0].activity).toEqual([
+      expect.objectContaining({ id: 'call-1', status: 'completed' }),
+    ])
   })
 
   it('persists the user immediately and upserts streamed assistant text', async () => {

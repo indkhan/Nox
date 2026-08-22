@@ -1,4 +1,5 @@
 import type { ThreadRepository } from './repository'
+import type { ActivityItem } from '../agent/activity'
 
 export async function startPersistedTurn(
   repo: ThreadRepository,
@@ -11,8 +12,8 @@ export async function startPersistedTurn(
   let persistQueue = Promise.resolve<unknown>(undefined)
   return {
     threadId: id,
-    persistAssistant(text: string, usage?: Record<string, number>) {
-      persistQueue = persistQueue.then(() => repo.appendMessage(id, { id: assistantId, role: 'assistant', text, usage }))
+    persistAssistant(text: string, usage?: Record<string, number>, activity?: ActivityItem[]) {
+      persistQueue = persistQueue.then(() => repo.appendMessage(id, { id: assistantId, role: 'assistant', text, usage, activity }))
       return persistQueue
     },
   }
