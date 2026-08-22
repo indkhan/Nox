@@ -7,6 +7,7 @@ import { EmptyState } from './EmptyState'
 import { SettingsModal } from './SettingsModal'
 import { ApprovalCards, UndoBar } from './ApprovalCards'
 import { historyRepo } from '../lib/history/panel'
+import { startPersistedTurn } from '../lib/history/turn'
 
 interface TurnView {
   progress: ProgressStep[]
@@ -45,9 +46,17 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
         return copy
       })
     let pendingReasoning = ''
+    let streamedAnswer = ''
     let unsubscribe: (() => void) | null = null
+    let persisted: Awaited<ReturnType<typeof startPersistedTurn>> | null = null
 
     try {
+      try {
+        persisted = await startPersistedTurn(historyRepo, currentThreadIdRef.current, text)
+        currentThreadIdRef.current = persisted.threadId
+      } catch {
+        /* persistence is best-effort; never block the chat */
+      }
       unsubscribe = agentLoop.onTurnEvent((event) => {
         switch (event.kind) {
           case 'reasoning-started':
@@ -77,6 +86,8 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
             lastUsageRef.current = (event.usage as Record<string, number> | null) ?? null
             break
           case 'text-delta':
+            streamedAnswer += event.text
+            void persisted?.persistAssistant(streamedAnswer).catch(() => undefined)
             patch((v) => ({ ...v, answer: v.answer + event.text }))
             scrollToEnd()
             break
@@ -88,19 +99,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
 
       const result = await agentLoop.sendUserMessage(text, { currentPage: pageContext ?? undefined })
 
-      // Persist the exchange (MVP §8): incremental, survives restarts.
-      try {
-        if (!currentThreadIdRef.current) currentThreadIdRef.current = (await historyRepo.createThread()).id
-        const threadId = currentThreadIdRef.current
-        await historyRepo.appendMessage(threadId, { role: 'user', text })
-        await historyRepo.appendMessage(threadId, {
-          role: 'assistant',
-          text: result.text || v_error_placeholder(),
-          usage: lastUsageRef.current ?? undefined,
-        })
-      } catch {
-        /* persistence is best-effort; never block the chat */
-      }
+      await persisted?.persistAssistant(result.text || streamedAnswer || v_error_placeholder(), lastUsageRef.current ?? undefined).catch(() => undefined)
 
       if (threadTitle === 'New chat') {
         const title = text.replace(/\s+/g, ' ').trim().slice(0, 48) || 'New chat'

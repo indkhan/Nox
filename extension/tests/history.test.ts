@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { openNoxDB, DB_VERSION } from '../src/lib/history/schema'
 import { threadRepository, type ThreadRepository } from '../src/lib/history/repository'
 import { MutationJournal, idbJournalStore } from '../src/lib/writes/journal'
+import { startPersistedTurn } from '../src/lib/history/turn'
 
 describe('IndexedDB schema', () => {
   it('opens at version 1 with all six stores', async () => {
@@ -67,6 +68,14 @@ describe('ThreadRepository', () => {
     const messages = await repo.getMessages(t.id)
     expect(messages.map((m) => m.text)).toEqual(['hello', 'hi there'])
     expect(messages[1].usage?.output_tokens).toBe(4)
+  })
+
+  it('persists the user immediately and upserts streamed assistant text', async () => {
+    const turn = await startPersistedTurn(repo, null, 'do work')
+    expect((await repo.getMessages(turn.threadId)).map((m) => m.text)).toEqual(['do work'])
+    await turn.persistAssistant('partial')
+    await turn.persistAssistant('complete')
+    expect((await repo.getMessages(turn.threadId)).map((m) => m.text)).toEqual(['do work', 'complete'])
   })
 
   it('searches titles AND message text with snippets', async () => {
