@@ -3,6 +3,7 @@ import 'fake-indexeddb/auto'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { openNoxDB, DB_VERSION } from '../src/lib/history/schema'
 import { threadRepository, type ThreadRepository } from '../src/lib/history/repository'
+import { MutationJournal, idbJournalStore } from '../src/lib/writes/journal'
 
 describe('IndexedDB schema', () => {
   it('opens at version 1 with all six stores', async () => {
@@ -20,6 +21,18 @@ describe('IndexedDB schema', () => {
     expect(db2.version).toBe(1)
     db.close()
     db2.close()
+  })
+})
+
+describe('persistent mutation journal', () => {
+  it('survives a new journal instance', async () => {
+    const db = await openNoxDB()
+    await db.clear('journal')
+    const first = new MutationJournal(idbJournalStore(openNoxDB))
+    await first.record({ tool: 'notion-update-page', args: {}, kind: 'content-update' })
+    const reopened = new MutationJournal(idbJournalStore(openNoxDB))
+    expect(await reopened.newestFirst()).toHaveLength(1)
+    db.close()
   })
 })
 

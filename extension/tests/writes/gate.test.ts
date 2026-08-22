@@ -1,7 +1,9 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { WriteGate } from '../../src/lib/writes/gate'
 import { MutationJournal } from '../../src/lib/writes/journal'
 import { GuardViolation } from '../../src/lib/writes/guard'
+import { undoNewest } from '../../src/lib/writes/undo'
+import { buildInverse } from '../../src/lib/writes/inverse'
 import type { Mode } from '../../src/lib/writes/approvals'
 
 const PAGE = 'a'.repeat(32)
@@ -170,6 +172,30 @@ describe('WriteGate', () => {
     expect(executed).toBe(false)
     expect(out.isError).toBe(true)
   })
+
+  it('returns a successful write even when journal persistence fails', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const journal = new MutationJournal({
+      append: async () => { throw new Error('disk full') },
+      list: async () => [],
+    })
+    const gate = new WriteGate({
+      callTool: async () => ({ content: [{ type: 'text', text: 'written' }] }),
+      fetchPageMarkdown: async () => '# page',
+      getMode: () => 'auto',
+      getContextSet: () => new Set([PAGE]),
+      journal,
+    })
+    const out = await gate.handle({
+      rid: 9,
+      tool: 'notion-update-page',
+      args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: {} } },
+      namespace: null,
+    }) as { content: Array<{ text: string }> }
+    expect(out.content[0].text).toBe('written')
+    expect(error).toHaveBeenCalledOnce()
+    error.mockRestore()
+  })
 })
 
 describe('MutationJournal undo ordering', () => {
@@ -182,6 +208,19 @@ describe('MutationJournal undo ordering', () => {
     const newestFirst = await journal.newestFirst()
     expect(newestFirst.map((e) => e.tool)).toEqual(['t3', 't2', 't1'])
     expect((await journal.undoable()).map((e) => e.tool)).toEqual(['t3', 't1'])
+  })
+
+  it('keeps the journal entry when undo fails', async () => {
+    const journal = new MutationJournal()
+    await journal.record({ tool: 'write', args: {}, kind: 'content-update', inverse: { tool: 'undo', args: {} } })
+    await expect(undoNewest(journal, async () => { throw new Error('offline') })).rejects.toThrow('offline')
+    expect(await journal.undoable()).toHaveLength(1)
+  })
+
+  it('does not advertise unsupported inverse plans', () => {
+    expect(buildInverse('notion-move-pages', {}, { kind: 'move', moves: [{ pageId: 'a', parentPageId: 'b' }] }).kind).toBe('not-undoable')
+    expect(buildInverse('notion-update-page', {}, { kind: 'properties', properties: [{ name: 'N', type: 'number', value: 1 }] }).kind).toBe('not-undoable')
+    expect(buildInverse('notion-update-view', {}, { kind: 'view', config: {} }).kind).toBe('not-undoable')
   })
 
   it('exposes GuardViolation as a typed error', () => {

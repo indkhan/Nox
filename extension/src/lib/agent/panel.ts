@@ -5,6 +5,8 @@ import { ToolExecutor } from './executor'
 import { buildDeveloperInstructions } from './instructions'
 import { toDynamicTools } from './dynamic-tools'
 import { WriteGate } from '../writes/gate'
+import { MutationJournal, idbJournalStore } from '../writes/journal'
+import { openNoxDB } from '../history/schema'
 import type { Mode } from '../writes/approvals'
 import type { CurrentPage } from '../../shared/notion-page'
 
@@ -27,6 +29,7 @@ export const writeGate = new WriteGate({
     const page = useNoxStore.getState().currentPage
     return new Set(page ? [page.pageId] : [])
   },
+  journal: new MutationJournal(idbJournalStore(openNoxDB)),
   onApproval: (approval) => useNoxStore.getState().addApproval(approval),
 })
 

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNoxStore } from './store'
 import { writeGate } from '../lib/agent/panel'
 import { notion } from '../lib/notion/panel'
+import { undoNewest } from '../lib/writes/undo'
 
 type CardApproval = { id: number; tool: string; summary: string; payloadJson: string; reasons: string[] }
 
@@ -89,7 +90,7 @@ export function UndoBar() {
       </span>
       {!status && (
         <button
-          onClick={() => void undoNewest(setStatus)}
+          onClick={() => void runUndo(setStatus)}
           data-testid="undo-latest"
           className="rounded-md border border-zinc-700 px-2 py-0.5 text-[11px] text-zinc-300 hover:bg-zinc-800"
         >
@@ -100,15 +101,11 @@ export function UndoBar() {
   )
 }
 
-async function undoNewest(setStatus: (s: string) => void): Promise<void> {
-  const entries = await writeGate.journal.undoable()
-  const entry = entries[0]
-  if (!entry?.inverse) return
+async function runUndo(setStatus: (s: string) => void): Promise<void> {
   try {
-    await notion.scheduleCallTool(entry.inverse.tool, entry.inverse.args)
+    await undoNewest(writeGate.journal, (tool, args) => notion.scheduleCallTool(tool, args))
     setStatus('Undone — note block ids change on content restores')
   } catch (e) {
     setStatus(`Partial failure: ${e instanceof Error ? e.message : String(e)}`)
   }
-  await writeGate.journal.drop(entry.id)
 }

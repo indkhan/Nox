@@ -31,14 +31,31 @@ export function memoryJournalStore(): JournalStore {
   }
 }
 
+export function idbJournalStore(db: () => Promise<IDBPDatabase>): JournalStore {
+  return {
+    async append(entry) {
+      await (await db()).put('journal', entry)
+    },
+    async list() {
+      return await (await db()).getAll('journal') as JournalEntry[]
+    },
+    async remove(id) {
+      await (await db()).delete('journal', id)
+    },
+  }
+}
+
 export class MutationJournal {
   private nextId = 1
 
   constructor(private readonly store: JournalStore = memoryJournalStore()) {}
 
   async record(input: Omit<JournalEntry, 'id' | 'ts'>): Promise<JournalEntry> {
-    const entry: JournalEntry = { ...input, id: this.nextId++, ts: Date.now() }
+    const existing = await this.store.list()
+    const id = Math.max(this.nextId, ...existing.map((entry) => entry.id + 1))
+    const entry: JournalEntry = { ...input, id, ts: Date.now() }
     await this.store.append(entry)
+    this.nextId = id + 1
     return entry
   }
 
@@ -61,3 +78,4 @@ export class MutationJournal {
     return this.nextId - 1
   }
 }
+import type { IDBPDatabase } from 'idb'

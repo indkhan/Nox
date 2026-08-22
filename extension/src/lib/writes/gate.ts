@@ -101,15 +101,19 @@ export class WriteGate {
     if (preImage.pageId) this.readHashes.delete(normalizeId(preImage.pageId) ?? preImage.pageId)
     const inverse = buildInverse(req.tool, req.args, preImage)
 
-    await this.journal.record({
-      tool: req.tool,
-      args: stripReservedArgs(req.args),
-      kind: classification.kind,
-      preImage: snapshot ? { hash: snapshot.hash, markdownChars: snapshot.markdown.length } : undefined,
-      inverse: inverse.kind === 'execute-tool' ? { tool: inverse.tool!, args: inverse.args! } : undefined,
-      notUndoableReason: inverse.kind === 'not-undoable' ? inverse.reason : undefined,
-      targetPageId: preImage.pageId,
-    })
+    try {
+      await this.journal.record({
+        tool: req.tool,
+        args: stripReservedArgs(req.args),
+        kind: classification.kind,
+        preImage: snapshot ? { hash: snapshot.hash, markdownChars: snapshot.markdown.length } : undefined,
+        inverse: inverse.kind === 'execute-tool' ? { tool: inverse.tool!, args: inverse.args! } : undefined,
+        notUndoableReason: inverse.kind === 'not-undoable' ? inverse.reason : undefined,
+        targetPageId: preImage.pageId,
+      })
+    } catch (e) {
+      console.error('[nox] write succeeded but journal persistence failed', e)
+    }
 
     return result
   }
