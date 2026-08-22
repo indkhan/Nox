@@ -26,7 +26,7 @@ export interface MessageRow {
 }
 
 export interface JournalRow {
-  id: number
+  id: string
   threadId: string
   turnId: string
   tool: string

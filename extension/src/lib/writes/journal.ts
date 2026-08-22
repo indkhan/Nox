@@ -1,5 +1,7 @@
+import type { IDBPDatabase } from 'idb'
+
 export interface JournalEntry {
-  id: number
+  id: string
   ts: number
   threadId: string
   turnId: string
@@ -16,7 +18,7 @@ export interface JournalEntry {
 export interface JournalStore {
   append(entry: JournalEntry): Promise<void>
   list(): Promise<JournalEntry[]>
-  remove?(id: number): Promise<void>
+  remove?(id: string): Promise<void>
 }
 
 export function memoryJournalStore(): JournalStore {
@@ -49,7 +51,6 @@ export function idbJournalStore(db: () => Promise<IDBPDatabase>): JournalStore {
 }
 
 export class MutationJournal {
-  private nextId = 1
   private threadId: string | null = null
   private turnId: string | null = null
 
@@ -61,18 +62,15 @@ export class MutationJournal {
   }
 
   async record(input: Omit<JournalEntry, 'id' | 'ts' | 'threadId' | 'turnId' | 'status'>): Promise<JournalEntry> {
-    const existing = await this.store.list()
-    const id = Math.max(this.nextId, ...existing.map((entry) => entry.id + 1))
     const entry: JournalEntry = {
       ...input,
-      id,
+      id: crypto.randomUUID(),
       ts: Date.now(),
       threadId: this.threadId ?? 'unscoped',
       turnId: this.turnId ?? crypto.randomUUID(),
       status: 'applied',
     }
     await this.store.append(entry)
-    this.nextId = id + 1
     return entry
   }
 
@@ -88,12 +86,7 @@ export class MutationJournal {
   }
 
   /** Removes an entry after it was undone (or explicitly dismissed). */
-  async drop(id: number): Promise<void> {
+  async drop(id: string): Promise<void> {
     await this.store.remove?.(id)
   }
-
-  get size(): number {
-    return this.nextId - 1
-  }
 }
-import type { IDBPDatabase } from 'idb'

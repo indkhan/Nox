@@ -43,6 +43,19 @@ describe('persistent mutation journal', () => {
     expect(entries[0].turnId).toBeTruthy()
     db.close()
   })
+
+  it('does not overwrite concurrent journal records', async () => {
+    const db = await openNoxDB()
+    await db.clear('journal')
+    const journal = new MutationJournal(idbJournalStore(openNoxDB))
+    journal.setThread('thread-a')
+    await Promise.all([
+      journal.record({ tool: 'first', args: {}, kind: 'content-update' }),
+      journal.record({ tool: 'second', args: {}, kind: 'content-update' }),
+    ])
+    expect(await journal.newestFirst()).toHaveLength(2)
+    db.close()
+  })
 })
 
 describe('ThreadRepository', () => {
