@@ -40,8 +40,13 @@ function ActivityRow({ item }: { item: ActivityItem }) {
         {item.status === 'failed' ? '×' : completed ? '✓' : '●'}
       </span>
       <span className="min-w-0 flex-1 text-zinc-300">
-        {label}
+        <span>{label}</span>
         {item.error && <span className="ml-1 text-rose-400">— {item.error}</span>}
+        {item.resultText && (
+          <span className="mt-1 block max-h-16 overflow-hidden rounded-md border border-zinc-800 bg-zinc-950/60 px-2 py-1.5 text-[11px] leading-relaxed text-zinc-500">
+            {item.resultText}
+          </span>
+        )}
       </span>
       {item.durationMs != null && <span className="tabular-nums text-zinc-600">{formatDuration(item.durationMs)}</span>}
     </li>

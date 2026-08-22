@@ -38,7 +38,7 @@ export type CodexEvent =
   | { kind: 'text-delta'; text: string }
   | { kind: 'web-search' }
   | { kind: 'tool-call'; tool: string; args: Record<string, unknown>; callId?: string }
-  | { kind: 'tool-completed'; tool?: string; callId?: string; success?: boolean; error?: string; durationMs?: number }
+  | { kind: 'tool-completed'; tool?: string; callId?: string; success?: boolean; error?: string; durationMs?: number; resultText?: string }
   | { kind: 'usage'; usage: TurnUsage | null }
   | { kind: 'done'; interrupted: boolean; finalText: string }
   | { kind: 'error'; message: string }
@@ -203,7 +203,10 @@ export class CodexClient {
           ? await this.onToolCall({ tool, namespace: p.namespace ?? null, args, rid: req.rid, callId: p.callId })
           : { decision: 'decline' }
         this.bridge.respondTool(req.rid, result)
-        this.emit({ kind: 'tool-completed', tool, callId: p.callId, success: true, durationMs: Date.now() - startedAt })
+        this.emit({
+          kind: 'tool-completed', tool, callId: p.callId, success: true,
+          durationMs: Date.now() - startedAt, resultText: toolResultText(result),
+        })
       } catch (e) {
         // Errors become model-readable results, never a crashed turn (MVP §6).
         this.bridge.respondTool(req.rid, {
@@ -281,4 +284,10 @@ export class CodexClient {
       // Unknown notifications are ignored deliberately.
     }
   }
+}
+
+function toolResultText(result: unknown): string | undefined {
+  if (!result || typeof result !== 'object' || !('contentItems' in result)) return undefined
+  const items = (result as { contentItems?: Array<{ text?: string }> }).contentItems
+  return items?.map((item) => item.text ?? '').filter(Boolean).join('\n').slice(0, 2000) || undefined
 }

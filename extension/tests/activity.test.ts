@@ -9,10 +9,11 @@ describe('agent activity', () => {
     })
     items = applyActivityEvent(items, {
       kind: 'tool-completed', tool: 'notion-fetch', callId: 'call-1', success: true, durationMs: 42,
+      resultText: 'Page content',
     })
 
     expect(items).toEqual([expect.objectContaining({
-      kind: 'tool', id: 'call-1', tool: 'notion-fetch', status: 'completed', durationMs: 42,
+      kind: 'tool', id: 'call-1', tool: 'notion-fetch', status: 'completed', durationMs: 42, resultText: 'Page content',
     })])
   })
 

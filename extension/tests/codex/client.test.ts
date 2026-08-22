@@ -123,6 +123,7 @@ describe('CodexClient', () => {
       callId: 'call_7',
       tool: 'notion-fetch',
       success: true,
+      resultText: 'ok-data',
     })
     emit(h.bridge, 'turn/completed', {})
     await turnPromise

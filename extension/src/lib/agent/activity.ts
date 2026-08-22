@@ -9,13 +9,14 @@ export type ActivityItem =
       status: 'running' | 'completed' | 'failed'
       durationMs?: number
       error?: string
+      resultText?: string
     }
 
 export type ActivityEvent =
   | { kind: 'reasoning'; text: string }
   | { kind: 'web-search' }
   | { kind: 'tool-call'; tool: string; args: Record<string, unknown>; callId?: string }
-  | { kind: 'tool-completed'; tool?: string; callId?: string; success?: boolean; durationMs?: number; error?: string }
+  | { kind: 'tool-completed'; tool?: string; callId?: string; success?: boolean; durationMs?: number; error?: string; resultText?: string }
 
 export function applyActivityEvent(items: ActivityItem[], event: ActivityEvent): ActivityItem[] {
   if (event.kind === 'reasoning') {
@@ -44,6 +45,7 @@ export function applyActivityEvent(items: ActivityItem[], event: ActivityEvent):
     status: event.success === false ? 'failed' : 'completed',
     durationMs: event.durationMs,
     error: event.error,
+    resultText: event.resultText,
   }
   return next
 }
