@@ -122,6 +122,7 @@ export class WriteGate {
         inverse: inverse.kind === 'execute-tool' ? { tool: inverse.tool!, args: inverse.args! } : undefined,
         notUndoableReason: inverse.kind === 'not-undoable' ? inverse.reason : undefined,
         targetPageId: preImage.pageId,
+        callId: req.callId,
       })
     } catch (e) {
       console.error('[nox] write succeeded but journal persistence failed', e)

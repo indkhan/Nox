@@ -13,6 +13,7 @@ export interface JournalEntry {
   inverse?: { tool: string; args: Record<string, unknown> }
   notUndoableReason?: string
   targetPageId?: string
+  callId?: string
 }
 
 export interface JournalStore {

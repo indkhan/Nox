@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { ActivityTimeline } from '../src/sidepanel/MessageParts'
 
@@ -26,5 +26,12 @@ describe('ActivityTimeline', () => {
     expect(html).toContain('data-testid="results-table"')
     expect(html).toContain('data-testid="context-result"')
     expect(html).toContain('data-testid="change-result"')
+  })
+
+  it('offers undo on the matching reversible action', () => {
+    const html = renderToStaticMarkup(<ActivityTimeline active items={[
+      { kind: 'tool', id: 'u', tool: 'notion-update-page', args: {}, status: 'completed', journalId: 'journal-1', undoable: true },
+    ]} onUndo={vi.fn()} />)
+    expect(html).toContain('Undo this change')
   })
 })

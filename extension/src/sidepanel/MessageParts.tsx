@@ -5,7 +5,7 @@ import { failedToolActivityLabel, toolActivityLabel, type ActivityItem } from '.
 import { toResultTable } from '../lib/db/query'
 import { ResultsTable } from './ResultsTable'
 
-export function ActivityTimeline({ items, active }: { items: ActivityItem[]; active?: boolean }) {
+export function ActivityTimeline({ items, active, onUndo }: { items: ActivityItem[]; active?: boolean; onUndo?: (journalId: string) => void }) {
   const [open, setOpen] = useState(active === true)
   if (items.length === 0 && !active) return null
   const tools = items.filter((item) => item.kind === 'tool')
@@ -23,14 +23,14 @@ export function ActivityTimeline({ items, active }: { items: ActivityItem[]; act
       </button>
       {open && items.length > 0 && (
         <ol className="ml-1 border-l border-zinc-800 py-1 pl-3">
-          {items.map((item) => <ActivityRow key={item.id} item={item} />)}
+          {items.map((item) => <ActivityRow key={item.id} item={item} onUndo={onUndo} />)}
         </ol>
       )}
     </div>
   )
 }
 
-function ActivityRow({ item }: { item: ActivityItem }) {
+function ActivityRow({ item, onUndo }: { item: ActivityItem; onUndo?: (journalId: string) => void }) {
   if (item.kind === 'reasoning') return <li className="py-1 text-xs text-zinc-500">{item.text}</li>
   if (item.kind === 'search') return <li className="py-1 text-xs text-sky-300">Searching the web…</li>
   const completed = item.status === 'completed'
@@ -45,6 +45,11 @@ function ActivityRow({ item }: { item: ActivityItem }) {
         <span>{label}</span>
         {item.error && <span className="ml-1 text-rose-400">— {item.error}</span>}
         <ActivityResult item={item} />
+        {item.undoable && item.journalId && onUndo && (
+          <button onClick={() => onUndo(item.journalId!)} className="mt-1 text-[11px] text-indigo-300 hover:text-indigo-200">
+            Undo this change
+          </button>
+        )}
       </div>
       {item.durationMs != null && <span className="tabular-nums text-zinc-600">{formatDuration(item.durationMs)}</span>}
     </li>

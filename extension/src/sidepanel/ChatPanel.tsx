@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
+import type { Dispatch, SetStateAction } from 'react'
 import { useNoxStore } from './store'
-import { agentLoop, fetchCurrentPageContext, setAgentHistoryThread } from '../lib/agent/panel'
+import { agentLoop, fetchCurrentPageContext, setAgentHistoryThread, writeGate } from '../lib/agent/panel'
 import { ActivityTimeline, AssistantMarkdown } from './MessageParts'
 import { applyActivityEvent, type ActivityItem } from '../lib/agent/activity'
 import { Composer } from './Composer'
@@ -9,6 +10,7 @@ import { ApprovalCards, UndoBar } from './ApprovalCards'
 import { historyRepo } from '../lib/history/panel'
 import { startPersistedTurn } from '../lib/history/turn'
 import { logError, logInfo } from '../lib/log'
+import { undoEntry } from '../lib/writes/undo'
 
 interface TurnView {
   activity: ActivityItem[]
@@ -99,6 +101,10 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
           case 'tool-completed':
             currentActivity = applyActivityEvent(currentActivity, event)
             patch((v) => ({ ...v, activity: currentActivity }))
+            void attachJournalEntries(currentActivity).then((items) => {
+              currentActivity = items
+              patch((v) => ({ ...v, activity: items }))
+            })
             break
           case 'usage':
             lastUsageRef.current = (event.usage as Record<string, number> | null) ?? null
@@ -117,6 +123,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
 
       const result = await agentLoop.sendUserMessage(text, { currentPage: pageContext ?? undefined })
 
+      currentActivity = await attachJournalEntries(currentActivity)
       await persisted?.persistAssistant(result.text || streamedAnswer || v_error_placeholder(), lastUsageRef.current ?? undefined, currentActivity).catch(() => undefined)
 
       if (threadTitle === 'New chat') {
@@ -151,7 +158,9 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
               <div className="flex justify-end">
                 <span className="max-w-[85%] whitespace-pre-wrap rounded-2xl bg-zinc-800 px-3.5 py-2 text-sm leading-relaxed">{userText}</span>
               </div>
-              {(view.activity.length > 0 || view.pending) && <ActivityTimeline items={view.activity} active={view.pending} />}
+              {(view.activity.length > 0 || view.pending) && (
+                <ActivityTimeline items={view.activity} active={view.pending} onUndo={(id) => void undoActivity(id, setTurns)} />
+              )}
               {view.answer && <AssistantMarkdown markdown={view.answer} />}
               {view.error && (
                 <p className="rounded-md border border-amber-800/50 bg-amber-950/40 px-2 py-1.5 text-xs text-amber-400" role="alert">
@@ -169,4 +178,29 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
       <Composer busy={busy} readOnly={readOnly} onSend={(t) => void send(t)} onCancel={() => agentLoop.cancel()} />
     </section>
   )
+}
+
+async function attachJournalEntries(items: ActivityItem[]): Promise<ActivityItem[]> {
+  const entries = await writeGate.journal.newestFirst()
+  return items.map((item) => {
+    if (item.kind !== 'tool') return item
+    const entry = entries.find((candidate) => candidate.callId && candidate.callId === item.id)
+    return entry ? { ...item, journalId: entry.id, undoable: entry.status === 'applied' && entry.inverse != null } : item
+  })
+}
+
+async function undoActivity(
+  journalId: string,
+  setTurns: Dispatch<SetStateAction<Array<{ userText: string; view: TurnView }>>>,
+): Promise<void> {
+  await undoEntry(writeGate.journal, journalId, (tool, args) => writeGate.handleUndo(tool, args))
+  setTurns((turns) => turns.map((turn) => ({
+    ...turn,
+    view: {
+      ...turn.view,
+      activity: turn.view.activity.map((item) => item.kind === 'tool' && item.journalId === journalId
+        ? { ...item, undoable: false, resultText: 'Change undone' }
+        : item),
+    },
+  })))
 }

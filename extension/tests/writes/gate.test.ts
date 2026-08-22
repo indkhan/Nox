@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { WriteGate } from '../../src/lib/writes/gate'
 import { MutationJournal } from '../../src/lib/writes/journal'
 import { GuardViolation } from '../../src/lib/writes/guard'
-import { undoNewest } from '../../src/lib/writes/undo'
+import { undoEntry, undoNewest } from '../../src/lib/writes/undo'
 import { buildInverse } from '../../src/lib/writes/inverse'
 import type { Mode } from '../../src/lib/writes/approvals'
 
@@ -45,6 +45,7 @@ describe('WriteGate', () => {
       tool: 'notion-update-page',
       args: { data: { page_id: PAGE }, command: { type: 'replace_content', content: '# New' } },
       namespace: null,
+      callId: 'call-write-1',
     })
     // Wait for the card then approve.
     await Promise.resolve()
@@ -60,6 +61,7 @@ describe('WriteGate', () => {
     const entries = await journal.undoable()
     expect(entries).toHaveLength(1)
     expect(entries[0].inverse!.tool).toBe('notion-update-page')
+    expect(entries[0].callId).toBe('call-write-1')
     expect(JSON.stringify(entries[0].inverse!.args)).toContain('# Simple')
   })
 
@@ -232,6 +234,15 @@ describe('MutationJournal undo ordering', () => {
     await expect(undoNewest(journal, async () => undefined)).resolves.toBe(true)
     expect((await journal.newestFirst())[0].status).toBe('undone')
     expect(await journal.undoable()).toHaveLength(0)
+  })
+
+  it('undoes a selected journal entry instead of only the newest', async () => {
+    const journal = new MutationJournal()
+    const older = await journal.record({ tool: 'first', args: {}, kind: 'move', inverse: { tool: 'undo-first', args: {} } })
+    await journal.record({ tool: 'second', args: {}, kind: 'move', inverse: { tool: 'undo-second', args: {} } })
+    const calls: string[] = []
+    await expect(undoEntry(journal, older.id, async (tool) => { calls.push(tool) })).resolves.toBe(true)
+    expect(calls).toEqual(['undo-first'])
   })
 
   it('does not advertise unsupported inverse plans', () => {

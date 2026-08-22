@@ -10,6 +10,8 @@ export type ActivityItem =
       durationMs?: number
       error?: string
       resultText?: string
+      journalId?: string
+      undoable?: boolean
     }
 
 export type ActivityEvent =
