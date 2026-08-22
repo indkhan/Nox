@@ -13,9 +13,11 @@ official hosted MCP server, and drives **your local Codex install** through Open
 - **The `codex` CLI installed and logged in** (`codex login`) with an active ChatGPT Plus/Pro plan
 - The Nox bridge installed — one script, Windows / macOS / Linux
 
-> **Status: pre-alpha. E0 complete; E1 is next.** Architecture research and spikes are closed;
-> production extension code has not started. Start with [RESEARCH.md](RESEARCH.md),
-> [MVP.md](MVP.md) and [PLAN.md](PLAN.md).
+> **Status: v0.1.0-alpha — all epics E0–E9 implemented.** Architecture research,
+> spikes, and the full epic plan are complete on `develop`; automated suite green
+> (unit + integration + opt-in live smokes). Manual smoke checklist and Web Store
+> submission remain. Start with [RESEARCH.md](RESEARCH.md), [MVP.md](MVP.md) and
+> [PLAN.md](PLAN.md).
 
 ---
 
@@ -90,14 +92,18 @@ cards, the action stream and undo possible. No OpenAI credential ever exists ins
 | [RESEARCH.md](RESEARCH.md) | Verified findings: Notion MCP OAuth/CORS/DCR probes, tool surface, rate limits, Codex/ChatGPT options and their risks, MV3 constraints, and an honest impossible/risky list |
 | [MVP.md](MVP.md) | V1 scope, architecture, agent behaviour, UI spec, data model, acceptance criteria |
 | [PLAN.md](PLAN.md) | Spikes, 9 epics with acceptance criteria, dependency graph, milestones, risk register |
+| [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md) | Assets, threats (prompt injection first), and mitigations |
+| [docs/PERMISSIONS.md](docs/PERMISSIONS.md) | Why every manifest permission exists — review-ready |
+| [docs/smoke.md](docs/smoke.md) | Manual per-release smoke checklist |
 
 ## Contributing
 
-Pre-alpha — the most useful contributions right now are opinions on the open questions at the end
-of [PLAN.md](PLAN.md), and running the E0 spikes. Issues and discussion welcome.
+Pre-alpha but fully buildable: see [CONTRIBUTING.md](CONTRIBUTING.md). Every
+module is testable without Chrome; bridge changes keep the fake-codex
+integration suite green; live probes are opt-in.
 
 ## License
 
-MIT (planned).
+MIT — see [LICENSE](LICENSE).
 
 Nox is not affiliated with, endorsed by, or sponsored by Notion Labs, Inc. or OpenAI.

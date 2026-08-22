@@ -6,7 +6,7 @@ const PUBLIC_KEY =
 export default defineManifest({
   manifest_version: 3,
   name: 'Nox',
-  version: '0.0.1',
+  version: '0.1.0',
   description: 'Notion workspace assistant.',
   key: PUBLIC_KEY,
   permissions: [

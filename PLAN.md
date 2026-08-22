@@ -2,6 +2,11 @@
 
 Epics and acceptance criteria for [MVP.md](MVP.md). Evidence in [RESEARCH.md](RESEARCH.md).
 
+**Status (2026-08-22): E0–E9 complete on `develop`.**
+E2 live-verified against production Notion MCP; E3 live-verified against the real
+`codex app-server`; 234 automated tests green; manual smoke checklist in
+[docs/smoke.md](docs/smoke.md). Design notes per epic in `docs/plans/`.
+
 **Sequence:** E0 first (it can still reshape the runtime), then E1 → E2 → E3 → E4 in order.
 E5–E8 parallelize once E4 lands. E9 gates release.
 
