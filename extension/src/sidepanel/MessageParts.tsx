@@ -32,7 +32,7 @@ export function ActivityTimeline({ items, active, onUndo }: { items: ActivityIte
 
 function ActivityRow({ item, onUndo }: { item: ActivityItem; onUndo?: (journalId: string) => void }) {
   if (item.kind === 'reasoning') return <li className="py-1 text-xs text-zinc-500">{item.text}</li>
-  if (item.kind === 'search') return <li className="py-1 text-xs text-sky-300">Searching the web…</li>
+  if (item.kind === 'search') return <li className="py-1 text-xs text-sky-300">{item.status === 'completed' ? 'Searched the web' : 'Searching the web…'}</li>
   const completed = item.status === 'completed'
   const base = toolActivityLabel(item.tool, item.args, completed)
   const label = item.status === 'failed' ? failedToolActivityLabel(item.tool) : base
@@ -45,6 +45,11 @@ function ActivityRow({ item, onUndo }: { item: ActivityItem; onUndo?: (journalId
         <span>{label}</span>
         {item.error && <span className="ml-1 text-rose-400">— {item.error}</span>}
         <ActivityResult item={item} />
+        <details className="mt-1 text-[10px] text-zinc-600">
+          <summary className="cursor-pointer">Technical details</summary>
+          <div className="mt-1 font-mono">{item.tool}</div>
+          <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap">{JSON.stringify(item.args)}</pre>
+        </details>
         {item.undoable && item.journalId && onUndo && (
           <button onClick={() => onUndo(item.journalId!)} className="mt-1 text-[11px] text-indigo-300 hover:text-indigo-200">
             Undo this change

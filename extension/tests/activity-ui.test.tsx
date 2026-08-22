@@ -40,4 +40,14 @@ describe('ActivityTimeline', () => {
     expect(html).toContain('Follow-ups')
     expect(html).toContain('Summarize these results')
   })
+
+  it('shows completed searches and technical tool details', () => {
+    const html = renderToStaticMarkup(<ActivityTimeline active items={[
+      { kind: 'search', id: 's', status: 'completed' },
+      { kind: 'tool', id: 't', tool: 'notion-fetch', args: { id: 'p1' }, status: 'completed' },
+    ]} />)
+    expect(html).toContain('Searched the web')
+    expect(html).toContain('notion-fetch')
+    expect(html).toContain('&quot;id&quot;:&quot;p1&quot;')
+  })
 })

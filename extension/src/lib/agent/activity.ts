@@ -17,6 +17,7 @@ export type ActivityItem =
 export type ActivityEvent =
   | { kind: 'reasoning'; text: string }
   | { kind: 'web-search' }
+  | { kind: 'web-search-completed' }
   | { kind: 'tool-call'; tool: string; args: Record<string, unknown>; callId?: string }
   | { kind: 'tool-completed'; tool?: string; callId?: string; success?: boolean; durationMs?: number; error?: string; resultText?: string }
 
@@ -26,6 +27,12 @@ export function applyActivityEvent(items: ActivityItem[], event: ActivityEvent):
   }
   if (event.kind === 'web-search') {
     return [...items, { kind: 'search', id: `search-${items.length}`, status: 'running' }]
+  }
+  if (event.kind === 'web-search-completed') {
+    const index = [...items].reverse().findIndex((item) => item.kind === 'search' && item.status === 'running')
+    if (index === -1) return items
+    const actual = items.length - 1 - index
+    return items.map((item, itemIndex) => itemIndex === actual && item.kind === 'search' ? { ...item, status: 'completed' } : item)
   }
   if (event.kind === 'tool-call') {
     return [...items, {

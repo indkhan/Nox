@@ -180,6 +180,17 @@ describe('CodexClient', () => {
     await expect(client.runTurn([])).rejects.toThrow(/no active thread/)
   })
 
+  it('emits web search start and completion events', async () => {
+    await startThreadFixture()
+    const turnPromise = client.runTurn([])
+    emit(h.bridge, 'item/started', { item: { type: 'webSearch' } })
+    emit(h.bridge, 'item/completed', { item: { type: 'webSearch' } })
+    emit(h.bridge, 'turn/completed', {})
+    await turnPromise
+    expect(events.map((event) => event.kind)).toContain('web-search')
+    expect(events.map((event) => event.kind)).toContain('web-search-completed')
+  })
+
   it('emits a failed completion when the tool handler returns success false', async () => {
     await startThreadFixture()
     client.onToolCall = async () => ({

@@ -21,12 +21,14 @@ describe('agent activity', () => {
     let items: ActivityItem[] = []
     items = applyActivityEvent(items, { kind: 'reasoning', text: 'Checking the workspace' })
     items = applyActivityEvent(items, { kind: 'web-search' })
+    items = applyActivityEvent(items, { kind: 'web-search-completed' })
     items = applyActivityEvent(items, { kind: 'tool-call', tool: 'notion-search', args: {}, callId: 'call-2' })
     items = applyActivityEvent(items, {
       kind: 'tool-completed', tool: 'notion-search', callId: 'call-2', success: false, error: 'rate limited', durationMs: 8,
     })
 
     expect(items.map((item) => item.kind)).toEqual(['reasoning', 'search', 'tool'])
+    expect(items[1]).toMatchObject({ kind: 'search', status: 'completed' })
     expect(items[2]).toMatchObject({ status: 'failed', error: 'rate limited' })
   })
 })

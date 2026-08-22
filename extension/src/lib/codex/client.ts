@@ -37,6 +37,7 @@ export type CodexEvent =
   | { kind: 'text-started' }
   | { kind: 'text-delta'; text: string }
   | { kind: 'web-search' }
+  | { kind: 'web-search-completed' }
   | { kind: 'tool-call'; tool: string; args: Record<string, unknown>; callId?: string }
   | { kind: 'tool-completed'; tool?: string; callId?: string; success?: boolean; error?: string; durationMs?: number; resultText?: string }
   | { kind: 'usage'; usage: TurnUsage | null }
@@ -258,6 +259,7 @@ export class CodexClient {
           }
         }
         if (p.item?.type === 'dynamicToolCall') this.emit({ kind: 'tool-completed' })
+        if (p.item?.type === 'webSearch') this.emit({ kind: 'web-search-completed' })
         return
       }
       case 'error': {

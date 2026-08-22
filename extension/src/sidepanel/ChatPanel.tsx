@@ -88,6 +88,10 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
             currentActivity = applyActivityEvent(currentActivity, event)
             patch((v) => ({ ...v, activity: currentActivity }))
             break
+          case 'web-search-completed':
+            currentActivity = applyActivityEvent(currentActivity, event)
+            patch((v) => ({ ...v, activity: currentActivity }))
+            break
           case 'tool-call': {
             if (pendingReasoning) {
               currentActivity = applyActivityEvent(currentActivity, { kind: 'reasoning', text: pendingReasoning.slice(0, 240) })
@@ -101,10 +105,13 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
           case 'tool-completed':
             currentActivity = applyActivityEvent(currentActivity, event)
             patch((v) => ({ ...v, activity: currentActivity }))
-            void attachJournalEntries(currentActivity).then((items) => {
-              currentActivity = items
-              patch((v) => ({ ...v, activity: items }))
-            })
+            break
+          case 'text-started':
+            if (pendingReasoning) {
+              currentActivity = applyActivityEvent(currentActivity, { kind: 'reasoning', text: pendingReasoning.slice(0, 240) })
+              pendingReasoning = ''
+              patch((v) => ({ ...v, activity: currentActivity }))
+            }
             break
           case 'usage':
             lastUsageRef.current = (event.usage as Record<string, number> | null) ?? null
