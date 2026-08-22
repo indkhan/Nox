@@ -3,6 +3,7 @@ import { useNoxStore } from './store'
 import { connectCodex, bridge, codex, type CodexSession } from '../lib/codex/panel'
 import { classifyBridgeFailure, healthHint } from '../lib/codex/health'
 import { logError, logInfo } from '../lib/log'
+import { Button } from './ui/Button'
 
 export function BridgeCard() {
   const setCodex = useNoxStore((s) => s.setCodex)
@@ -44,32 +45,27 @@ export function BridgeCard() {
 
   if (codexStatus === 'connected') {
     return (
-      <section className="rounded-lg border border-zinc-800 bg-zinc-900 p-3" data-testid="bridge-card">
-        <p className="text-xs uppercase tracking-wide text-zinc-500">Codex</p>
-        <p className="text-sm font-medium text-emerald-400" data-testid="bridge-status">
+      <section className="rounded-card bg-surface p-3 shadow-card" data-testid="bridge-card">
+        <p className="text-[11px] font-medium uppercase tracking-wide text-ink-3">Codex</p>
+        <p className="text-sm font-medium text-green" data-testid="bridge-status">
           Connected — {codexVersion}
         </p>
-        <p className="text-xs text-zinc-500">{codexModelCount} models available</p>
+        <p className="text-xs text-ink-3">{codexModelCount} models available</p>
       </section>
     )
   }
 
   return (
-    <section className="rounded-lg border border-zinc-800 bg-zinc-900 p-3" data-testid="bridge-card">
-      <p className="mb-1 text-xs uppercase tracking-wide text-zinc-500">Codex</p>
+    <section className="rounded-card bg-surface p-3 shadow-card" data-testid="bridge-card">
+      <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-ink-3">Codex</p>
       {codexHint ? (
-        <p className="mb-2 text-xs text-amber-400" data-testid="bridge-hint">{codexHint}</p>
+        <p className="mb-2 text-xs leading-relaxed text-orange" data-testid="bridge-hint">{codexHint}</p>
       ) : (
-        <p className="mb-2 text-sm text-zinc-400">Connect to your local Codex install.</p>
+        <p className="mb-2 text-[13px] text-ink-2">Connect to your local Codex install.</p>
       )}
-      <button
-        onClick={connect}
-        disabled={busy || codexStatus === 'connecting'}
-        data-testid="bridge-connect"
-        className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500 disabled:opacity-50"
-      >
+      <Button variant="accent" size="sm" onClick={() => void connect()} disabled={busy || codexStatus === 'connecting'} data-testid="bridge-connect">
         {codexStatus === 'connecting' ? 'Connecting…' : codexStatus === 'error' ? 'Retry' : 'Connect Codex'}
-      </button>
+      </Button>
     </section>
   )
 }

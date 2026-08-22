@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useNoxStore } from './store'
 import { launchConsentFlow, notion } from '../lib/notion/panel'
 import { logError, logInfo } from '../lib/log'
+import { Button } from './ui/Button'
 
 /** Dev-only: paste a token JSON (from spikes/.notion-token.json) to skip consent. */
 async function importDevToken(): Promise<void> {
@@ -70,27 +71,23 @@ export function ConnectionCard() {
 
   if (connectionStatus === 'connected' && identity) {
     return (
-      <section className="rounded-lg border border-zinc-800 bg-zinc-900 p-3" data-testid="connection-card">
+      <section className="rounded-card bg-surface p-3 shadow-card" data-testid="connection-card">
         <div className="flex items-center justify-between">
           <div className="min-w-0">
-            <p className="text-xs uppercase tracking-wide text-zinc-500">Connected</p>
-            <p className="truncate text-sm font-medium">
+            <p className="text-[11px] font-medium tracking-wide text-green">Connected</p>
+            <p className="truncate text-sm font-medium text-ink">
               {identity.workspaceName ?? 'Notion workspace'}
             </p>
-            <p className="truncate text-xs text-zinc-500">
+            <p className="truncate text-xs text-ink-3">
               {[identity.userName, identity.email].filter(Boolean).join(' · ') || ' '}
             </p>
           </div>
-          <button
-            onClick={disconnect}
-            disabled={busy}
-            className="rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-800 disabled:opacity-50"
-          >
+          <Button variant="secondary" size="sm" onClick={disconnect} disabled={busy}>
             Disconnect
-          </button>
+          </Button>
         </div>
         {limitations.length > 0 && (
-          <details className="mt-2 text-xs text-zinc-400">
+          <details className="mt-2 text-xs text-ink-2">
             <summary className="cursor-pointer select-none">Plan limitations ({limitations.length})</summary>
             <ul className="mt-1 list-disc pl-4">
               {limitations.map((l) => (
@@ -106,26 +103,21 @@ export function ConnectionCard() {
   }
 
   return (
-    <section className="rounded-lg border border-zinc-800 bg-zinc-900 p-3" data-testid="connection-card">
-      <p className="mb-1 text-xs uppercase tracking-wide text-zinc-500">Notion</p>
+    <section className="rounded-card bg-surface p-3 shadow-card" data-testid="connection-card">
+      <p className="mb-1 text-[11px] font-medium uppercase tracking-wide text-ink-3">Notion</p>
       {connectionError ? (
-        <p className="mb-2 text-xs text-amber-400" data-testid="connection-error">{connectionError}</p>
+        <p className="mb-2 text-xs leading-relaxed text-orange" data-testid="connection-error">{connectionError}</p>
       ) : (
-        <p className="mb-2 text-sm text-zinc-400">
+        <p className="mb-2 text-[13px] text-ink-2">
           Connect your workspace so Nox can read and act on it.
         </p>
       )}
       <div className="flex items-center gap-2">
-        <button
-          onClick={connect}
-          disabled={busy || connectionStatus === 'connecting'}
-          data-testid="connect-button"
-          className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500 disabled:opacity-50"
-        >
+        <Button variant="accent" size="sm" onClick={() => void connect()} disabled={busy || connectionStatus === 'connecting'} data-testid="connect-button">
           {connectionStatus === 'connecting' ? 'Connecting…' : connectionStatus === 'error' ? 'Retry connect' : 'Connect Notion'}
-        </button>
+        </Button>
         {import.meta.env.DEV && (
-          <button onClick={() => void importDevToken()} className="text-xs text-zinc-500 underline hover:text-zinc-300">
+          <button onClick={() => void importDevToken()} className="text-xs text-ink-3 underline hover:text-ink">
             dev: import token
           </button>
         )}

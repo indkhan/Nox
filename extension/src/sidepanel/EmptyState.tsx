@@ -9,6 +9,8 @@ interface SuggestionDef {
   body: ReactNode
 }
 
+const EASE = 'cubic-bezier(0.23,1,0.32,1)'
+
 export function EmptyState({ onSend }: { onSend?: (text: string) => void }) {
   const { identity, currentPage } = useNoxStore((s) => s)
   const hour = new Date().getHours()
@@ -44,17 +46,33 @@ export function EmptyState({ onSend }: { onSend?: (text: string) => void }) {
   ]
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col justify-center px-4 pb-4 pt-2" data-testid="empty-state">
-      <div className="flex h-11 w-11 items-center justify-center rounded-full bg-zinc-800 text-zinc-300">
+    <div
+      className="flex min-h-0 flex-1 flex-col justify-center px-4 pb-4 pt-2"
+      data-testid="empty-state"
+    >
+      <div
+        className="flex h-11 w-11 items-center justify-center rounded-full bg-field text-ink shadow-hairline"
+        style={{ animation: `pop-in 400ms ${EASE} both` }}
+      >
         <NoxMark className="h-6 w-6" />
       </div>
-      <p className="mt-3 text-lg font-bold tracking-tight" data-testid="greeting">
-        Good {timeOfDay}{name ? `, ${name}` : ''}
+      <p
+        className="mt-3 text-lg font-bold tracking-tight"
+        data-testid="greeting"
+        style={{ animation: `fade-up 350ms ${EASE} 80ms both` }}
+      >
+        Good {timeOfDay}
+        {name ? `, ${name}` : ''}
       </p>
-      <p className="mb-4 text-sm text-zinc-500">Here&rsquo;s what others ask me first</p>
+      <p
+        className="mb-4 text-[13px] text-ink-3"
+        style={{ animation: `fade-up 350ms ${EASE} 160ms both` }}
+      >
+        Here&rsquo;s what others ask me first
+      </p>
 
       <div className="space-y-1.5">
-        {suggestions.map((s) => (
+        {suggestions.map((s, i) => (
           <button
             key={s.testid}
             onClick={() => {
@@ -63,9 +81,10 @@ export function EmptyState({ onSend }: { onSend?: (text: string) => void }) {
               else el?.focus()
             }}
             data-testid={s.testid}
-            className="flex w-full items-center gap-2.5 rounded-xl border border-zinc-800/80 bg-zinc-900/60 px-3.5 py-2.5 text-left text-sm font-medium text-zinc-100 transition-colors hover:border-zinc-600 hover:bg-zinc-800"
+            className="flex w-full items-center gap-2.5 rounded-card bg-surface px-3.5 py-2.5 text-left text-[13px] font-medium text-ink shadow-hairline transition-[background-color,border-color] duration-150 hover:bg-hover"
+            style={{ animation: `fade-up 350ms ${EASE} ${240 + i * 90}ms both` }}
           >
-            {s.icon}
+            <span className="text-ink-3">{s.icon}</span>
             <span className="flex min-w-0 items-center gap-1.5">{s.body}</span>
           </button>
         ))}

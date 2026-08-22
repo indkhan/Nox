@@ -143,17 +143,27 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
       {!hasMessages ? (
         <EmptyState onSend={(t) => void send(t)} />
       ) : (
-        <div ref={scrollRef} className="min-h-0 flex-1 space-y-5 overflow-y-auto px-3 pb-2 pt-1" aria-live="polite" data-testid="chat-messages">
+        <div ref={scrollRef} className="min-h-0 flex-1 space-y-6 overflow-y-auto overscroll-contain px-4 pb-3 pt-2" aria-live="polite" data-testid="chat-messages">
           {turns.map(({ userText, view }, i) => (
-            <div key={i} className="space-y-1.5">
-              <div className="flex justify-end">
-                <span className="max-w-[85%] whitespace-pre-wrap rounded-2xl bg-zinc-800 px-3.5 py-2 text-sm leading-relaxed">{userText}</span>
+            <div key={i} className="space-y-2">
+              <div className="flex justify-end" style={{ animation: 'fade-up 300ms cubic-bezier(0.23,1,0.32,1) both' }}>
+                <span className="max-w-[85%] whitespace-pre-wrap rounded-xl bg-field px-3.5 py-2 text-[13px] leading-relaxed text-ink shadow-hairline">
+                  {userText}
+                </span>
               </div>
               {(view.progress.length > 0 || view.pending) && <ProgressBlock steps={view.progress} active={view.pending} />}
-              {view.answer && <AssistantMarkdown markdown={view.answer} />}
+              {view.answer && (
+                <div style={{ animation: 'fade-up 300ms cubic-bezier(0.23,1,0.32,1) both' }}>
+                  <AssistantMarkdown markdown={view.answer} />
+                </div>
+              )}
               {view.error && (
-                <p className="rounded-md border border-amber-800/50 bg-amber-950/40 px-2 py-1.5 text-xs text-amber-400" role="alert">
-                  ⚠ {view.error}
+                <p
+                  className="rounded-control border bg-red-tint px-2.5 py-1.5 text-xs text-red"
+                  role="alert"
+                  style={{ borderColor: 'color-mix(in srgb, var(--red) 35%, transparent)' }}
+                >
+                  {view.error}
                 </p>
               )}
             </div>

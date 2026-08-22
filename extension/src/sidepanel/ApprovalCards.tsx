@@ -2,6 +2,9 @@ import { useEffect, useState } from 'react'
 import { useNoxStore } from './store'
 import { writeGate } from '../lib/agent/panel'
 import { undoNewest } from '../lib/writes/undo'
+import { Button } from './ui/Button'
+import { Chip } from './ui/Chip'
+import { StatusPill } from './ui/StatusPill'
 
 type CardApproval = { id: number; tool: string; summary: string; payloadJson: string; reasons: string[] }
 
@@ -17,50 +20,72 @@ export function ApprovalCards({ readOnly = false }: { readOnly?: boolean }) {
   if (readOnly || pending.length === 0) return null
 
   return (
-    <div className="space-y-2 border-t border-amber-900/50 bg-amber-950/20 p-3" data-testid="approval-cards">
+    <div className="space-y-2 p-3" data-testid="approval-cards">
       {pending.map((approval: CardApproval) => (
-        <div key={approval.id} className="rounded-lg border border-amber-800/60 bg-zinc-900 p-3" role="alert">
-          <p className="text-xs uppercase tracking-wide text-amber-400">Approval needed</p>
-          <p className="mt-0.5 text-sm font-medium" data-testid={`approval-summary-${approval.id}`}>{approval.summary}</p>
-          <ul className="mt-1 list-disc pl-4 text-[11px] text-zinc-500">
-            {approval.reasons.map((reason) => (
-              <li key={reason}>{reason}</li>
-            ))}
-          </ul>
-          <details className="mt-1.5">
-            <summary className="cursor-pointer select-none text-[11px] text-zinc-500">Exact payload</summary>
-            <pre className="mt-1 max-h-32 overflow-auto rounded bg-zinc-950 p-2 font-mono text-[10px] text-zinc-400">{approval.payloadJson}</pre>
-          </details>
-          <div className="mt-2 flex gap-2">
-            <button
-              onClick={() => {
-                writeGate.approvals.answer(approval.id, 'approve')
-                removeApproval(approval.id)
-              }}
-              data-testid={`approve-${approval.id}`}
-              className="rounded-md bg-emerald-600 px-3 py-1 text-xs font-semibold hover:bg-emerald-500"
-            >
-              Approve
-            </button>
-            <button
-              onClick={() => {
-                writeGate.approvals.answer(approval.id, 'approve-all')
-                useNoxStore.getState().pendingApprovals.forEach((a) => removeApproval(a.id))
-              }}
-              className="rounded-md border border-emerald-700 px-3 py-1 text-xs text-emerald-400 hover:bg-emerald-900/40"
-            >
-              Approve all this turn
-            </button>
-            <button
-              onClick={() => {
-                writeGate.approvals.answer(approval.id, 'reject')
-                removeApproval(approval.id)
-              }}
-              data-testid={`reject-${approval.id}`}
-              className="rounded-md bg-red-600 px-3 py-1 text-xs font-semibold hover:bg-red-500"
-            >
-              Reject
-            </button>
+        <div
+          key={approval.id}
+          role="alert"
+          className="overflow-hidden rounded-card bg-surface shadow-card"
+          style={{ animation: 'fade-up 350ms cubic-bezier(0.23,1,0.32,1) both' }}
+        >
+          <div className="p-3">
+            <div className="flex items-center gap-2">
+              <StatusPill tone="orange">Approval needed</StatusPill>
+              <Chip className="ml-auto">{approval.tool}</Chip>
+            </div>
+            <p className="mt-2 text-[13px] font-medium text-ink" data-testid={`approval-summary-${approval.id}`}>
+              {approval.summary}
+            </p>
+            {approval.reasons.length > 0 && (
+              <ul className="mt-1 list-disc pl-4 text-[11.5px] leading-relaxed text-ink-3">
+                {approval.reasons.map((reason) => (
+                  <li key={reason}>{reason}</li>
+                ))}
+              </ul>
+            )}
+            <details className="group mt-2">
+              <summary className="cursor-pointer select-none text-[12px] font-medium text-ink-3 transition-colors duration-150 hover:text-ink">
+                Exact payload
+              </summary>
+              <pre className="mt-1.5 max-h-32 overflow-auto rounded-control bg-inset p-2 font-mono text-[10.5px] leading-relaxed text-ink-2">
+                {approval.payloadJson}
+              </pre>
+            </details>
+            <div className="mt-3 flex items-center gap-1.5">
+              <Button
+                variant="success"
+                size="sm"
+                onClick={() => {
+                  writeGate.approvals.answer(approval.id, 'approve')
+                  removeApproval(approval.id)
+                }}
+                data-testid={`approve-${approval.id}`}
+              >
+                Approve
+              </Button>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => {
+                  writeGate.approvals.answer(approval.id, 'approve-all')
+                  useNoxStore.getState().pendingApprovals.forEach((a) => removeApproval(a.id))
+                }}
+              >
+                Approve all this turn
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-red hover:bg-red-tint hover:text-red"
+                onClick={() => {
+                  writeGate.approvals.answer(approval.id, 'reject')
+                  removeApproval(approval.id)
+                }}
+                data-testid={`reject-${approval.id}`}
+              >
+                Reject
+              </Button>
+            </div>
           </div>
         </div>
       ))}
@@ -83,15 +108,15 @@ export function UndoBar({ readOnly = false }: { readOnly?: boolean }) {
   if (readOnly || (undoableCount === 0 && !status)) return null
 
   return (
-    <div className="flex items-center justify-between border-t border-zinc-800 px-3 py-1.5" data-testid="undo-bar">
-      <span className="text-[11px] text-zinc-500">
+    <div className="flex items-center justify-between gap-2 px-4 py-1.5" data-testid="undo-bar">
+      <span className="truncate text-[11.5px] text-ink-3">
         {status ?? `${undoableCount} reversible change${undoableCount === 1 ? '' : 's'}`}
       </span>
       {!status && (
         <button
           onClick={() => void runUndo(setStatus, readOnly)}
           data-testid="undo-latest"
-          className="rounded-md border border-zinc-700 px-2 py-0.5 text-[11px] text-zinc-300 hover:bg-zinc-800"
+          className="shrink-0 rounded-chip bg-field px-2 py-1 text-[11px] font-medium text-ink-2 shadow-hairline transition-colors duration-100 hover:text-ink"
         >
           Undo latest
         </button>

@@ -38,13 +38,13 @@ export function App() {
   const setupIncomplete = connectionStatus !== 'connected' || codexStatus !== 'connected'
 
   return (
-    <div className="flex h-full flex-col bg-zinc-950 text-zinc-100">
+    <div className="flex h-full flex-col bg-page text-ink">
       {role === 'viewer' && <ViewerBanner />}
       <header className="flex shrink-0 items-center gap-1.5 px-3 py-2" data-testid="panel-header">
-        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-zinc-800 text-zinc-300">
+        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-field text-ink shadow-hairline">
           <NoxMark className="h-4 w-4" />
         </span>
-        <h1 className="min-w-0 truncate text-sm font-semibold tracking-tight" data-testid="thread-title">
+        <h1 className="min-w-0 truncate text-[13px] font-semibold tracking-tight" data-testid="thread-title">
           {threadTitle}
         </h1>
         <button
@@ -52,7 +52,7 @@ export function App() {
           aria-label="Open chat menu"
           title="New chat"
           data-testid="header-menu"
-          className="shrink-0 rounded p-0.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
+          className="shrink-0 rounded p-0.5 text-ink-3 hover:bg-hover-2 hover:text-ink"
         >
           <ChevronDownIcon />
         </button>
@@ -62,11 +62,11 @@ export function App() {
           aria-label={settingsOpen ? 'Close settings' : 'Open settings'}
           title="Settings"
           data-testid="settings-button"
-          className="relative rounded-md p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+          className="relative rounded-control p-1.5 text-ink-2 transition-colors duration-100 hover:bg-hover-2 hover:text-ink"
         >
           <GearIcon />
           {setupIncomplete && !settingsOpen && (
-            <span aria-hidden="true" className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-amber-400" />
+            <span aria-hidden="true" className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-orange" />
           )}
         </button>
         <button
@@ -74,7 +74,7 @@ export function App() {
           aria-label="New chat"
           title="New chat"
           data-testid="new-chat"
-          className="rounded-md p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+          className="rounded-control p-1.5 text-ink-2 transition-colors duration-100 hover:bg-hover-2 hover:text-ink"
         >
           <PlusCircleIcon />
         </button>
