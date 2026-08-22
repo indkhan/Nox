@@ -78,6 +78,7 @@ export class CodexClient {
   private turnFail: ((e: Error) => void) | null = null
   private turnFinalText = ''
   private sawError: string | null = null
+  private turnRunning = false
 
   constructor(private readonly bridge: NativeBridge) {}
 
@@ -152,6 +153,8 @@ export class CodexClient {
    */
   async runTurn(input: TurnInput[]): Promise<{ interrupted: boolean; finalText: string }> {
     if (!this.activeThread) throw new Error('no active thread — start or resume one first')
+    if (this.turnRunning) throw new Error('turn already running')
+    this.turnRunning = true
     this.wire()
     this.turnFinalText = ''
     this.sawError = null
@@ -162,8 +165,14 @@ export class CodexClient {
       this.turnFail = reject
     })
     this.emit({ kind: 'turn-started', threadId: this.activeThread })
-    await this.bridge.rpc('turn/start', { threadId: this.activeThread, input })
-    return completion
+    try {
+      await this.bridge.rpc('turn/start', { threadId: this.activeThread, input })
+      return await completion
+    } finally {
+      this.turnRunning = false
+      this.turnDone = null
+      this.turnFail = null
+    }
   }
 
   async interrupt(): Promise<void> {

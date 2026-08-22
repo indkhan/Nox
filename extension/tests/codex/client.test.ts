@@ -166,4 +166,12 @@ describe('CodexClient', () => {
   it('refuses to run a turn before a thread exists', async () => {
     await expect(client.runTurn([])).rejects.toThrow(/no active thread/)
   })
+
+  it('refuses a second turn while one is running', async () => {
+    await startThreadFixture()
+    const first = client.runTurn([])
+    await expect(client.runTurn([])).rejects.toThrow(/turn already running/)
+    emit(h.bridge, 'turn/completed', {})
+    await first
+  })
 })
