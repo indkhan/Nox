@@ -199,4 +199,11 @@ describe('AgentLoop integration (scripted codex)', () => {
   it('titles threads from the exchange', () => {
     expect(titleFromExchange('Summarize Q3 roadmap')).toBe('Summarize Q3 roadmap')
   })
+
+  it('starts fresh after resetting the thread', async () => {
+    await loop.sendUserMessage('first chat')
+    expect(loop.currentThreadId).toBe('thr_A')
+    loop.newThread()
+    expect(loop.currentThreadId).toBeNull()
+  })
 })

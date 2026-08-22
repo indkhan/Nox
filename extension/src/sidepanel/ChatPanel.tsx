@@ -120,7 +120,10 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
   }
 
   function newChat() {
+    if (busy) return
     setTurns([])
+    currentThreadIdRef.current = null
+    agentLoop.newThread()
     setThreadTitle('New chat')
     void chrome.storage.local.remove('nox_thread_title')
   }
@@ -133,7 +136,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
         <span className="text-emerald-400">⬡</span>
         <h2 className="min-w-0 flex-1 truncate text-xs font-medium" data-testid="thread-title">{threadTitle}</h2>
         <button onClick={() => setSettingsOpen(true)} aria-label="Settings" data-testid="settings-button" className="text-xs text-zinc-500 hover:text-zinc-300">⚙</button>
-        <button onClick={newChat} aria-label="New chat" data-testid="new-chat" className="text-xs text-zinc-500 hover:text-zinc-300">
+        <button disabled={busy} onClick={newChat} aria-label="New chat" data-testid="new-chat" className="text-xs text-zinc-500 hover:text-zinc-300 disabled:opacity-40">
           ＋
         </button>
       </header>
