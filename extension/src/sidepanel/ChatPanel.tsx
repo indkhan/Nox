@@ -11,6 +11,7 @@ import { historyRepo } from '../lib/history/panel'
 import { startPersistedTurn } from '../lib/history/turn'
 import { logError, logInfo } from '../lib/log'
 import { undoEntry } from '../lib/writes/undo'
+import { restoreTurns } from '../lib/history/restore'
 
 interface TurnView {
   activity: ActivityItem[]
@@ -25,21 +26,37 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const currentThreadIdRef = useRef<string | null>(null)
   const lastUsageRef = useRef<Record<string, number> | null>(null)
+  const historyRestoreCancelledRef = useRef(false)
   const currentPage = useNoxStore((s) => s.currentPage)
   const connectionStatus = useNoxStore((s) => s.connectionStatus)
   const threadTitle = useNoxStore((s) => s.threadTitle)
   const setThreadTitle = useNoxStore((s) => s.setThreadTitle)
   const newChatTick = useNoxStore((s) => s.newChatTick)
 
+  useEffect(() => {
+    let cancelled = false
+    void chrome.storage.local.get('nox_thread_id').then(async (stored) => {
+      const threadId = stored['nox_thread_id']
+      if (typeof threadId !== 'string' || !threadId) return
+      const messages = await historyRepo.getMessages(threadId)
+      if (cancelled || historyRestoreCancelledRef.current) return
+      currentThreadIdRef.current = threadId
+      setAgentHistoryThread(threadId)
+      setTurns(restoreTurns(messages))
+    }).catch(() => undefined)
+    return () => { cancelled = true }
+  }, [])
+
   // Header "new chat" button resets the conversation view.
   useEffect(() => {
     if (newChatTick === 0) return
+    historyRestoreCancelledRef.current = true
     setTurns([])
     currentThreadIdRef.current = null
     setAgentHistoryThread(null)
     agentLoop.newThread()
     setThreadTitle('New chat')
-    void chrome.storage.local.remove('nox_thread_title')
+    void chrome.storage.local.remove(['nox_thread_title', 'nox_thread_id'])
   }, [newChatTick, setThreadTitle])
 
   const scrollToEnd = () => requestAnimationFrame(() => scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }))
@@ -72,6 +89,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
         persisted = await startPersistedTurn(historyRepo, currentThreadIdRef.current, text)
         currentThreadIdRef.current = persisted.threadId
         setAgentHistoryThread(persisted.threadId)
+        void chrome.storage.local.set({ nox_thread_id: persisted.threadId })
       } catch {
         /* persistence is best-effort; never block the chat */
       }
