@@ -148,7 +148,7 @@ describe('AgentLoop integration (scripted codex)', () => {
     expect(sent.endsWith('find the Projects database and tell me what is overdue')).toBe(true)
 
     // The executor actually called Notion search and returned wrapped data to Codex.
-    expect(notionCalls).toEqual([{ name: 'notion-search', args: { query: 'overdue' } }])
+    expect(notionCalls).toEqual([{ name: 'notion-search', args: { query: 'overdue', _nox_untrusted_context: true } }])
     const answer = bridge.toolResults[0].result as { success: boolean; contentItems: Array<{ text: string }> }
     expect(answer.success).toBe(true)
     expect(answer.contentItems[0].text).toContain('UNTRUSTED_CONTENT')

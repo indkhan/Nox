@@ -136,7 +136,8 @@ function firstString(v: unknown): string | undefined {
 }
 
 function stripReservedArgs(args: Record<string, unknown>): Record<string, unknown> {
-  const { injected_request, ...rest } = args
+  const { injected_request, _nox_untrusted_context, ...rest } = args
   void injected_request
+  void _nox_untrusted_context
   return rest
 }

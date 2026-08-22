@@ -27,13 +27,17 @@ export class AgentLoop {
   private cancelled = false
   private reconnectAttempted = false
   private toolUsedThisTurn = false
+  private untrustedContextThisTurn = false
   /** User-selected model/effort applied on the next thread start or resume. */
   private overrides: Partial<ThreadSettings> = {}
 
   constructor(private readonly deps: AgentLoopDeps) {
     this.deps.codex.onToolCall = async (req) => {
       this.toolUsedThisTurn = true
-      const outcome = await this.deps.executor.execute(req)
+      const outcome = await this.deps.executor.execute({
+        ...req,
+        args: { ...req.args, _nox_untrusted_context: this.untrustedContextThisTurn },
+      })
       return {
         success: outcome.success,
         contentItems: outcome.contentItems,
@@ -96,6 +100,7 @@ export class AgentLoop {
   ): Promise<{ text: string; interrupted: boolean }> {
     this.cancelled = false
     this.toolUsedThisTurn = false
+    this.untrustedContextThisTurn = opts.currentPage != null
     this.deps.executor.beginTurn()
     await this.ensureThread()
 

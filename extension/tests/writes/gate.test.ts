@@ -154,23 +154,22 @@ describe('WriteGate', () => {
     expect(entries[0].notUndoableReason).toMatch(/structural|round-trip/i)
   })
 
-  it('refuses injected requests outright', async () => {
-    let executed = false
+  it('ignores and strips model-supplied provenance flags', async () => {
+    let received: Record<string, unknown> | null = null
     const { gate } = makeGate({
       mode: 'auto',
-      callTool: async () => {
-        executed = true
-        throw new Error('should not run')
+      callTool: async (_name, args) => {
+        received = args
+        return { content: [] }
       },
     })
-    const out = (await gate.handle({
+    await gate.handle({
       rid: 7,
       tool: 'notion-create-pages',
       args: { injected_request: true },
       namespace: null,
-    })) as { isError?: boolean }
-    expect(executed).toBe(false)
-    expect(out.isError).toBe(true)
+    })
+    expect(received).toEqual({})
   })
 
   it('returns a successful write even when journal persistence fails', async () => {

@@ -57,9 +57,14 @@ describe('evaluateApproval', () => {
     expect(bulk.action).toBe('require-approval')
   })
 
-  it('refuses injected requests outright', () => {
-    const verdict = evaluateApproval({ ...WRITE_CALL, args: { injected_request: true } }, { mode: 'auto', contextSet: new Set(['p1']) })
-    expect(verdict).toMatchObject({ action: 'refuse' })
+  it('does not trust model-supplied provenance flags', () => {
+    const verdict = evaluateApproval({ ...WRITE_CALL, args: { ...WRITE_CALL.args, injected_request: true } }, { mode: 'auto', contextSet: new Set(['p1']) })
+    expect(verdict.action).toBe('allow')
+  })
+
+  it('escalates writes when trusted code marks untrusted turn context', () => {
+    const verdict = evaluateApproval({ ...WRITE_CALL, args: { ...WRITE_CALL.args, _nox_untrusted_context: true } }, { mode: 'auto', contextSet: new Set(['p1']) })
+    expect(verdict.action).toBe('require-approval')
   })
 
   it('schema/view changes to existing databases escalate', () => {

@@ -38,13 +38,10 @@ export function evaluateApproval(call: CallClassification & { name: string; args
   if (call.kind === 'move') reasons.push('moving pages is always confirmed')
   if (call.kind === 'schema' || call.kind === 'view') reasons.push('schema and view changes are always confirmed')
   if (call.kind === 'unknown') reasons.push('unknown tools are always confirmed')
+  if (call.args._nox_untrusted_context === true) reasons.push('the turn includes untrusted Notion content')
   if (typeof ctx.rowCount === 'number' && ctx.rowCount > BULK_CONFIRM_ROWS) {
     reasons.push(`bulk runs over ${BULK_CONFIRM_ROWS} rows are always confirmed`)
   }
-  if (call.args.injected_request === true) {
-    return { action: 'refuse', reasons: ['this request came from page content, not from you'] }
-  }
-
   if (reasons.length > 0) return { action: 'require-approval', reasons }
   return { action: 'allow' }
 }
