@@ -64,4 +64,4 @@ if (isWin) {
 
 console.log(`\n  ✔ ${HOST} installed for extension ${id}`);
 console.log(`    host script : ${script}`);
-console.log('    Restart Chrome, then click "Ping bridge" in the panel.\n');
+console.log('    Restart Chrome, then click "Connect Codex" in the Nox panel.\n');
