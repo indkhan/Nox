@@ -1,13 +1,9 @@
 import { closeNoxDBConnections, openNoxDB } from './schema'
 import { threadRepository, type ThreadRepository } from './repository'
-import { OwnerLock } from './lock'
-import { chromeArea } from '../chrome-storage'
 
 export const historyRepo: ThreadRepository = threadRepository(openNoxDB)
 
 /** One lock instance per panel document. */
-export const ownerLock = new OwnerLock(chromeArea('session'))
-
 export type WindowRole = 'owner' | 'viewer' | 'pending'
 let releaseWebLock: (() => void) | null = null
 
@@ -29,7 +25,9 @@ export async function claimWindowRole(): Promise<WindowRole> {
     }
     return owner ? 'owner' : 'viewer'
   }
-  return (await ownerLock.acquire()) ? 'owner' : 'viewer'
+  // Unsupported browsers stay read-only rather than risking two owners via
+  // a non-atomic storage fallback.
+  return 'viewer'
 }
 
 /** Storage usage via the Storage API (extension origin quota is unlimited). */

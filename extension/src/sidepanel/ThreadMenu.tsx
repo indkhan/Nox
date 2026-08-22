@@ -13,6 +13,7 @@ export function ThreadMenu({ disabled = false }: { disabled?: boolean }) {
   const rootRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
   const searchGenerationRef = useRef(0)
   const requestOpenThread = useNoxStore((state) => state.requestOpenThread)
   const activeThreadId = useNoxStore((state) => state.activeThreadId)
@@ -43,11 +44,13 @@ export function ThreadMenu({ disabled = false }: { disabled?: boolean }) {
   useEffect(() => { if (disabled) setOpen(false) }, [disabled])
 
   async function remove(thread: ThreadRow) {
+    if (pendingId) return
     if (!window.confirm(`Delete “${thread.title}”?`)) return
     setPendingId(thread.id)
     setError(null)
     try {
       await historyRepo.deleteThread(thread.id)
+      searchRef.current?.focus()
       setThreads((all) => all.filter((candidate) => candidate.id !== thread.id))
       if (thread.id === activeThreadId) requestNewChat()
     } catch (cause) {
@@ -56,6 +59,7 @@ export function ThreadMenu({ disabled = false }: { disabled?: boolean }) {
   }
 
   async function exportThread(thread: ThreadRow) {
+    if (pendingId) return
     setPendingId(thread.id)
     setError(null)
     try {
@@ -88,13 +92,13 @@ export function ThreadMenu({ disabled = false }: { disabled?: boolean }) {
       </button>
       {open && (
         <div ref={panelRef} onKeyDown={trapFocus} className="absolute left-0 top-7 z-40 w-72 rounded-xl border border-zinc-700 bg-zinc-900 p-2 shadow-xl" role="dialog" aria-label="Chat history">
-          <input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search chats" aria-label="Search chats" className="mb-2 w-full rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-xs outline-none" />
+          <input ref={searchRef} autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search chats" aria-label="Search chats" className="mb-2 w-full rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-xs outline-none" />
           <div className="max-h-64 space-y-1 overflow-y-auto">
             {threads.map((thread) => (
               <div key={thread.id} className="flex items-center gap-1 rounded-md hover:bg-zinc-800">
                 <button onClick={() => { requestOpenThread(thread.id); setOpen(false); triggerRef.current?.focus() }} className="min-w-0 flex-1 truncate px-2 py-1.5 text-left text-xs">{thread.title}</button>
-                <button disabled={pendingId != null} onClick={() => void exportThread(thread)} aria-label={`Export ${thread.title}`} className="px-1 text-[10px] text-zinc-500 hover:text-zinc-200 disabled:opacity-40">Export</button>
-                <button disabled={pendingId != null} onClick={() => void remove(thread)} aria-label={`Delete ${thread.title}`} className="px-1 text-[10px] text-zinc-500 hover:text-red-400 disabled:opacity-40">Delete</button>
+                <button aria-disabled={pendingId != null} onClick={() => void exportThread(thread)} aria-label={`Export ${thread.title}`} className="px-1 text-[10px] text-zinc-500 hover:text-zinc-200 aria-disabled:opacity-40">Export</button>
+                <button aria-disabled={pendingId != null} onClick={() => void remove(thread)} aria-label={`Delete ${thread.title}`} className="px-1 text-[10px] text-zinc-500 hover:text-red-400 aria-disabled:opacity-40">Delete</button>
               </div>
             ))}
             {threads.length === 0 && <p className="px-2 py-3 text-center text-xs text-zinc-500">No chats found</p>}
