@@ -26,11 +26,13 @@ export class AgentLoop {
   private listeners = new Set<TurnListener>()
   private cancelled = false
   private reconnectAttempted = false
+  private toolUsedThisTurn = false
   /** User-selected model/effort applied on the next thread start or resume. */
   private overrides: Partial<ThreadSettings> = {}
 
   constructor(private readonly deps: AgentLoopDeps) {
     this.deps.codex.onToolCall = async (req) => {
+      this.toolUsedThisTurn = true
       const outcome = await this.deps.executor.execute(req)
       return {
         success: outcome.success,
@@ -89,6 +91,7 @@ export class AgentLoop {
     opts: { currentPage?: CurrentPage & { markdown?: string }; timeoutMs?: number } = {},
   ): Promise<{ text: string; interrupted: boolean }> {
     this.cancelled = false
+    this.toolUsedThisTurn = false
     this.deps.executor.beginTurn()
     await this.ensureThread()
 
@@ -105,7 +108,7 @@ export class AgentLoop {
       return { text: result.finalText, interrupted: result.interrupted }
     } catch (e) {
       const message_ = e instanceof Error ? e.message : String(e)
-      if (!this.reconnectAttempted && classifyBridgeFailure(message_) === 'bridge-missing') {
+      if (!this.toolUsedThisTurn && !this.reconnectAttempted && classifyBridgeFailure(message_) === 'bridge-missing') {
         // One transparent reconnect + thread resume, then give up.
         this.reconnectAttempted = true
         this.listeners.forEach((l) => l({ kind: 'bridge-reconnecting' }))

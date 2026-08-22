@@ -19,6 +19,7 @@ class ScriptedBridge {
   turnInputs: Array<Array<{ type: string; text?: string }>> = []
   toolResults: Array<{ rid: number; result: unknown }> = []
   failNextTurnStart = false
+  failAfterTool = false
   private nextRid = 100
   private interrupted = false
 
@@ -89,6 +90,7 @@ class ScriptedBridge {
       params: { tool: 'notion-search', namespace: null, arguments: { query: 'overdue' }, callId: 'call_1' },
     })
     await Promise.race([answered, new Promise((r) => setTimeout(r, 2000))])
+    if (this.failAfterTool) throw new Error('bridge port disconnected')
 
     this.notif('item/completed', { threadId, item: { type: 'dynamicToolCall', id: 't1', status: 'completed' } })
     this.notif('item/started', { threadId, item: { type: 'agentMessage', id: 'a1' } })
@@ -175,6 +177,13 @@ describe('AgentLoop integration (scripted codex)', () => {
     expect(bridge.disconnectedCount).toBe(1)
     // A fresh thread was started after the reconnect.
     expect(loop.currentThreadId).toBe('thr_A')
+  })
+
+  it('does not replay a turn after a tool call', async () => {
+    bridge.failAfterTool = true
+    await expect(loop.sendUserMessage('change something')).rejects.toThrow()
+    expect(bridge.disconnectedCount).toBe(0)
+    expect(notionCalls).toHaveLength(1)
   })
 
   it('keeps partial state consistent when cancelled', async () => {
