@@ -31,6 +31,9 @@ export class OwnerLock {
       return false
     }
     await this.write()
+    // Let simultaneous claimants publish, then only the surviving claim wins.
+    await Promise.resolve()
+    if ((await this.read())?.windowId !== this.windowId) return false
     this.timer = setInterval(() => void this.write(), this.heartbeatMs)
     return true
   }

@@ -78,6 +78,15 @@ describe('persistent mutation journal', () => {
     journal.scopeThread(null)
     expect(await journal.newestFirst()).toEqual([])
   })
+
+  it('continues timestamp order after reopening persisted future entries', async () => {
+    const entries = [{ id: 'old', ts: Date.now() + 10_000, threadId: 't', turnId: 'x', status: 'applied' as const, tool: 'old', args: {}, kind: 'write' }]
+    const store = { append: async (entry: typeof entries[number]) => { entries.push(entry) }, list: async () => [...entries] }
+    const reopened = new MutationJournal(store)
+    reopened.setThread('t')
+    await reopened.record({ tool: 'new', args: {}, kind: 'write' })
+    expect((await reopened.newestFirst()).map((entry) => entry.tool)).toEqual(['new', 'old'])
+  })
 })
 
 describe('ThreadRepository', () => {

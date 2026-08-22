@@ -57,6 +57,7 @@ export class MutationJournal {
   private undoInFlight = false
   private lastTimestamp = 0
   private scopeActive = false
+  private recordQueue: Promise<void> = Promise.resolve()
 
   constructor(private readonly store: JournalStore = memoryJournalStore()) {}
 
@@ -71,18 +72,24 @@ export class MutationJournal {
     this.scopeActive = true
   }
 
-  async record(input: Omit<JournalEntry, 'id' | 'ts' | 'threadId' | 'turnId' | 'status'>): Promise<JournalEntry> {
-    this.lastTimestamp = Math.max(Date.now(), this.lastTimestamp + 1)
-    const entry: JournalEntry = {
-      ...input,
-      id: crypto.randomUUID(),
-      ts: this.lastTimestamp,
-      threadId: this.threadId ?? 'unscoped',
-      turnId: this.turnId ?? crypto.randomUUID(),
-      status: 'applied',
-    }
-    await this.store.append(entry)
-    return entry
+  record(input: Omit<JournalEntry, 'id' | 'ts' | 'threadId' | 'turnId' | 'status'>): Promise<JournalEntry> {
+    const task = this.recordQueue.then(async () => {
+      const persisted = await this.store.list()
+      const persistedMax = persisted.reduce((max, entry) => Math.max(max, entry.ts), 0)
+      this.lastTimestamp = Math.max(Date.now(), this.lastTimestamp + 1, persistedMax + 1)
+      const entry: JournalEntry = {
+        ...input,
+        id: crypto.randomUUID(),
+        ts: this.lastTimestamp,
+        threadId: this.threadId ?? 'unscoped',
+        turnId: this.turnId ?? crypto.randomUUID(),
+        status: 'applied',
+      }
+      await this.store.append(entry)
+      return entry
+    })
+    this.recordQueue = task.then(() => undefined, () => undefined)
+    return task
   }
 
   /** Newest-first for the undo UI (MVP §6.5). */

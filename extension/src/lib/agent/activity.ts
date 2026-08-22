@@ -13,6 +13,7 @@ export type ActivityItem =
       journalId?: string
       undoable?: boolean
       undoError?: string
+      undone?: boolean
     }
 
 export type ActivityEvent =
@@ -122,6 +123,6 @@ export function applyUndoResult(items: ActivityItem[], journalId: string, error?
   return items.map((item) => item.kind === 'tool' && item.journalId === journalId
     ? error
       ? { ...item, undoable: true, undoError: error }
-      : { ...item, undoable: false, undoError: undefined, resultText: 'Change undone' }
+      : { ...item, undoable: false, undone: true, undoError: undefined, resultText: 'Change undone' }
     : item)
 }

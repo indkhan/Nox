@@ -9,12 +9,26 @@ export const historyRepo: ThreadRepository = threadRepository(openNoxDB)
 export const ownerLock = new OwnerLock(chromeArea('session'))
 
 export type WindowRole = 'owner' | 'viewer' | 'pending'
+let releaseWebLock: (() => void) | null = null
 
 /**
  * Claims ownership for this window. Viewer windows still render history but
  * never start turns (MVP §8).
  */
 export async function claimWindowRole(): Promise<WindowRole> {
+  if (navigator.locks) {
+    const acquired = new Promise<boolean>((resolve) => {
+      void navigator.locks.request('nox-agent-owner', { ifAvailable: true, mode: 'exclusive' }, async (lock) => {
+        resolve(lock != null)
+        if (lock) await new Promise<void>((release) => { releaseWebLock = release })
+      })
+    })
+    const owner = await acquired
+    if (owner) {
+      window.addEventListener('pagehide', () => { releaseWebLock?.(); releaseWebLock = null }, { once: true })
+    }
+    return owner ? 'owner' : 'viewer'
+  }
   return (await ownerLock.acquire()) ? 'owner' : 'viewer'
 }
 

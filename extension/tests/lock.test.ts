@@ -36,6 +36,16 @@ describe('OwnerLock', () => {
     await first.release()
   })
 
+  it('elects only one owner when panels claim simultaneously', async () => {
+    const session = memoryStore()
+    const first = new OwnerLock(session, () => nowMs, 'win-a')
+    const second = new OwnerLock(session, () => nowMs, 'win-b')
+    const results = await Promise.all([first.acquire(), second.acquire()])
+    expect(results.filter(Boolean)).toHaveLength(1)
+    await first.release()
+    await second.release()
+  })
+
   it('lets a latecomer steal after the heartbeat goes stale (crash)', async () => {
     const session = memoryStore()
     const first = new OwnerLock(session, () => nowMs, 'win-a')

@@ -104,7 +104,7 @@ export function UndoBar({ readOnly = false }: { readOnly?: boolean }) {
 
   return (
     <div className="flex items-center justify-between border-t border-zinc-800 px-3 py-1.5" data-testid="undo-bar">
-      <span className="text-[11px] text-zinc-500">
+      <span className="text-[11px] text-zinc-500" role="status" aria-live="polite" aria-atomic="true">
         {status ?? `${undoableCount} reversible change${undoableCount === 1 ? '' : 's'}`}
       </span>
       {undoableCount > 0 && (

@@ -12,6 +12,7 @@ export function ThreadMenu({ disabled = false }: { disabled?: boolean }) {
   const [pendingId, setPendingId] = useState<string | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
   const searchGenerationRef = useRef(0)
   const requestOpenThread = useNoxStore((state) => state.requestOpenThread)
   const activeThreadId = useNoxStore((state) => state.activeThreadId)
@@ -70,18 +71,28 @@ export function ThreadMenu({ disabled = false }: { disabled?: boolean }) {
     } finally { setPendingId(null) }
   }
 
+  function trapFocus(event: React.KeyboardEvent) {
+    if (event.key !== 'Tab') return
+    const controls = [...(panelRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled)') ?? [])]
+    if (controls.length === 0) return
+    const first = controls[0]
+    const last = controls.at(-1)!
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus() }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus() }
+  }
+
   return (
     <div ref={rootRef} className="relative">
       <button ref={triggerRef} disabled={disabled} onClick={() => setOpen((value) => !value)} aria-label="Open chat history" aria-expanded={open} className="rounded p-0.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300 disabled:cursor-not-allowed disabled:opacity-40">
         <ChevronDownIcon />
       </button>
       {open && (
-        <div className="absolute left-0 top-7 z-40 w-72 rounded-xl border border-zinc-700 bg-zinc-900 p-2 shadow-xl" role="dialog" aria-label="Chat history">
+        <div ref={panelRef} onKeyDown={trapFocus} className="absolute left-0 top-7 z-40 w-72 rounded-xl border border-zinc-700 bg-zinc-900 p-2 shadow-xl" role="dialog" aria-label="Chat history">
           <input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search chats" aria-label="Search chats" className="mb-2 w-full rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-xs outline-none" />
           <div className="max-h-64 space-y-1 overflow-y-auto">
             {threads.map((thread) => (
               <div key={thread.id} className="flex items-center gap-1 rounded-md hover:bg-zinc-800">
-                <button onClick={() => { requestOpenThread(thread.id); setOpen(false) }} className="min-w-0 flex-1 truncate px-2 py-1.5 text-left text-xs">{thread.title}</button>
+                <button onClick={() => { requestOpenThread(thread.id); setOpen(false); triggerRef.current?.focus() }} className="min-w-0 flex-1 truncate px-2 py-1.5 text-left text-xs">{thread.title}</button>
                 <button disabled={pendingId != null} onClick={() => void exportThread(thread)} aria-label={`Export ${thread.title}`} className="px-1 text-[10px] text-zinc-500 hover:text-zinc-200 disabled:opacity-40">Export</button>
                 <button disabled={pendingId != null} onClick={() => void remove(thread)} aria-label={`Delete ${thread.title}`} className="px-1 text-[10px] text-zinc-500 hover:text-red-400 disabled:opacity-40">Delete</button>
               </div>

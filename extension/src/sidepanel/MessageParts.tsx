@@ -35,7 +35,7 @@ function ActivityRow({ item, onUndo }: { item: ActivityItem; onUndo?: (journalId
   if (item.kind === 'search') return <li className="nox-info py-1 text-xs">{item.status === 'completed' ? 'Searched the web' : 'Searching the web…'}</li>
   const completed = item.status === 'completed'
   const base = toolActivityLabel(item.tool, item.args, completed)
-  const label = item.status === 'failed' ? failedToolActivityLabel(item.tool) : base
+  const label = item.undone ? 'Change undone' : item.status === 'failed' ? failedToolActivityLabel(item.tool) : base
   return (
     <li className={`flex items-start gap-2 py-1 text-xs ${completed ? 'nox-resolve' : ''}`}>
       <span className={item.status === 'failed' ? 'nox-danger' : completed ? 'nox-success' : 'nox-active'}>
@@ -50,11 +50,12 @@ function ActivityRow({ item, onUndo }: { item: ActivityItem; onUndo?: (journalId
           <div className="mt-1 font-mono">{item.tool}</div>
           <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap">{JSON.stringify(item.args)}</pre>
         </details>
-        {item.undoable && item.journalId && onUndo && (
-          <button onClick={() => onUndo(item.journalId!)} className="nox-active mt-1 text-[11px] underline-offset-2 hover:underline">
-            Undo this change
+        {(item.undoable || item.undone || item.undoError) && item.journalId && onUndo && (
+          <button disabled={!item.undoable} onClick={() => onUndo(item.journalId!)} className="nox-active mt-1 text-[11px] underline-offset-2 hover:underline disabled:no-underline">
+            {item.undone ? 'Undone' : 'Undo this change'}
           </button>
         )}
+        {item.undone && <span className="sr-only" role="status" aria-live="polite">Change undone</span>}
         {item.undoError && <p className="nox-danger mt-1 text-[11px]" role="alert">Undo failed: {item.undoError}</p>}
       </div>
       {item.durationMs != null && <span className="tabular-nums text-zinc-600">{formatDuration(item.durationMs)}</span>}
@@ -64,6 +65,7 @@ function ActivityRow({ item, onUndo }: { item: ActivityItem; onUndo?: (journalId
 
 function ActivityResult({ item }: { item: Extract<ActivityItem, { kind: 'tool' }> }) {
   if (item.status !== 'completed') return null
+  if (item.undone) return <div className="nox-success mt-1 text-[11px]" role="status">Change undone</div>
   const category = toolResultCategory(item.tool)
   if (category === 'table' && item.resultText) {
     return <div className="mt-1"><ResultsTable table={toResultTable({ content: [{ type: 'text', text: item.resultText }] })} /></div>
