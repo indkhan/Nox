@@ -33,6 +33,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
   const threadTitle = useNoxStore((s) => s.threadTitle)
   const setThreadTitle = useNoxStore((s) => s.setThreadTitle)
   const newChatTick = useNoxStore((s) => s.newChatTick)
+  const openThreadRequest = useNoxStore((s) => s.openThreadRequest)
 
   useEffect(() => {
     let cancelled = false
@@ -56,6 +57,27 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
     }).catch(() => undefined)
     return () => { cancelled = true }
   }, [])
+
+  useEffect(() => {
+    if (!openThreadRequest || busyRef.current) return
+    historyRestoreCancelledRef.current = true
+    const { id: threadId } = openThreadRequest
+    void (async () => {
+      const [messages, thread] = await Promise.all([historyRepo.getMessages(threadId), historyRepo.getThread(threadId)])
+      if (!thread) return
+      currentThreadIdRef.current = threadId
+      setAgentHistoryThread(threadId)
+      writeGate.journal.scopeThread(threadId)
+      agentLoop.restoreThread(thread.codexThreadId ?? null)
+      const journal = await writeGate.journal.newestFirst()
+      const restored = await Promise.all(restoreTurns(messages, journal).map(async (turn) => ({
+        ...turn, view: { ...turn.view, activity: await attachJournalEntries(turn.view.activity) },
+      })))
+      setTurns(restored)
+      setThreadTitle(thread.title)
+      await chrome.storage.local.set({ nox_thread_id: threadId, nox_thread_title: thread.title })
+    })().catch((error) => logError(`History open failed: ${error instanceof Error ? error.message : String(error)}`))
+  }, [openThreadRequest, setThreadTitle])
 
   // Header "new chat" button resets the conversation view.
   useEffect(() => {
@@ -191,7 +213,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
   return (
     <section className="flex min-h-0 flex-1 flex-col" data-testid="chat-panel">
       {!hasMessages ? (
-        <EmptyState onSend={(t) => void send(t)} />
+        <EmptyState readOnly={readOnly} onSend={(t) => void send(t)} />
       ) : (
         <div ref={scrollRef} className="min-h-0 flex-1 space-y-5 overflow-y-auto px-3 pb-2 pt-1" data-testid="chat-messages">
           {turns.map(({ id, userText, view }) => (
@@ -202,7 +224,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
               {(view.activity.length > 0 || view.pending) && (
                 <ActivityTimeline items={view.activity} active={view.pending} onUndo={(id) => void undoActivity(id, setTurns)} />
               )}
-              {view.answer && <AssistantMarkdown markdown={view.answer} />}
+              {view.answer && <div aria-live={view.pending ? 'polite' : undefined} aria-atomic="false"><AssistantMarkdown markdown={view.answer} /></div>}
               {!readOnly && !view.pending && view.answer && (
                 <FollowUpActions suggestions={followUpsForActivity(view.activity)} onSelect={(suggestion) => void send(suggestion)} />
               )}
@@ -228,6 +250,8 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
   )
 }
 
+const undoingJournalIds = new Set<string>()
+
 async function attachJournalEntries(items: ActivityItem[]): Promise<ActivityItem[]> {
   const entries = await writeGate.journal.newestFirst()
   return items.map((item) => {
@@ -241,12 +265,16 @@ async function undoActivity(
   journalId: string,
   setTurns: Dispatch<SetStateAction<Array<{ id: string; userText: string; view: TurnView }>>>,
 ): Promise<void> {
+  if (undoingJournalIds.has(journalId)) return
+  undoingJournalIds.add(journalId)
   let error: string | undefined
   try {
     const undone = await undoEntry(writeGate.journal, journalId, (tool, args) => writeGate.handleUndo(tool, args))
     if (!undone) error = 'This change is no longer available to undo.'
   } catch (cause) {
     error = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    undoingJournalIds.delete(journalId)
   }
   setTurns((turns) => turns.map((turn) => ({ ...turn, view: { ...turn.view, activity: applyUndoResult(turn.view.activity, journalId, error) } })))
 }

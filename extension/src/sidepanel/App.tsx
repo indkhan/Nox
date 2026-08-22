@@ -9,6 +9,7 @@ import { claimWindowRole, type WindowRole } from '../lib/history/panel'
 import { installLogCapture, logInfo } from '../lib/log'
 import { connectCodexAction } from './codex-connect'
 import { GearIcon, NoxMark, PlusCircleIcon } from './Icons'
+import { ThreadMenu } from './ThreadMenu'
 
 export function App() {
   const connectionStatus = useNoxStore((s) => s.connectionStatus)
@@ -53,8 +54,9 @@ export function App() {
         <h1 className="min-w-0 truncate text-sm font-semibold tracking-tight" data-testid="thread-title">
           {threadTitle}
         </h1>
+        {role === 'owner' && <ThreadMenu />}
         <span className="flex-1" />
-        <button
+        {role === 'owner' && <button
           onClick={() => setSettingsOpen(!settingsOpen)}
           aria-label={settingsOpen ? 'Close settings' : 'Open settings'}
           title="Settings"
@@ -65,8 +67,8 @@ export function App() {
           {setupIncomplete && !settingsOpen && (
             <span aria-hidden="true" className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-amber-400" />
           )}
-        </button>
-        <button
+        </button>}
+        {role === 'owner' && <button
           onClick={() => requestNewChat()}
           aria-label="New chat"
           title="New chat"
@@ -74,12 +76,12 @@ export function App() {
           className="rounded-md p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
         >
           <PlusCircleIcon />
-        </button>
+        </button>}
       </header>
       <main className="flex min-h-0 flex-1 flex-col">
         <ChatPanel readOnly={role !== 'owner'} />
       </main>
-      {settingsOpen && <SettingsModal />}
+      {settingsOpen && role === 'owner' && <SettingsModal />}
     </div>
   )
 }

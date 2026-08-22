@@ -16,18 +16,34 @@ import { applyTheme, loadSettings, saveSettings, type ThemePreference } from '..
 export function SettingsModal() {
   const setSettingsOpen = useNoxStore((s) => s.setSettingsOpen)
   const close = () => setSettingsOpen(false)
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const previousFocusRef = useRef<HTMLElement | null>(null)
 
   useEffect(() => {
+    previousFocusRef.current = document.activeElement as HTMLElement | null
+    dialogRef.current?.querySelector<HTMLElement>('button, select, input, textarea, a[href]')?.focus()
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') close()
+      if (e.key === 'Tab') {
+        const controls = [...(dialogRef.current?.querySelectorAll<HTMLElement>('button:not(:disabled), select:not(:disabled), input:not(:disabled), textarea:not(:disabled), a[href]') ?? [])]
+        if (controls.length === 0) return
+        const first = controls[0]
+        const last = controls.at(-1)!
+        if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus() }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus() }
+      }
     }
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      previousFocusRef.current?.focus()
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   return (
     <div
+      ref={dialogRef}
       className="absolute inset-0 z-50 flex flex-col bg-zinc-950"
       role="dialog"
       aria-modal="true"

@@ -41,6 +41,9 @@ interface NoxState {
   newChatTick: number
   requestNewChat: () => void
 
+  openThreadRequest: { id: string; nonce: number } | null
+  requestOpenThread: (id: string) => void
+
   settingsOpen: boolean
   setSettingsOpen: (open: boolean) => void
 }
@@ -77,6 +80,9 @@ export const useNoxStore = create<NoxState>((set) => ({
 
   newChatTick: 0,
   requestNewChat: () => set((s) => ({ newChatTick: s.newChatTick + 1 })),
+
+  openThreadRequest: null,
+  requestOpenThread: (id) => set((s) => ({ openThreadRequest: { id, nonce: (s.openThreadRequest?.nonce ?? 0) + 1 } })),
 
   settingsOpen: false,
   setSettingsOpen: (settingsOpen) => set({ settingsOpen }),

@@ -9,7 +9,7 @@ interface SuggestionDef {
   body: ReactNode
 }
 
-export function EmptyState({ onSend }: { onSend?: (text: string) => void }) {
+export function EmptyState({ onSend, readOnly = false }: { onSend?: (text: string) => void; readOnly?: boolean }) {
   const { identity, currentPage } = useNoxStore((s) => s)
   const hour = new Date().getHours()
   const timeOfDay = hour < 12 ? 'morning' : hour < 18 ? 'afternoon' : 'evening'
@@ -57,13 +57,14 @@ export function EmptyState({ onSend }: { onSend?: (text: string) => void }) {
         {suggestions.map((s) => (
           <button
             key={s.testid}
+            disabled={readOnly}
             onClick={() => {
               const el = document.querySelector<HTMLTextAreaElement>('[data-testid=composer]')
               if (onSend && !el?.value.trim()) onSend(s.message)
               else el?.focus()
             }}
             data-testid={s.testid}
-            className="flex w-full items-center gap-2.5 rounded-xl border border-zinc-800/80 bg-zinc-900/60 px-3.5 py-2.5 text-left text-sm font-medium text-zinc-100 transition-colors hover:border-zinc-600 hover:bg-zinc-800"
+            className="flex w-full items-center gap-2.5 rounded-xl border border-zinc-800/80 bg-zinc-900/60 px-3.5 py-2.5 text-left text-sm font-medium text-zinc-100 transition-colors hover:border-zinc-600 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-40"
           >
             {s.icon}
             <span className="flex min-w-0 items-center gap-1.5">{s.body}</span>

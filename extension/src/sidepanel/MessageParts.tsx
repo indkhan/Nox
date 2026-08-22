@@ -115,7 +115,7 @@ export function AssistantMarkdown({ markdown }: { markdown: string }) {
   const html = useMemo(() => renderMarkdown(markdown), [markdown])
   return (
     <div
-      className="nox-markdown space-y-2 text-sm leading-relaxed [&_a]:text-sky-400 [&_code]:rounded [&_code]:bg-zinc-800 [&_code]:px-1 [&_h1]:text-base [&_h1]:font-semibold [&_h2]:text-sm [&_h2]:font-semibold [&_li]:ml-4 [&_ol]:list-decimal [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-zinc-950 [&_pre]:p-2 [&_ul]:list-disc"
+      className="nox-markdown space-y-2 text-sm leading-relaxed [&_a]:text-[var(--nox-info)] [&_code]:rounded [&_code]:bg-zinc-800 [&_code]:px-1 [&_h1]:text-base [&_h1]:font-semibold [&_h2]:text-sm [&_h2]:font-semibold [&_li]:ml-4 [&_ol]:list-decimal [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-zinc-950 [&_pre]:p-2 [&_ul]:list-disc"
       dangerouslySetInnerHTML={{ __html: html }}
     />
   )

@@ -23,6 +23,7 @@ import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { Composer } from '../src/sidepanel/Composer'
 import { ApprovalCards } from '../src/sidepanel/ApprovalCards'
+import { EmptyState } from '../src/sidepanel/EmptyState'
 import { useNoxStore } from '../src/sidepanel/store'
 
 describe('viewer mode', () => {
@@ -31,6 +32,11 @@ describe('viewer mode', () => {
       <Composer busy={false} readOnly onSend={vi.fn()} onCancel={vi.fn()} />,
     )
     expect(html).toMatch(/<textarea[^>]*disabled=""/)
+  })
+
+  it('disables empty-state actions for read-only windows', () => {
+    const html = renderToStaticMarkup(<EmptyState readOnly onSend={vi.fn()} />)
+    expect(html.match(/disabled=""/g)).toHaveLength(3)
   })
 
   it('keeps unfinished attachment and voice controls out of the composer', () => {
