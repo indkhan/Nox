@@ -3,7 +3,7 @@ import type { Dispatch, SetStateAction } from 'react'
 import { useNoxStore } from './store'
 import { agentLoop, fetchCurrentPageContext, setAgentHistoryThread, writeGate } from '../lib/agent/panel'
 import { ActivityTimeline, AssistantMarkdown, FollowUpActions } from './MessageParts'
-import { applyActivityEvent, followUpsForActivity, type ActivityItem } from '../lib/agent/activity'
+import { applyActivityEvent, applyUndoResult, followUpsForActivity, type ActivityItem } from '../lib/agent/activity'
 import { Composer } from './Composer'
 import { EmptyState } from './EmptyState'
 import { ApprovalCards, UndoBar } from './ApprovalCards'
@@ -221,14 +221,11 @@ async function undoActivity(
   journalId: string,
   setTurns: Dispatch<SetStateAction<Array<{ userText: string; view: TurnView }>>>,
 ): Promise<void> {
-  await undoEntry(writeGate.journal, journalId, (tool, args) => writeGate.handleUndo(tool, args))
-  setTurns((turns) => turns.map((turn) => ({
-    ...turn,
-    view: {
-      ...turn.view,
-      activity: turn.view.activity.map((item) => item.kind === 'tool' && item.journalId === journalId
-        ? { ...item, undoable: false, resultText: 'Change undone' }
-        : item),
-    },
-  })))
+  let error: string | undefined
+  try {
+    await undoEntry(writeGate.journal, journalId, (tool, args) => writeGate.handleUndo(tool, args))
+  } catch (cause) {
+    error = cause instanceof Error ? cause.message : String(cause)
+  }
+  setTurns((turns) => turns.map((turn) => ({ ...turn, view: { ...turn.view, activity: applyUndoResult(turn.view.activity, journalId, error) } })))
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyActivityEvent, followUpsForActivity, toolActivityLabel, type ActivityItem } from '../src/lib/agent/activity'
+import { applyActivityEvent, applyUndoResult, followUpsForActivity, toolActivityLabel, type ActivityItem } from '../src/lib/agent/activity'
 
 describe('agent activity', () => {
   it('correlates a completed tool with its running activity', () => {
@@ -53,5 +53,17 @@ describe('contextual follow-ups', () => {
     expect(followUpsForActivity([
       { kind: 'tool', id: '2', tool: 'notion-update-page', args: {}, status: 'completed' },
     ])).toContain('Show me what changed')
+  })
+})
+
+describe('activity undo state', () => {
+  const item: ActivityItem = { kind: 'tool', id: '1', tool: 'notion-update-page', args: {}, status: 'completed', journalId: 'j1', undoable: true }
+
+  it('keeps undo available and shows an error after a failed attempt', () => {
+    expect(applyUndoResult([item], 'j1', 'offline')[0]).toMatchObject({ undoable: true, undoError: 'offline' })
+  })
+
+  it('marks the matching action undone after success', () => {
+    expect(applyUndoResult([item], 'j1')[0]).toMatchObject({ undoable: false, resultText: 'Change undone' })
   })
 })

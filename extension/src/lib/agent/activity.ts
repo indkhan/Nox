@@ -12,6 +12,7 @@ export type ActivityItem =
       resultText?: string
       journalId?: string
       undoable?: boolean
+      undoError?: string
     }
 
 export type ActivityEvent =
@@ -115,4 +116,12 @@ function toolPresentation(tool: string): ToolPresentation {
     running: humanize(tool), completed: humanize(tool), failed: humanize(tool).toLowerCase(),
     category: /update|create|move/.test(tool) ? 'change' : 'generic',
   }
+}
+
+export function applyUndoResult(items: ActivityItem[], journalId: string, error?: string): ActivityItem[] {
+  return items.map((item) => item.kind === 'tool' && item.journalId === journalId
+    ? error
+      ? { ...item, undoable: true, undoError: error }
+      : { ...item, undoable: false, undoError: undefined, resultText: 'Change undone' }
+    : item)
 }

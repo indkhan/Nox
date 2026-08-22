@@ -224,8 +224,8 @@ describe('MutationJournal undo ordering', () => {
     const journal = new MutationJournal()
     await journal.record({ tool: 'write', args: {}, kind: 'content-update', inverse: { tool: 'undo', args: {} } })
     await expect(undoNewest(journal, async () => { throw new Error('offline') })).rejects.toThrow('offline')
-    expect((await journal.newestFirst())[0].status).toBe('failed')
-    expect(await journal.undoable()).toHaveLength(0)
+    expect((await journal.newestFirst())[0].status).toBe('applied')
+    expect(await journal.undoable()).toHaveLength(1)
   })
 
   it('marks a successful undo without deleting its audit record', async () => {

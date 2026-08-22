@@ -55,6 +55,7 @@ function ActivityRow({ item, onUndo }: { item: ActivityItem; onUndo?: (journalId
             Undo this change
           </button>
         )}
+        {item.undoError && <p className="mt-1 text-[11px] text-rose-400" role="alert">Undo failed: {item.undoError}</p>}
       </div>
       {item.durationMs != null && <span className="tabular-nums text-zinc-600">{formatDuration(item.durationMs)}</span>}
     </li>

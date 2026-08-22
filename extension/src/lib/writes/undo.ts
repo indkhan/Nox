@@ -11,7 +11,6 @@ export async function undoNewest(
     await journal.setStatus(entry.id, 'undone')
     return true
   } catch (error) {
-    await journal.setStatus(entry.id, 'failed')
     throw error
   }
 }
@@ -28,7 +27,6 @@ export async function undoEntry(
     await journal.setStatus(entry.id, 'undone')
     return true
   } catch (error) {
-    await journal.setStatus(entry.id, 'failed')
     throw error
   }
 }
