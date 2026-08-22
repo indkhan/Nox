@@ -1,11 +1,30 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { hydrateCurrentPage, useNoxStore } from './store'
+import { ConnectionCard } from './ConnectionCard'
+import { BridgeCard } from './BridgeCard'
+import { ChatPanel } from './ChatPanel'
+import { OnboardingPanel, ViewerBanner } from './Onboarding'
+import { loadSettings } from '../lib/settings'
+import { agentLoop } from '../lib/agent/panel'
+import { claimWindowRole, type WindowRole } from '../lib/history/panel'
 
 export function App() {
   const currentPage = useNoxStore((s) => s.currentPage)
+  const connectionStatus = useNoxStore((s) => s.connectionStatus)
+  const [role, setRole] = useState<WindowRole>('pending')
 
   useEffect(() => {
     void hydrateCurrentPage()
+    void claimWindowRole().then(setRole)
+    void (async () => {
+      const settings = await loadSettings()
+      if (settings.model || settings.effort) {
+        agentLoop.setOverrides({ model: settings.model, effort: settings.effort })
+      }
+      const stored = await chrome.storage.local.get('nox_thread_title')
+      const title = stored['nox_thread_title']
+      if (typeof title === 'string' && title) useNoxStore.getState().setThreadTitle(title)
+    })()
   }, [])
 
   return (
@@ -13,7 +32,12 @@ export function App() {
       <header className="border-b border-zinc-800 px-4 py-3">
         <h1 className="text-sm font-semibold tracking-tight">Nox</h1>
       </header>
-      <main className="flex flex-1 flex-col gap-2 p-4">
+      {role === 'viewer' && <ViewerBanner />}
+      <main className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-4">
+        <ChatPanel />
+        <ConnectionCard />
+        <BridgeCard />
+        {connectionStatus !== 'connected' && <OnboardingPanel />}
         {currentPage ? (
           <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-3">
             <p className="mb-1 text-xs uppercase tracking-wide text-zinc-500">

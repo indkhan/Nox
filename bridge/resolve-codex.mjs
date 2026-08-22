@@ -82,16 +82,43 @@ const cmp = (a, b) => {
 };
 
 export function resolveCodex() {
+  // CODEX_BIN (test fixtures, forced binaries) overrides everything — it never
+  // competes in the newest-version sort.
+  const override = process.env.CODEX_BIN;
+  if (override && existsSync(override)) {
+    try {
+      const isScript = /\.(mjs|cjs|js)$/i.test(override);
+      const out = isScript
+        ? execFileSync(process.execPath, [override, '--version'], { encoding: 'utf8', timeout: 10000 }).trim()
+        : execFileSync(override, ['--version'], { encoding: 'utf8', timeout: 10000 }).trim();
+      const m = out.match(/(\d+\.\d+\.\d+)/);
+      return {
+        path: override,
+        version: m?.[1] ?? '0.0.0',
+        launcher: isScript ? process.execPath : null,
+        candidates: [],
+      };
+    } catch {
+      /* fall through to normal resolution */
+    }
+  }
+
   const seen = new Set();
   const found = [];
   for (const path of [...npmVendored(), ...otherCandidates()]) {
     if (!path || seen.has(path)) continue;
     seen.add(path);
     try {
-      const v = execFileSync(path, ['--version'], { encoding: 'utf8', timeout: 10000 }).trim();
-      const m = v.match(/(\d+\.\d+\.\d+)/);
-      if (m) found.push({ path, version: m[1] });
-    } catch { /* not present or not runnable */ }
+      // Node scripts (e.g. the fake-codex test fixture) need the interpreter.
+      const isScript = /\.(mjs|cjs|js)$/i.test(path);
+      const out = isScript
+        ? execFileSync(process.execPath, [path, '--version'], { encoding: 'utf8', timeout: 10000 }).trim()
+        : execFileSync(path, ['--version'], { encoding: 'utf8', timeout: 10000 }).trim();
+      const m = out.match(/(\d+\.\d+\.\d+)/);
+      if (m) found.push({ path, version: m[1], launcher: isScript ? process.execPath : null });
+    } catch {
+      /* not present or not runnable */
+    }
   }
   if (!found.length) return { path: null, version: null, candidates: [] };
   found.sort((a, b) => cmp(b.version, a.version));

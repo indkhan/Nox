@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    paths: ["extension/**", ".github/workflows/ci.yml"]
+    paths: ["extension/**", "bridge/**", ".github/workflows/ci.yml"]
   pull_request:
 
 jobs:
@@ -25,3 +25,38 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
+
+  bridge:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --test bridge/test-bridge.mjs
+
+  package:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [check, bridge]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: extension/pnpm-lock.yaml
+      - run: pnpm --dir extension install --frozen-lockfile
+      - run: pnpm --dir extension build
+      - name: Zip dist (manifest at archive root)
+        run: cd extension/dist && zip -r "../../nox-${GITHUB_REF_NAME}.zip" .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nox-release-zip
+          path: extension/nox-*.zip

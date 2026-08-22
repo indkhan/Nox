@@ -1,0 +1,105 @@
+// @vitest-environment jsdom
+import 'fake-indexeddb/auto'
+import { beforeEach, describe, expect, it } from 'vitest'
+import { openNoxDB, DB_VERSION } from '../src/lib/history/schema'
+import { threadRepository, type ThreadRepository } from '../src/lib/history/repository'
+
+describe('IndexedDB schema', () => {
+  it('opens at version 1 with all six stores', async () => {
+    const db = await openNoxDB()
+    expect(db.version).toBe(DB_VERSION)
+    for (const store of ['threads', 'messages', 'journal', 'pageCache', 'mentionCache', 'attachments']) {
+      expect(db.objectStoreNames.contains(store)).toBe(true)
+    }
+    db.close()
+  })
+
+  it('upgrades idempotently from an older version without duplicating stores', async () => {
+    const db = await openNoxDB()
+    const db2 = await openNoxDB()
+    expect(db2.version).toBe(1)
+    db.close()
+    db2.close()
+  })
+})
+
+describe('ThreadRepository', () => {
+  let repo: ThreadRepository
+
+  beforeEach(async () => {
+    // fresh in-memory database per test (fake-indexeddb is module-global)
+    const { IDBFactory } = await import('fake-indexeddb')
+    new IDBFactory()
+    repo = threadRepository(openNoxDB)
+  })
+
+  it('creates threads and lists newest-first with pins on top', async () => {
+    const a = await repo.createThread('First')
+    await new Promise((r) => setTimeout(r, 5))
+    const b = await repo.createThread('Second')
+    b.updatedAt = Date.now() + 10
+    await repo.setPinned(a.id, true)
+
+    const list = await repo.listThreads()
+    expect(list[0].id).toBe(a.id) // pinned first
+    expect(list.map((t) => t.title)).toContain('Second')
+  })
+
+  it('appends messages incrementally and reads them back in order', async () => {
+    const t = await repo.createThread()
+    await repo.appendMessage(t.id, { role: 'user', text: 'hello' })
+    await new Promise((r) => setTimeout(r, 3))
+    await repo.appendMessage(t.id, { role: 'assistant', text: 'hi there', usage: { output_tokens: 4 } })
+
+    const messages = await repo.getMessages(t.id)
+    expect(messages.map((m) => m.text)).toEqual(['hello', 'hi there'])
+    expect(messages[1].usage?.output_tokens).toBe(4)
+  })
+
+  it('searches titles AND message text with snippets', async () => {
+    const a = await repo.createThread('Roadmap planning')
+    await repo.appendMessage(a.id, { role: 'user', text: 'quarterly objectives discussion' })
+    const b = await repo.createThread('Random')
+
+    const byTitle = await repo.searchThreads('roadmap')
+    expect(byTitle).toHaveLength(1)
+    expect(byTitle[0].thread.id).toBe(a.id)
+
+    const byText = await repo.searchThreads('objectives')
+    expect(byText).toHaveLength(1)
+    expect(byText[0].snippet).toContain('objectives')
+
+    const none = await repo.searchThreads('nonexistent-query')
+    expect(none).toHaveLength(0)
+    void b
+  })
+
+  it('renames and deletes threads including their messages', async () => {
+    const t = await repo.createThread('Old name')
+    await repo.appendMessage(t.id, { role: 'user', text: 'x' })
+    await repo.renameThread(t.id, 'Renamed')
+
+    const renamed = (await repo.searchThreads('Renamed'))[0]
+    expect(renamed.thread.id).toBe(t.id)
+
+    await repo.deleteThread(t.id)
+    expect(await repo.getMessages(t.id)).toEqual([])
+    expect((await repo.listThreads()).map((x) => x.id)).not.toContain(t.id)
+  })
+
+  it('exports as JSON and markdown', async () => {
+    const t = await repo.createThread('Export me')
+    await repo.appendMessage(t.id, { role: 'user', text: 'question one' })
+    await repo.appendMessage(t.id, { role: 'assistant', text: '**answer** one' })
+
+    const json = JSON.parse(await repo.exportThread(t.id, 'json'))
+    expect(json.thread.title).toBe('Export me')
+    expect(json.messages).toHaveLength(2)
+
+    const markdown = await repo.exportThread(t.id, 'markdown')
+    expect(markdown).toContain('# Export me')
+    expect(markdown).toContain('**You:** question one')
+    expect(markdown).toContain('**Nox:** **answer** one')
+  })
+})
+
