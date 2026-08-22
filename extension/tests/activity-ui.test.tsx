@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { ActivityTimeline } from '../src/sidepanel/MessageParts'
+import { ActivityTimeline, FollowUpActions } from '../src/sidepanel/MessageParts'
 
 describe('ActivityTimeline', () => {
   it('renders meaningful tool status and duration', () => {
@@ -33,5 +33,11 @@ describe('ActivityTimeline', () => {
       { kind: 'tool', id: 'u', tool: 'notion-update-page', args: {}, status: 'completed', journalId: 'journal-1', undoable: true },
     ]} onUndo={vi.fn()} />)
     expect(html).toContain('Undo this change')
+  })
+
+  it('renders follow-up actions as buttons', () => {
+    const html = renderToStaticMarkup(<FollowUpActions suggestions={['Summarize these results']} onSelect={vi.fn()} />)
+    expect(html).toContain('Follow-ups')
+    expect(html).toContain('Summarize these results')
   })
 })

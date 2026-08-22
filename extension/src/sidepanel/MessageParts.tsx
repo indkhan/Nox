@@ -85,6 +85,20 @@ function compactValue(value: unknown): string {
   return JSON.stringify(value).slice(0, 80)
 }
 
+export function FollowUpActions({ suggestions, onSelect }: { suggestions: string[]; onSelect: (suggestion: string) => void }) {
+  if (suggestions.length === 0) return null
+  return (
+    <div className="mt-2 space-y-1" data-testid="follow-up-actions">
+      <p className="text-[11px] font-medium text-zinc-600">Follow-ups</p>
+      {suggestions.map((suggestion) => (
+        <button key={suggestion} onClick={() => onSelect(suggestion)} className="block w-full rounded-md px-2 py-1.5 text-left text-xs text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200">
+          {suggestion}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 function formatDuration(ms: number): string {
   return ms < 100 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`
 }

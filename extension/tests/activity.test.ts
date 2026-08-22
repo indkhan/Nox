@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyActivityEvent, toolActivityLabel, type ActivityItem } from '../src/lib/agent/activity'
+import { applyActivityEvent, followUpsForActivity, toolActivityLabel, type ActivityItem } from '../src/lib/agent/activity'
 
 describe('agent activity', () => {
   it('correlates a completed tool with its running activity', () => {
@@ -40,5 +40,16 @@ describe('tool activity labels', () => {
 
   it('turns unknown tool names into readable labels', () => {
     expect(toolActivityLabel('custom_sync_records', {})).toBe('Custom sync records')
+  })
+})
+
+describe('contextual follow-ups', () => {
+  it('derives useful next questions from completed actions', () => {
+    expect(followUpsForActivity([
+      { kind: 'tool', id: '1', tool: 'notion-search', args: {}, status: 'completed' },
+    ])).toEqual(['Summarize these results', 'Compare the matching pages'])
+    expect(followUpsForActivity([
+      { kind: 'tool', id: '2', tool: 'notion-update-page', args: {}, status: 'completed' },
+    ])).toContain('Show me what changed')
   })
 })

@@ -89,3 +89,14 @@ function humanize(tool: string): string {
   const text = tool.replace(/^notion[-_]/, '').replace(/[-_]+/g, ' ')
   return text.charAt(0).toUpperCase() + text.slice(1)
 }
+
+export function followUpsForActivity(items: ActivityItem[]): string[] {
+  const last = [...items].reverse().find((item): item is Extract<ActivityItem, { kind: 'tool' }> => item.kind === 'tool' && item.status === 'completed')
+  if (!last) return []
+  if (last.tool === 'notion-search' || last.tool === 'notion-query-data-sources') {
+    return ['Summarize these results', 'Compare the matching pages']
+  }
+  if (last.tool === 'notion-fetch') return ['What are the key decisions?', 'Find related pages']
+  if (/update|create|move/.test(last.tool)) return ['Show me what changed', 'Make another update']
+  return []
+}

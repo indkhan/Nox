@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
 import { useNoxStore } from './store'
 import { agentLoop, fetchCurrentPageContext, setAgentHistoryThread, writeGate } from '../lib/agent/panel'
-import { ActivityTimeline, AssistantMarkdown } from './MessageParts'
-import { applyActivityEvent, type ActivityItem } from '../lib/agent/activity'
+import { ActivityTimeline, AssistantMarkdown, FollowUpActions } from './MessageParts'
+import { applyActivityEvent, followUpsForActivity, type ActivityItem } from '../lib/agent/activity'
 import { Composer } from './Composer'
 import { EmptyState } from './EmptyState'
 import { ApprovalCards, UndoBar } from './ApprovalCards'
@@ -162,6 +162,9 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
                 <ActivityTimeline items={view.activity} active={view.pending} onUndo={(id) => void undoActivity(id, setTurns)} />
               )}
               {view.answer && <AssistantMarkdown markdown={view.answer} />}
+              {!view.pending && view.answer && (
+                <FollowUpActions suggestions={followUpsForActivity(view.activity)} onSelect={(suggestion) => void send(suggestion)} />
+              )}
               {view.error && (
                 <p className="rounded-md border border-amber-800/50 bg-amber-950/40 px-2 py-1.5 text-xs text-amber-400" role="alert">
                   ⚠ {view.error}
