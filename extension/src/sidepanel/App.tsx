@@ -7,6 +7,7 @@ import { loadSettings } from '../lib/settings'
 import { agentLoop } from '../lib/agent/panel'
 import { claimWindowRole, type WindowRole } from '../lib/history/panel'
 import { installLogCapture, logInfo } from '../lib/log'
+import { connectCodexAction } from './codex-connect'
 import { ChevronDownIcon, GearIcon, NoxMark, PlusCircleIcon } from './Icons'
 
 export function App() {
@@ -23,6 +24,8 @@ export function App() {
     logInfo('Panel opened')
     void hydrateCurrentPage()
     void claimWindowRole().then(setRole)
+    // Auto-connect codex so the model dropdown is usable without opening Settings.
+    void connectCodexAction()
     void (async () => {
       const settings = await loadSettings()
       if (settings.model || settings.effort) {
