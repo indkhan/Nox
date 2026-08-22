@@ -1,12 +1,217 @@
 @import "tailwindcss";
 
-@theme {
-  --color-surface: #09090b;
-  --color-surface-raised: #18181b;
-  --color-border: #27272a;
-  --color-text: #fafafa;
-  --color-text-muted: #71717a;
-  --color-accent: #34d399;
+/* ──────────────────────────────────────────────────────────
+ * Design tokens vendored from Beautiful UI (MIT) —
+ * github.com/slev12397/beautiful-ui, app/globals.css.
+ * Radii: chip 6 / control 8 / card 10 / window 14. Hairline
+ * borders. Semantic color used sparingly as a condiment.
+ * ────────────────────────────────────────────────────────── */
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Inter + JetBrains Mono, self-hosted (MV3 CSP forbids remote fonts). */
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./fonts/inter-latin-400-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("./fonts/inter-latin-500-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("./fonts/inter-latin-600-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("./fonts/inter-latin-700-normal.woff2") format("woff2");
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./fonts/jetbrains-mono-latin-400-normal.woff2") format("woff2");
+}
+
+:root {
+  /* surfaces — cool, blue-tinted neutrals */
+  --page: oklch(0.985 0.001 286.376);
+  --canvas: oklch(0.961 0.002 247.84);
+  --surface: oklch(1 0 0);
+  --inset: oklch(0.979 0.002 247.839);
+  --hover: oklch(0.97 0.002 247.839);
+  --hover-2: oklch(0.933 0.003 247.86);
+
+  /* ink ramp */
+  --ink: oklch(0.247 0.006 258.361);
+  --ink-2: oklch(0.506 0.01 264.477);
+  --ink-3: oklch(0.695 0.009 264.505);
+
+  /* borders — solid and crisp, not alpha */
+  --line: oklch(0.946 0.003 264.542);
+  --line-strong: oklch(0.912 0.005 258.326);
+  --field: oklch(0.961 0.001 286.375);
+
+  /* accent */
+  --accent: oklch(0.626 0.205 254.947);
+  --accent-ink: oklch(0.556 0.187 255.617);
+  --accent-tint: oklch(0.96 0.019 252.878);
+
+  /* semantic */
+  --green: oklch(0.603 0.155 150.883);
+  --green-tint: oklch(0.958 0.017 159.118);
+  --orange: oklch(0.689 0.179 49.902);
+  --orange-tint: oklch(0.964 0.021 67.581);
+  --red: oklch(0.621 0.192 23.042);
+  --red-tint: oklch(0.956 0.017 17.462);
+
+  /* elevation — hairline ring + soft layered stacks */
+  --shadow-hairline: 0 0 0 1px var(--line);
+  --shadow-xs: 0 1px 2px oklch(0 0 0 / 0.05);
+  --shadow-sm: 0 1px 2px oklch(0 0 0 / 0.04), 0 2px 4px oklch(0 0 0 / 0.04);
+  --shadow-md: 0 1px 2px oklch(0 0 0 / 0.04), 0 3px 8px oklch(0 0 0 / 0.06);
+  --shadow-lg: 0 2px 4px oklch(0 0 0 / 0.05), 0 12px 28px oklch(0 0 0 / 0.12);
+  --shadow-btn: 0 0 0 1px var(--line-strong), var(--shadow-xs);
+  --shadow-card: 0 0 0 1px var(--line), var(--shadow-sm);
+  --shadow-raised: 0 0 0 1px var(--line), var(--shadow-md);
+  --shadow-overlay: 0 0 0 1px var(--line), var(--shadow-lg);
+}
+
+.dark {
+  --page: oklch(0.209 0.004 264.477);
+  --canvas: oklch(0.231 0.004 264.487);
+  --surface: oklch(0.26 0.006 271.191);
+  --inset: oklch(0.243 0.004 264.492);
+  --hover: oklch(0.289 0.006 271.22);
+  --hover-2: oklch(0.318 0.007 274.747);
+
+  --ink: oklch(0.964 0.002 247.839);
+  --ink-2: oklch(0.731 0.008 260.731);
+  --ink-3: oklch(0.541 0.01 264.484);
+
+  --line: oklch(0.308 0.006 258.354);
+  --line-strong: oklch(0.356 0.007 264.474);
+  --field: oklch(0.293 0.006 271.223);
+
+  --accent: oklch(0.68 0.173 253.301);
+  --accent-ink: oklch(0.788 0.113 248.33);
+  --accent-tint: oklch(0.68 0.173 253.301 / 0.16);
+
+  --green: oklch(0.705 0.154 153.814);
+  --green-tint: oklch(0.705 0.154 153.814 / 0.14);
+  --orange: oklch(0.746 0.156 55.642);
+  --orange-tint: oklch(0.746 0.156 55.642 / 0.14);
+  --red: oklch(0.666 0.18 21.433);
+  --red-tint: oklch(0.666 0.18 21.433 / 0.14);
+
+  /* Elevation rings go to a subtle light hairline in dark mode. */
+  --shadow-btn: 0 0 0 1px oklch(1 0 0 / 0.1), 0 1px 2px oklch(0 0 0 / 0.3);
+  --shadow-card:
+    0 0 0 1px oklch(1 0 0 / 0.11), 0 1px 2px oklch(0 0 0 / 0.2),
+    0 2px 6px oklch(0 0 0 / 0.2);
+  --shadow-raised:
+    0 0 0 1px oklch(1 0 0 / 0.13), 0 2px 10px oklch(0 0 0 / 0.22);
+  --shadow-overlay:
+    0 0 0 1px oklch(1 0 0 / 0.15), 0 8px 28px oklch(0 0 0 / 0.34);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not(.light):not(.dark) {
+    --page: oklch(0.209 0.004 264.477);
+    --canvas: oklch(0.231 0.004 264.487);
+    --surface: oklch(0.26 0.006 271.191);
+    --inset: oklch(0.243 0.004 264.492);
+    --hover: oklch(0.289 0.006 271.22);
+    --hover-2: oklch(0.318 0.007 274.747);
+
+    --ink: oklch(0.964 0.002 247.839);
+    --ink-2: oklch(0.731 0.008 260.731);
+    --ink-3: oklch(0.541 0.01 264.484);
+
+    --line: oklch(0.308 0.006 258.354);
+    --line-strong: oklch(0.356 0.007 264.474);
+    --field: oklch(0.293 0.006 271.223);
+
+    --accent: oklch(0.68 0.173 253.301);
+    --accent-ink: oklch(0.788 0.113 248.33);
+    --accent-tint: oklch(0.68 0.173 253.301 / 0.16);
+
+    --green: oklch(0.705 0.154 153.814);
+    --green-tint: oklch(0.705 0.154 153.814 / 0.14);
+    --orange: oklch(0.746 0.156 55.642);
+    --orange-tint: oklch(0.746 0.156 55.642 / 0.14);
+    --red: oklch(0.666 0.18 21.433);
+    --red-tint: oklch(0.666 0.18 21.433 / 0.14);
+
+    --shadow-btn: 0 0 0 1px oklch(1 0 0 / 0.1), 0 1px 2px oklch(0 0 0 / 0.3);
+    --shadow-card:
+      0 0 0 1px oklch(1 0 0 / 0.11), 0 1px 2px oklch(0 0 0 / 0.2),
+      0 2px 6px oklch(0 0 0 / 0.2);
+    --shadow-raised:
+      0 0 0 1px oklch(1 0 0 / 0.13), 0 2px 10px oklch(0 0 0 / 0.22);
+    --shadow-overlay:
+      0 0 0 1px oklch(1 0 0 / 0.15), 0 8px 28px oklch(0 0 0 / 0.34);
+  }
+}
+
+@theme inline {
+  /* colors */
+  --color-page: var(--page);
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-inset: var(--inset);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-hover: var(--hover);
+  --color-hover-2: var(--hover-2);
+  --color-field: var(--field);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-accent: var(--accent);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-tint: var(--accent-tint);
+  --color-green: var(--green);
+  --color-green-tint: var(--green-tint);
+  --color-orange: var(--orange);
+  --color-orange-tint: var(--orange-tint);
+  --color-red: var(--red);
+  --color-red-tint: var(--red-tint);
+
+  /* shadows */
+  --shadow-hairline: var(--shadow-hairline);
+  --shadow-btn: var(--shadow-btn);
+  --shadow-card: var(--shadow-card);
+  --shadow-raised: var(--shadow-raised);
+  --shadow-overlay: var(--shadow-overlay);
+
+  /* type */
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+
+  /* radii — chips 6, controls 8, cards 10, windows 14, pills 999 */
+  --radius-chip: 6px;
+  --radius-control: 8px;
+  --radius-card: 10px;
+  --radius-window: 14px;
+
+  /* easing — strong curves; built-ins are too weak */
+  --ease-out-strong: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out-strong: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-link: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 html,
@@ -15,23 +220,59 @@ body,
   height: 100%;
 }
 
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
 body {
   margin: 0;
-  color-scheme: dark;
-  background: #181818;
-  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: var(--page);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-feature-settings: "cv11", "ss01";
+  letter-spacing: -0.01em;
+  line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
 
 button,
 select,
-textarea {
+textarea,
+input {
   font: inherit;
+}
+
+::selection {
+  background: var(--accent-tint);
+  color: var(--ink);
+}
+
+h1,
+h2,
+h3,
+h4 {
+  text-wrap: balance;
+}
+
+p {
+  text-wrap: pretty;
 }
 
 button:focus-visible,
 select:focus-visible,
-textarea:focus-visible {
-  outline: 2px solid #2383e2;
+textarea:focus-visible,
+input:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+/* Theme switches swap every token at once — freeze transitions so the flip
+ * is one clean repaint instead of hundreds of mismatched color fades. */
+.theme-switching *,
+.theme-switching *::before,
+.theme-switching *::after {
+  transition: none !important;
 }
