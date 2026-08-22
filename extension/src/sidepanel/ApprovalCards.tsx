@@ -11,11 +11,11 @@ type CardApproval = { id: number; tool: string; summary: string; payloadJson: st
  * Approve / Approve all this turn / Reject. Renders above the composer and
  * blocks the turn until answered.
  */
-export function ApprovalCards() {
+export function ApprovalCards({ readOnly = false }: { readOnly?: boolean }) {
   const pending = useNoxStore((s) => s.pendingApprovals)
   const removeApproval = useNoxStore((s) => s.removeApproval)
 
-  if (pending.length === 0) return null
+  if (readOnly || pending.length === 0) return null
 
   return (
     <div className="space-y-2 border-t border-amber-900/50 bg-amber-950/20 p-3" data-testid="approval-cards">
@@ -70,7 +70,7 @@ export function ApprovalCards() {
 }
 
 /** One-click undo of the latest reversible mutation (MVP §6.5). */
-export function UndoBar() {
+export function UndoBar({ readOnly = false }: { readOnly?: boolean }) {
   const [undoableCount, setUndoableCount] = useState(0)
   const [status, setStatus] = useState<string | null>(null)
 
@@ -81,7 +81,7 @@ export function UndoBar() {
     return () => clearInterval(timer)
   }, [])
 
-  if (undoableCount === 0 && !status) return null
+  if (readOnly || (undoableCount === 0 && !status)) return null
 
   return (
     <div className="flex items-center justify-between border-t border-zinc-800 px-3 py-1.5" data-testid="undo-bar">
@@ -90,7 +90,7 @@ export function UndoBar() {
       </span>
       {!status && (
         <button
-          onClick={() => void runUndo(setStatus)}
+          onClick={() => void runUndo(setStatus, readOnly)}
           data-testid="undo-latest"
           className="rounded-md border border-zinc-700 px-2 py-0.5 text-[11px] text-zinc-300 hover:bg-zinc-800"
         >
@@ -101,7 +101,8 @@ export function UndoBar() {
   )
 }
 
-async function runUndo(setStatus: (s: string) => void): Promise<void> {
+async function runUndo(setStatus: (s: string) => void, readOnly: boolean): Promise<void> {
+  if (readOnly) return
   try {
     await undoNewest(writeGate.journal, (tool, args) => notion.scheduleCallTool(tool, args))
     setStatus('Undone — note block ids change on content restores')

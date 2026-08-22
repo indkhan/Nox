@@ -162,8 +162,8 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
         </div>
       )}
 
-      <ApprovalCards />
-      {hasMessages && <UndoBar />}
+      {!readOnly && <ApprovalCards />}
+      {hasMessages && !readOnly && <UndoBar />}
 
       <Composer busy={busy} readOnly={readOnly} onSend={(t) => void send(t)} onCancel={() => agentLoop.cancel()} />
     </section>
