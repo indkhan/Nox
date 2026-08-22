@@ -32,6 +32,15 @@ describe('viewer mode', () => {
     expect(html).toMatch(/<textarea[^>]*disabled=""/)
   })
 
+  it('keeps unfinished attachment and voice controls out of the composer', () => {
+    const html = renderToStaticMarkup(
+      <Composer busy={false} onSend={vi.fn()} onCancel={vi.fn()} />,
+    )
+    expect(html).not.toContain('Attach images (coming soon)')
+    expect(html).not.toContain('Voice input (coming soon)')
+    expect(html).toContain('Model settings')
+  })
+
   it('hides mutation approvals in read-only windows', async () => {
     const container = document.createElement('div')
     const root = createRoot(container)

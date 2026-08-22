@@ -4,7 +4,7 @@ import { codex } from '../lib/codex/panel'
 import type { ModelInfo } from '../lib/codex/client'
 import { loadSettings, saveSettings, type NoxSettings } from '../lib/settings'
 import { agentLoop } from '../lib/agent/panel'
-import { ArrowUpIcon, ChevronDownIcon, MicIcon, PageIcon, PlusIcon, SignalBarsIcon, StopIcon } from './Icons'
+import { ArrowUpIcon, ChevronDownIcon, PageIcon, SignalBarsIcon, StopIcon } from './Icons'
 
 export type Mode = 'ask' | 'auto'
 
@@ -80,15 +80,14 @@ export function Composer({
           className="w-full resize-none bg-transparent px-0.5 text-sm leading-relaxed outline-none placeholder:text-zinc-600"
         />
         <div className="mt-1 flex items-center gap-0.5">
-          <button
-            disabled
-            title="Attach images (coming soon)"
-            aria-label="Attach"
-            className="rounded-md p-1.5 text-zinc-500"
-          >
-            <PlusIcon />
-          </button>
-          <ModelControls disabled={readOnly} />
+          <details className="relative">
+            <summary className="cursor-pointer list-none rounded-md px-1.5 py-1 text-[11px] text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300">
+              Model settings
+            </summary>
+            <div className="absolute bottom-8 left-0 z-10 rounded-lg border border-zinc-700 bg-zinc-900 p-2 shadow-xl">
+              <ModelControls disabled={readOnly} />
+            </div>
+          </details>
           <span className="flex-1" />
           {busy && (
             <span aria-hidden="true" className="mr-1 text-zinc-500">
@@ -103,17 +102,9 @@ export function Composer({
             data-testid="mode-selector"
             className="cursor-pointer appearance-none rounded-md px-1 py-0.5 text-xs text-zinc-300 outline-none hover:bg-zinc-800"
           >
-            <option value="ask">Ask</option>
+            <option value="ask">Ask before changes</option>
             <option value="auto">Auto</option>
           </select>
-          <button
-            disabled
-            title="Voice input (coming soon)"
-            aria-label="Voice input"
-            className="rounded-md p-1.5 text-zinc-500"
-          >
-            <MicIcon />
-          </button>
           {busy ? (
             <button
               onClick={onCancel}
