@@ -67,8 +67,10 @@ export class Notion {
 
   /** Full browser flow: discovery → DCR → consent → token exchange. */
   async connect(launchConsent: (authorizeUrl: string) => Promise<string>): Promise<SelfInfo> {
-    const metadata = await this.loadMetadata()
-    const clientId = await this.registrar.getClientId(metadata, this.deps.redirectUri())
+    // Every hop is named on failure — without this, a connect failure is a
+    // guessing game across four network hops (spike 0.1 lesson).
+    const metadata = await stage('discovery', () => this.loadMetadata())
+    const clientId = await stage('register', () => this.registrar.getClientId(metadata, this.deps.redirectUri()))
 
     const { generateCodeChallenge, generateCodeVerifier, generateState } = await import('../oauth/pkce')
     const verifier = await generateCodeVerifier()
@@ -85,22 +87,24 @@ export class Notion {
     url.searchParams.set('code_challenge_method', 'S256')
     url.searchParams.set('prompt', 'consent')
 
-    const redirected = await launchConsent(url.toString())
+    const redirected = await stage('consent', () => launchConsent(url.toString()))
     const back = new URL(redirected)
     const error = back.searchParams.get('error')
-    if (error) throw new Error(`authorization failed: ${error}`)
-    if (back.searchParams.get('state') !== state) throw new Error('OAuth state mismatch')
+    if (error) throw new Error(`[consent] authorization failed: ${error}`)
+    if (back.searchParams.get('state') !== state) throw new Error('[consent] OAuth state mismatch — close any stale Nox windows and retry')
     const iss = back.searchParams.get('iss')
-    if (iss && iss !== metadata.issuer) throw new Error(`OAuth issuer mismatch: ${iss}`)
+    if (iss && iss !== metadata.issuer) throw new Error(`[consent] issuer mismatch: ${iss}`)
 
-    const tokenResponse = await exchangeCode(this.deps.fetchImpl, metadata, {
-      code: back.searchParams.get('code') ?? '',
-      redirectUri: this.deps.redirectUri(),
-      clientId,
-      codeVerifier: verifier,
-    })
+    const tokenResponse = await stage('token-exchange', () =>
+      exchangeCode(this.deps.fetchImpl, metadata, {
+        code: back.searchParams.get('code') ?? '',
+        redirectUri: this.deps.redirectUri(),
+        clientId,
+        codeVerifier: verifier,
+      }),
+    )
     await this.tokenStore.saveFromTokenResponse(tokenResponse)
-    return this.refreshIdentity()
+    return stage('initialize+identity', () => this.refreshIdentity())
   }
 
   /** Dev escape hatch: import a token JSON without the consent flow. */
@@ -171,7 +175,15 @@ async function exchangeCode(
       code_verifier: p.codeVerifier,
     }),
   })
-  if (!res.ok) throw new Error(`token exchange failed: ${res.status} ${(await res.text()).slice(0, 200)}`)
+  if (!res.ok) throw new Error(`token endpoint ${res.status}: ${(await res.text()).slice(0, 200)}`)
   return (await res.json()) as Parameters<TokenStore['saveFromTokenResponse']>[0]
+}
+
+async function stage<T>(name: string, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn()
+  } catch (e) {
+    throw new Error(`[${name}] ${e instanceof Error ? e.message : String(e)}`)
+  }
 }
 

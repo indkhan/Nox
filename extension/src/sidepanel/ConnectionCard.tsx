@@ -19,10 +19,19 @@ export function ConnectionCard() {
     setBusy(true)
     try {
       // Load-bearing precondition (RESEARCH §2.1): the DNR rule must be active.
-      const dnr = (await chrome.runtime.sendMessage({ type: 'nox/get-dnr-status' })) as
-        | { active?: boolean }
-        | undefined
-      if (!dnr?.active) throw new Error('Origin-strip rule inactive — reload the extension and retry.')
+      // A messaging hiccup here must NOT block connect — the 403 classifier
+      // catches a genuinely missing rule as dnr-missing later.
+      try {
+        const dnr = (await chrome.runtime.sendMessage({ type: 'nox/get-dnr-status' })) as
+          | { active?: boolean }
+          | undefined
+        if (dnr?.active === false) {
+          throw new Error('Origin-strip rule inactive — reload the extension (chrome://extensions → ↻) and retry.')
+        }
+      } catch (e) {
+        if (e instanceof Error && e.message.includes('Origin-strip')) throw e
+        console.warn('[nox] DNR status check failed; continuing anyway', e)
+      }
 
       const info = await notion.connect(launchConsentFlow)
       setConnection({
@@ -31,8 +40,12 @@ export function ConnectionCard() {
         limitations: collectLimitations(notion),
       })
     } catch (e) {
+      const raw = e instanceof Error ? e.message : String(e)
+      console.error('[nox] Notion connect failed:', e)
       const explained = notion.explain(e)
-      setConnection({ connectionStatus: 'error', connectionError: explained.userMessage })
+      // Friendly line + raw hop-level detail ([discovery]/[register]/[consent]/…)
+      const detail = explained.userMessage === raw ? raw : `${explained.userMessage} (${raw})`
+      setConnection({ connectionStatus: 'error', connectionError: detail })
     } finally {
       setBusy(false)
     }
