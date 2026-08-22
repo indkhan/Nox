@@ -15,6 +15,8 @@ export interface ExecutorDeps {
 export interface ToolOutcome {
   success: boolean
   contentItems: Array<{ type: 'inputText'; text: string }>
+  /** Sanitized, unwrapped text for local UI rendering only. */
+  displayText?: string
 }
 
 /**
@@ -62,21 +64,23 @@ export class ToolExecutor {
         .join('\n')
       const processed = wrapUntrusted(truncateResult(text, this.opts.resultBudgetChars ?? DEFAULT_RESULT_BUDGET_CHARS))
       this.opts.onJournalEvent?.({ req, status: 'ok', ms: Date.now() - startedAt })
-      return { success: true, contentItems: [{ type: 'inputText', text: processed }] }
+      return { success: true, contentItems: [{ type: 'inputText', text: processed }], displayText: truncateResult(text, 2_000) }
     } catch (e) {
       // Map every failure into data the model can react to (MVP: errors are results).
       const message = e instanceof Error ? e.message : String(e)
       this.opts.onJournalEvent?.({ req, status: 'error', error: message, ms: Date.now() - startedAt })
+      const displayText = `ERROR: ${message}`
       return {
         success: false,
-        contentItems: [{ type: 'inputText', text: wrapUntrusted(`ERROR: ${message}`) }],
+        contentItems: [{ type: 'inputText', text: wrapUntrusted(displayText) }],
+        displayText,
       }
     }
   }
 }
 
 function refusal(text: string): ToolOutcome {
-  return { success: false, contentItems: [{ type: 'inputText', text }] }
+  return { success: false, contentItems: [{ type: 'inputText', text }], displayText: text }
 }
 
 export interface JournalEvent {

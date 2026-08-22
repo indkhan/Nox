@@ -180,6 +180,23 @@ describe('CodexClient', () => {
     await expect(client.runTurn([])).rejects.toThrow(/no active thread/)
   })
 
+  it('emits a failed completion when the tool handler returns success false', async () => {
+    await startThreadFixture()
+    client.onToolCall = async () => ({
+      success: false,
+      displayText: 'REJECTED_BY_USER',
+      contentItems: [{ type: 'inputText', text: 'wrapped rejection' }],
+    })
+    const turnPromise = client.runTurn([])
+    h.bridge.onCodexRequest?.({ rid: 45, method: 'item/tool/call', params: { tool: 'notion-update-page', arguments: {}, callId: 'rejected-1' } })
+    await vi.waitFor(() => expect(h.responses.some((r) => r.rid === 45)).toBe(true))
+    expect(events.find((e) => e.kind === 'tool-completed')).toMatchObject({
+      kind: 'tool-completed', callId: 'rejected-1', success: false, resultText: 'REJECTED_BY_USER',
+    })
+    emit(h.bridge, 'turn/completed', {})
+    await turnPromise
+  })
+
   it('refuses a second turn while one is running', async () => {
     await startThreadFixture()
     const first = client.runTurn([])

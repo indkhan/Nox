@@ -115,6 +115,7 @@ describe('ToolExecutor', () => {
     expect(out.success).toBe(true)
     expect(out.contentItems[0].text).toContain(UNTRUSTED_BEGIN)
     expect(out.contentItems[0].text).toContain('result-of-notion-fetch')
+    expect(out.displayText).toBe('result-of-notion-fetch')
     expect(calls).toHaveLength(1)
   })
 
@@ -144,6 +145,7 @@ describe('ToolExecutor', () => {
     })
     const out = await failing.execute({ rid: 3, tool: 'notion-search', args: {}, namespace: null })
     expect(out.success).toBe(false)
+    expect(out.displayText).toBe('ERROR: 429 rate limited')
     expect(out.contentItems[0].text).toContain('ERROR: 429 rate limited')
     expect(out.contentItems[0].text).toContain(UNTRUSTED_BEGIN)
   })

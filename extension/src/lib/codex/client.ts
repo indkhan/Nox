@@ -203,8 +203,9 @@ export class CodexClient {
           ? await this.onToolCall({ tool, namespace: p.namespace ?? null, args, rid: req.rid, callId: p.callId })
           : { decision: 'decline' }
         this.bridge.respondTool(req.rid, result)
+        const outcome = toolOutcomeMeta(result)
         this.emit({
-          kind: 'tool-completed', tool, callId: p.callId, success: true,
+          kind: 'tool-completed', tool, callId: p.callId, success: outcome.success,
           durationMs: Date.now() - startedAt, resultText: toolResultText(result),
         })
       } catch (e) {
@@ -287,7 +288,17 @@ export class CodexClient {
 }
 
 function toolResultText(result: unknown): string | undefined {
+  if (result && typeof result === 'object' && 'displayText' in result && typeof (result as { displayText?: unknown }).displayText === 'string') {
+    return (result as { displayText: string }).displayText
+  }
   if (!result || typeof result !== 'object' || !('contentItems' in result)) return undefined
   const items = (result as { contentItems?: Array<{ text?: string }> }).contentItems
   return items?.map((item) => item.text ?? '').filter(Boolean).join('\n').slice(0, 2000) || undefined
+}
+
+function toolOutcomeMeta(result: unknown): { success: boolean } {
+  if (result && typeof result === 'object' && 'success' in result && (result as { success?: unknown }).success === false) {
+    return { success: false }
+  }
+  return { success: true }
 }
