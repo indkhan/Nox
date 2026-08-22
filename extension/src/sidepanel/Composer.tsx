@@ -5,10 +5,12 @@ export type Mode = 'ask' | 'auto'
 
 export function Composer({
   busy,
+  readOnly = false,
   onSend,
   onCancel,
 }: {
   busy: boolean
+  readOnly?: boolean
   onSend: (text: string) => void
   onCancel: () => void
 }) {
@@ -29,7 +31,7 @@ export function Composer({
 
   function submit() {
     const text = value.trim()
-    if (!text || busy) return
+    if (!text || busy || readOnly) return
     onSend(text)
     setValue('')
   }
@@ -50,6 +52,7 @@ export function Composer({
         </div>
       )}
       <textarea
+        disabled={readOnly}
         ref={ref}
         value={value}
         onChange={(e) => setValue(e.target.value)}
@@ -75,6 +78,7 @@ export function Composer({
           +
         </button>
         <select
+          disabled={readOnly}
           value={mode}
           onChange={(e) => setMode(e.target.value as Mode)}
           aria-label="Change mode"
@@ -92,7 +96,7 @@ export function Composer({
         ) : (
           <button
             onClick={submit}
-            disabled={!value.trim()}
+            disabled={readOnly || !value.trim()}
             data-testid="send"
             className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold disabled:opacity-40"
           >

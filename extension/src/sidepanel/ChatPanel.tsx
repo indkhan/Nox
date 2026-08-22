@@ -14,7 +14,7 @@ interface TurnView {
   error: string | null
 }
 
-export function ChatPanel() {
+export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
   const [turns, setTurns] = useState<Array<{ userText: string; view: TurnView }>>([])
   const [busy, setBusy] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -31,7 +31,7 @@ export function ChatPanel() {
   const v_error_placeholder = () => '(no content)'
 
   async function send(text: string) {
-    if (busy) return
+    if (busy || readOnly) return
     if (connectionStatus !== 'connected') {
       setTurns((t) => [...t, { userText: text, view: { progress: [], answer: '', error: 'Connect Notion first — Nox acts on your workspace.' } }])
       return
@@ -163,7 +163,7 @@ export function ChatPanel() {
       <ApprovalCards />
       {hasMessages && <UndoBar />}
 
-      <Composer busy={busy} onSend={(t) => void send(t)} onCancel={() => agentLoop.cancel()} />
+      <Composer busy={busy} readOnly={readOnly} onSend={(t) => void send(t)} onCancel={() => agentLoop.cancel()} />
     </section>
   )
 }
