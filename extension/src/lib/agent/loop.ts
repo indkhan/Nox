@@ -46,6 +46,7 @@ export class AgentLoop {
       return {
         success: outcome.success,
         contentItems: outcome.contentItems,
+        displayText: outcome.displayText,
       }
     }
     this.deps.codex.emit = (event) => this.listeners.forEach((l) => l(event))

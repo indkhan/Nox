@@ -245,6 +245,19 @@ describe('MutationJournal undo ordering', () => {
     expect(calls).toEqual(['undo-first'])
   })
 
+  it('executes at most one undo while another undo is in flight', async () => {
+    const journal = new MutationJournal()
+    const entry = await journal.record({ tool: 'write', args: {}, kind: 'content-update', inverse: { tool: 'undo', args: {} } })
+    let calls = 0
+    let release!: () => void
+    const blocked = new Promise<void>((resolve) => { release = resolve })
+    const first = undoEntry(journal, entry.id, async () => { calls++; await blocked })
+    const second = undoEntry(journal, entry.id, async () => { calls++ })
+    release()
+    expect(await Promise.all([first, second])).toEqual([true, false])
+    expect(calls).toBe(1)
+  })
+
   it('does not advertise unsupported inverse plans', () => {
     expect(buildInverse('notion-move-pages', {}, { kind: 'move', moves: [{ pageId: 'a', parentPageId: 'b' }] }).kind).toBe('not-undoable')
     expect(buildInverse('notion-update-page', {}, { kind: 'properties', properties: [{ name: 'N', type: 'number', value: 1 }] }).kind).toBe('not-undoable')

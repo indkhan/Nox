@@ -57,6 +57,15 @@ describe('persistent mutation journal', () => {
     expect(await journal.newestFirst()).toHaveLength(2)
     db.close()
   })
+
+  it('orders journal entries by timestamp rather than UUID key order', async () => {
+    const entries = [
+      { id: 'z', ts: 1, threadId: 't', turnId: 'x', status: 'applied' as const, tool: 'old', args: {}, kind: 'write' },
+      { id: 'a', ts: 2, threadId: 't', turnId: 'x', status: 'applied' as const, tool: 'new', args: {}, kind: 'write' },
+    ]
+    const journal = new MutationJournal({ append: async () => undefined, list: async () => entries })
+    expect((await journal.newestFirst()).map((entry) => entry.tool)).toEqual(['new', 'old'])
+  })
 })
 
 describe('ThreadRepository', () => {

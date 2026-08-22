@@ -149,9 +149,10 @@ describe('AgentLoop integration (scripted codex)', () => {
 
     // The executor actually called Notion search and returned wrapped data to Codex.
     expect(notionCalls).toEqual([{ name: 'notion-search', args: { query: 'overdue' }, provenance: 'untrusted-context' }])
-    const answer = bridge.toolResults[0].result as { success: boolean; contentItems: Array<{ text: string }> }
+    const answer = bridge.toolResults[0].result as { success: boolean; contentItems: Array<{ text: string }>; displayText?: string }
     expect(answer.success).toBe(true)
     expect(answer.contentItems[0].text).toContain('UNTRUSTED_CONTENT')
+    expect(answer.displayText).toBe('{"results":["Task A","Task B","Task C"]}')
 
     // Event stream order for the UI: tool completion arrives from the executor
     // and again from Codex's item/completed — both are useful progress signals.
