@@ -105,4 +105,19 @@ describe('ApprovalEngine cards', () => {
     // Next request short-circuits.
     await expect(engine.request(WRITE_CALL, { action: 'require-approval', reasons: [] })).resolves.toBe(true)
   })
+
+  it('includes target and reversibility context in approval cards', async () => {
+    let notified: unknown = null
+    const engine = new ApprovalEngine((approval) => { notified = approval })
+    const pending = engine.request(
+      { name: 'notion-update-page', mutates: true, kind: 'content-update', args: { page_id: 'abc123' } },
+      { action: 'require-approval', reasons: ['ask mode'] },
+    )
+    await Promise.resolve()
+    expect(notified).not.toBeNull()
+    expect(notified).toMatchObject({ targetUrl: 'https://www.notion.so/abc123' })
+    expect((notified as { reversibility: string }).reversibility).toMatch(/undo/i)
+    engine.rejectAllPending()
+    await pending
+  })
 })

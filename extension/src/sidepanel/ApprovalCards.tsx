@@ -3,7 +3,7 @@ import { useNoxStore } from './store'
 import { writeGate } from '../lib/agent/panel'
 import { undoNewest } from '../lib/writes/undo'
 
-type CardApproval = { id: number; tool: string; summary: string; payloadJson: string; reasons: string[] }
+type CardApproval = { id: number; tool: string; summary: string; payloadJson: string; reasons: string[]; targetUrl?: string; reversibility: string }
 
 /**
  * Approval cards (MVP §7): tool, plain-language summary, exact payload,
@@ -27,6 +27,10 @@ export function ApprovalCards({ readOnly = false }: { readOnly?: boolean }) {
               <li key={reason}>{reason}</li>
             ))}
           </ul>
+          <div className="mt-2 flex items-center gap-2 text-[11px] text-zinc-500">
+            {approval.targetUrl && <a href={approval.targetUrl} target="_blank" rel="noreferrer" className="text-indigo-300 hover:text-indigo-200">Open target</a>}
+            <span>{approval.reversibility}</span>
+          </div>
           <details className="mt-1.5">
             <summary className="cursor-pointer select-none text-[11px] text-zinc-500">Technical details</summary>
             <pre className="mt-1 max-h-32 overflow-auto rounded bg-zinc-950 p-2 font-mono text-[10px] text-zinc-400">{approval.payloadJson}</pre>
@@ -49,7 +53,7 @@ export function ApprovalCards({ readOnly = false }: { readOnly?: boolean }) {
               }}
               className="rounded-md border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800"
             >
-              Approve similar this turn
+              Approve all this turn
             </button>
             <button
               onClick={() => {

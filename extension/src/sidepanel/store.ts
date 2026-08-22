@@ -30,8 +30,8 @@ interface NoxState {
   mode: Mode
   setMode: (mode: Mode) => void
 
-  pendingApprovals: Array<{ id: number; tool: string; summary: string; payloadJson: string; reasons: string[] }>
-  addApproval: (a: { id: number; tool: string; summary: string; payloadJson: string; reasons: string[] }) => void
+  pendingApprovals: Array<{ id: number; tool: string; summary: string; payloadJson: string; reasons: string[]; targetUrl?: string; reversibility: string }>
+  addApproval: (a: { id: number; tool: string; summary: string; payloadJson: string; reasons: string[]; targetUrl?: string; reversibility: string }) => void
   removeApproval: (id: number) => void
 
   threadTitle: string

@@ -69,6 +69,8 @@ export interface PendingApproval {
   summary: string
   payloadJson: string
   reasons: string[]
+  targetUrl?: string
+  reversibility: string
   resolve: (approved: boolean) => void
 }
 
@@ -106,6 +108,8 @@ export class ApprovalEngine {
         summary: summarizeCall(call),
         payloadJson: JSON.stringify(call.args, null, 2).slice(0, 2000),
         reasons: verdict.reasons,
+        targetUrl: approvalTargetUrl(call.args),
+        reversibility: approvalReversibility(call.kind),
         resolve: (approved) => {
           this.pending.delete(approval.id)
           resolve(approved)
@@ -129,6 +133,21 @@ export class ApprovalEngine {
   rejectAllPending(): void {
     for (const approval of [...this.pending.values()]) approval.resolve(false)
   }
+}
+
+function approvalTargetUrl(args: Record<string, unknown>): string | undefined {
+  const pageId = extractTargetPageId(args)
+  return pageId ? `https://www.notion.so/${pageId.replace(/-/g, '')}` : undefined
+}
+
+function approvalReversibility(kind: CallClassification['kind']): string {
+  if (kind === 'create-page' || kind === 'create-database' || kind === 'create-folder' || kind === 'create-comment' || kind === 'duplicate') {
+    return 'Cannot be undone automatically'
+  }
+  if (kind === 'content-replace' || kind === 'content-update' || kind === 'properties') {
+    return 'Undo availability is checked after the change'
+  }
+  return 'This change may not be reversible'
 }
 
 function summarizeCall(call: CallClassification & { name: string }): string {

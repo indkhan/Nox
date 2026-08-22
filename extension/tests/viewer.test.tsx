@@ -46,7 +46,7 @@ describe('viewer mode', () => {
     const root = createRoot(container)
     await act(async () => {
       root.render(<ApprovalCards readOnly />)
-      useNoxStore.getState().addApproval({ id: 1, tool: 'write', summary: 'Write', payloadJson: '{}', reasons: [] })
+      useNoxStore.getState().addApproval({ id: 1, tool: 'write', summary: 'Write', payloadJson: '{}', reasons: [], reversibility: 'Unknown' })
     })
     expect(container.textContent).toBe('')
     await act(async () => {
@@ -65,13 +65,17 @@ describe('viewer mode', () => {
         summary: 'Change Status to In review',
         payloadJson: '{"page_id":"p1"}',
         reasons: ['This changes a Notion page'],
+        targetUrl: 'https://www.notion.so/p1',
+        reversibility: 'Undo availability is checked after the change',
       })
       root.render(<ApprovalCards />)
     })
     expect(container.textContent).toContain('Make this change?')
     expect(container.textContent).toContain('Change Status to In review')
     expect(container.textContent).toContain('Technical details')
-    expect(container.textContent).toContain('Approve similar this turn')
+    expect(container.textContent).toContain('Approve all this turn')
+    expect(container.textContent).toContain('Open target')
+    expect(container.textContent).toContain('Undo availability')
     await act(async () => {
       root.unmount()
       useNoxStore.getState().removeApproval(2)
