@@ -103,7 +103,7 @@ export function UndoBar({ readOnly = false }: { readOnly?: boolean }) {
 async function runUndo(setStatus: (s: string) => void, readOnly: boolean): Promise<void> {
   if (readOnly) return
   try {
-    await undoNewest(writeGate.journal, (tool, args) => writeGate.handleApproved(tool, args))
+    await undoNewest(writeGate.journal, (tool, args) => writeGate.handleUndo(tool, args))
     setStatus('Undone — note block ids change on content restores')
   } catch (e) {
     setStatus(`Partial failure: ${e instanceof Error ? e.message : String(e)}`)

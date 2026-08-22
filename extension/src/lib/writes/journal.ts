@@ -25,7 +25,7 @@ export function memoryJournalStore(): JournalStore {
   let entries: JournalEntry[] = []
   return {
     async append(entry) {
-      entries.push(entry)
+      entries = [...entries.filter((e) => e.id !== entry.id), entry]
     },
     async list() {
       return [...entries]
@@ -82,7 +82,12 @@ export class MutationJournal {
 
   /** Entries that carry a runnable inverse. */
   async undoable(): Promise<JournalEntry[]> {
-    return (await this.newestFirst()).filter((e) => e.inverse != null)
+    return (await this.newestFirst()).filter((e) => e.status === 'applied' && e.inverse != null)
+  }
+
+  async setStatus(id: string, status: JournalEntry['status']): Promise<void> {
+    const entry = (await this.store.list()).find((candidate) => candidate.id === id)
+    if (entry) await this.store.append({ ...entry, status })
   }
 
   /** Removes an entry after it was undone (or explicitly dismissed). */

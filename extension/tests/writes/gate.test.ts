@@ -212,6 +212,16 @@ describe('WriteGate', () => {
     expect(executed).toBe(true)
     expect(gate.approvals.pendingCount).toBe(0)
   })
+
+  it('does not journal an inverse as a new user mutation', async () => {
+    const journal = new MutationJournal()
+    const { gate } = makeGate({ journal, mode: 'ask' })
+    await gate.handleUndo('notion-update-page', {
+      data: { page_id: PAGE },
+      command: { type: 'update_properties', properties: {} },
+    })
+    expect(await journal.newestFirst()).toHaveLength(0)
+  })
 })
 
 describe('MutationJournal undo ordering', () => {
@@ -230,7 +240,16 @@ describe('MutationJournal undo ordering', () => {
     const journal = new MutationJournal()
     await journal.record({ tool: 'write', args: {}, kind: 'content-update', inverse: { tool: 'undo', args: {} } })
     await expect(undoNewest(journal, async () => { throw new Error('offline') })).rejects.toThrow('offline')
-    expect(await journal.undoable()).toHaveLength(1)
+    expect((await journal.newestFirst())[0].status).toBe('failed')
+    expect(await journal.undoable()).toHaveLength(0)
+  })
+
+  it('marks a successful undo without deleting its audit record', async () => {
+    const journal = new MutationJournal()
+    await journal.record({ tool: 'write', args: {}, kind: 'content-update', inverse: { tool: 'undo', args: {} } })
+    await expect(undoNewest(journal, async () => undefined)).resolves.toBe(true)
+    expect((await journal.newestFirst())[0].status).toBe('undone')
+    expect(await journal.undoable()).toHaveLength(0)
   })
 
   it('does not advertise unsupported inverse plans', () => {

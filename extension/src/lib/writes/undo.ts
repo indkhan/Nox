@@ -6,7 +6,12 @@ export async function undoNewest(
 ): Promise<boolean> {
   const entry = (await journal.undoable())[0]
   if (!entry?.inverse) return false
-  await callTool(entry.inverse.tool, entry.inverse.args)
-  await journal.drop(entry.id)
-  return true
+  try {
+    await callTool(entry.inverse.tool, entry.inverse.args)
+    await journal.setStatus(entry.id, 'undone')
+    return true
+  } catch (error) {
+    await journal.setStatus(entry.id, 'failed')
+    throw error
+  }
 }

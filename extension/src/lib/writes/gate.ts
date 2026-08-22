@@ -41,18 +41,24 @@ export class WriteGate {
   }
 
   async handle(req: ToolCallRequest): Promise<unknown> {
-    return this.handleRequest(req, false)
+    return this.handleRequest(req, false, true)
   }
 
   async handleApproved(tool: string, args: Record<string, unknown>): Promise<unknown> {
-    const result = await this.handleRequest({ rid: 0, tool, args, namespace: null, provenance: 'user-only' }, true)
+    const result = await this.handleRequest({ rid: 0, tool, args, namespace: null, provenance: 'user-only' }, true, true)
     if (isErrorResult(result)) {
       throw new Error(result.content.map((part) => part.text ?? '').join('\n'))
     }
     return result
   }
 
-  private async handleRequest(req: ToolCallRequest, approved: boolean): Promise<unknown> {
+  async handleUndo(tool: string, args: Record<string, unknown>): Promise<unknown> {
+    const result = await this.handleRequest({ rid: 0, tool, args, namespace: null, provenance: 'user-only' }, true, false)
+    if (isErrorResult(result)) throw new Error(result.content.map((part) => part.text ?? '').join('\n'))
+    return result
+  }
+
+  private async handleRequest(req: ToolCallRequest, approved: boolean, record: boolean): Promise<unknown> {
     const classification = classifyToolCall(req.tool, req.args)
     if (!classification.mutates) {
       const result = await this.deps.callTool(req.tool, req.args, req.signal)
@@ -115,6 +121,7 @@ export class WriteGate {
     const inverse = buildInverse(req.tool, req.args, preImage)
 
     try {
+      if (!record) return result
       await this.journal.record({
         tool: req.tool,
         args: stripReservedArgs(req.args),

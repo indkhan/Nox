@@ -442,7 +442,7 @@ Nox mirrors this, replacing `Auto` with `Auto | Ask before changes` and dropping
 |---|---|---|
 | **Undoing any creation** (page, database, folder, comment, duplicate) | Notion MCP has no delete, trash or archive tool | Journal it, mark `not-undoable`, deep-link the page with a "delete in Notion" step |
 | **Undo that restores rich-page structure or block identity** | Repeated complex-page `fetch → replace_content → fetch` changed content each time; replacement also writes new block ids | No full-page replacement undo for structurally rich pages. Use targeted inverses or mark not-undoable; explain simple-page identity loss in the UI |
-| **Undo of exotic properties** | Rollups and formulas aren't writable; relations return titles but must be written as ids; deleted select options can't be restored | Whitelist: text, number, select, date, checkbox |
+| **Undo of properties** | Safe types are known, but the current MCP pre-image does not expose verified prior values | Mark property changes not-undoable until real prior values can be captured |
 | **Transactional multi-step undo** | Notion has no transactions | Per-operation inverse journal, newest-first, explicit partial-failure reporting |
 | **Conditional writes** | Not in the tool surface (§2.7) | Re-fetch + hash compare before writing |
 | **General block-level surgical undo** | MCP exposes markdown search/replace, not stable block-level inverse operations | Use a targeted inverse only when the exact prior text is known and unambiguous; otherwise mark not-undoable |
