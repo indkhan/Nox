@@ -118,6 +118,12 @@ describe('CodexClient', () => {
     await vi.waitFor(() => expect(h.responses.some((r) => r.rid === 42)).toBe(true))
     expect(h.responses[0].result).toMatchObject({ success: true })
     expect(events.filter((e) => e.kind === 'tool-call')).toHaveLength(1)
+    expect(events.find((e) => e.kind === 'tool-completed')).toMatchObject({
+      kind: 'tool-completed',
+      callId: 'call_7',
+      tool: 'notion-fetch',
+      success: true,
+    })
     emit(h.bridge, 'turn/completed', {})
     await turnPromise
   })
@@ -131,6 +137,12 @@ describe('CodexClient', () => {
     h.bridge.onCodexRequest?.({ rid: 43, method: 'item/tool/call', params: { tool: 'notion-search', arguments: {} } })
     await vi.waitFor(() => expect(h.responses.some((r) => r.rid === 43)).toBe(true))
     expect(JSON.stringify(h.responses[0].result)).toContain('ERROR: rate limited')
+    expect(events.find((e) => e.kind === 'tool-completed')).toMatchObject({
+      kind: 'tool-completed',
+      tool: 'notion-search',
+      success: false,
+      error: 'rate limited',
+    })
     emit(h.bridge, 'turn/completed', {})
     await turnPromise
   })

@@ -38,7 +38,7 @@ export type CodexEvent =
   | { kind: 'text-delta'; text: string }
   | { kind: 'web-search' }
   | { kind: 'tool-call'; tool: string; args: Record<string, unknown>; callId?: string }
-  | { kind: 'tool-completed' }
+  | { kind: 'tool-completed'; tool?: string; callId?: string; success?: boolean; error?: string; durationMs?: number }
   | { kind: 'usage'; usage: TurnUsage | null }
   | { kind: 'done'; interrupted: boolean; finalText: string }
   | { kind: 'error'; message: string }
@@ -196,20 +196,28 @@ export class CodexClient {
       const p = req.params as { tool?: string; namespace?: string; arguments?: Record<string, unknown>; callId?: string }
       const tool = p.tool ?? p.namespace ?? 'unknown'
       const args = p.arguments ?? {}
+      const startedAt = Date.now()
       this.emit({ kind: 'tool-call', tool, args, callId: p.callId })
       try {
         const result = this.onToolCall
           ? await this.onToolCall({ tool, namespace: p.namespace ?? null, args, rid: req.rid, callId: p.callId })
           : { decision: 'decline' }
         this.bridge.respondTool(req.rid, result)
-        this.emit({ kind: 'tool-completed' })
+        this.emit({ kind: 'tool-completed', tool, callId: p.callId, success: true, durationMs: Date.now() - startedAt })
       } catch (e) {
         // Errors become model-readable results, never a crashed turn (MVP §6).
         this.bridge.respondTool(req.rid, {
           success: false,
           contentItems: [{ type: 'inputText', text: `ERROR: ${e instanceof Error ? e.message : String(e)}` }],
         })
-        this.emit({ kind: 'tool-completed' })
+        this.emit({
+          kind: 'tool-completed',
+          tool,
+          callId: p.callId,
+          success: false,
+          error: e instanceof Error ? e.message : String(e),
+          durationMs: Date.now() - startedAt,
+        })
       }
       return
     }
