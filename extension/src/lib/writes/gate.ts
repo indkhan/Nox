@@ -44,14 +44,6 @@ export class WriteGate {
     return this.handleRequest(req, false, true)
   }
 
-  async handleApproved(tool: string, args: Record<string, unknown>): Promise<unknown> {
-    const result = await this.handleRequest({ rid: 0, tool, args, namespace: null, provenance: 'user-only' }, true, true)
-    if (isErrorResult(result)) {
-      throw new Error(result.content.map((part) => part.text ?? '').join('\n'))
-    }
-    return result
-  }
-
   async handleUndo(tool: string, args: Record<string, unknown>): Promise<unknown> {
     const result = await this.handleRequest({ rid: 0, tool, args, namespace: null, provenance: 'user-only' }, true, false)
     if (isErrorResult(result)) throw new Error(result.content.map((part) => part.text ?? '').join('\n'))

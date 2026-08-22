@@ -196,26 +196,8 @@ describe('WriteGate', () => {
     error.mockRestore()
   })
 
-  it('runs an explicitly approved undo through the mutation gate', async () => {
-    let executed = false
-    const { gate } = makeGate({
-      mode: 'ask',
-      callTool: async () => {
-        executed = true
-        return { content: [{ type: 'text', text: 'undone' }] }
-      },
-    })
-    await gate.handleApproved('notion-update-page', {
-      data: { page_id: PAGE },
-      command: { type: 'update_properties', properties: {} },
-    })
-    expect(executed).toBe(true)
-    expect(gate.approvals.pendingCount).toBe(0)
-  })
-
   it('does not journal an inverse as a new user mutation', async () => {
-    const journal = new MutationJournal()
-    const { gate } = makeGate({ journal, mode: 'ask' })
+    const { gate, journal } = makeGate({ mode: 'ask' })
     await gate.handleUndo('notion-update-page', {
       data: { page_id: PAGE },
       command: { type: 'update_properties', properties: {} },
