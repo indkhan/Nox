@@ -7,7 +7,7 @@ export const DEFAULT_RESULT_BUDGET_CHARS = 24_000
 
 export interface ExecutorDeps {
   /** Runs one tool call through the scheduler (the Notion facade). */
-  callTool: (name: string, args: Record<string, unknown>) => Promise<{ content: Array<{ type: string; text?: string }> }>
+  callTool: (name: string, args: Record<string, unknown>, signal?: AbortSignal) => Promise<{ content: Array<{ type: string; text?: string }> }>
   /** Throws when the tool is plan-gated. */
   assertToolAllowed: (name: string) => void
 }
@@ -23,14 +23,16 @@ export interface ToolOutcome {
  */
 export class ToolExecutor {
   private stepsUsed = 0
+  private signal: AbortSignal | undefined
 
   constructor(
     private readonly deps: ExecutorDeps,
     private readonly opts: { stepLimit?: number; resultBudgetChars?: number; onJournalEvent?: (e: JournalEvent) => void; onBeginTurn?: () => void } = {},
   ) {}
 
-  beginTurn(): void {
+  beginTurn(signal?: AbortSignal): void {
     this.stepsUsed = 0
+    this.signal = signal
     this.opts.onBeginTurn?.()
   }
 
@@ -54,7 +56,7 @@ export class ToolExecutor {
     this.stepsUsed += 1
     const startedAt = Date.now()
     try {
-      const result = await this.deps.callTool(req.tool, req.args)
+      const result = await this.deps.callTool(req.tool, req.args, this.signal)
       const text = result.content
         .filter((c) => c.type === 'text' && typeof c.text === 'string')
         .map((c) => c.text)

@@ -50,6 +50,7 @@ export interface ToolCallRequest {
   /** Raw JSON-RPC id we must answer through the bridge. */
   rid: number
   callId?: string
+  signal?: AbortSignal
 }
 
 interface ItemParams extends Record<string, unknown> {

@@ -74,8 +74,18 @@ export class Scheduler {
   private async acquire(bucketName: Bucket, signal?: AbortSignal): Promise<void> {
     // Concurrency gate first: never more than MAX_CONCURRENT calls in flight.
     while (this.inFlight >= this.maxConcurrent) {
-      await new Promise<void>((resolve) => this.waiters.push(resolve))
-      signal?.throwIfAborted()
+      await new Promise<void>((resolve, reject) => {
+        const ready = () => { cleanup(); resolve() }
+        const aborted = () => {
+          const index = this.waiters.indexOf(ready)
+          if (index >= 0) this.waiters.splice(index, 1)
+          cleanup()
+          reject(signal?.reason)
+        }
+        const cleanup = () => signal?.removeEventListener('abort', aborted)
+        this.waiters.push(ready)
+        signal?.addEventListener('abort', aborted, { once: true })
+      })
     }
     for (;;) {
       const bucket = bucketName === 'search' ? this.search : this.global
@@ -86,8 +96,7 @@ export class Scheduler {
         return
       }
       const deficitMs = ((1 - bucket.tokens) / this.rates[bucketName]) * 1000
-      await this.sleep(Math.max(10, Math.ceil(deficitMs)))
-      signal?.throwIfAborted()
+      await abortable(this.sleep(Math.max(10, Math.ceil(deficitMs))), signal)
     }
   }
 
@@ -116,10 +125,23 @@ export class Scheduler {
       } finally {
         this.release()
       }
-      await this.sleep(delay)
-      signal?.throwIfAborted()
+      await abortable(this.sleep(delay), signal)
     }
   }
+}
+
+function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return promise
+  signal.throwIfAborted()
+  return new Promise<T>((resolve, reject) => {
+    const aborted = () => { cleanup(); reject(signal.reason) }
+    const cleanup = () => signal.removeEventListener('abort', aborted)
+    signal.addEventListener('abort', aborted, { once: true })
+    promise.then(
+      (value) => { cleanup(); resolve(value) },
+      (error) => { cleanup(); reject(error) },
+    )
+  })
 }
 
 /** Milliseconds to back off, or null when the error must propagate. */

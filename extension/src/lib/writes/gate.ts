@@ -8,8 +8,8 @@ import { hashMarkdown } from './guard'
 import { normalizeId } from '../../shared/notion-page'
 
 export interface WriteGateDeps {
-  callTool: (name: string, args: Record<string, unknown>) => Promise<{ content: Array<{ type: string; text?: string }> }>
-  fetchPageMarkdown: (pageId: string) => Promise<string>
+  callTool: (name: string, args: Record<string, unknown>, signal?: AbortSignal) => Promise<{ content: Array<{ type: string; text?: string }> }>
+  fetchPageMarkdown: (pageId: string, signal?: AbortSignal) => Promise<string>
   getMode: () => Mode
   getContextSet: () => Set<string>
   journal?: MutationJournal
@@ -43,7 +43,7 @@ export class WriteGate {
   async handle(req: ToolCallRequest): Promise<unknown> {
     const classification = classifyToolCall(req.tool, req.args)
     if (!classification.mutates) {
-      const result = await this.deps.callTool(req.tool, req.args)
+      const result = await this.deps.callTool(req.tool, req.args, req.signal)
       const pageId = req.tool === 'notion-fetch' ? firstString(req.args.id) ?? firstString(req.args.page_id) : undefined
       if (pageId) {
         const markdown = result.content.filter((c) => c.type === 'text').map((c) => c.text ?? '').join('\n')
@@ -73,7 +73,8 @@ export class WriteGate {
       if (CONTENT_WRITE_KINDS.has(classification.kind)) {
         const pageId = firstString(req.args.page_id) ?? firstString((req.args.data as Record<string, unknown> | undefined)?.page_id)
         if (pageId) {
-          snapshot = await capturePageSnapshot(this.deps.fetchPageMarkdown, pageId)
+          const fetchPage = (id: string) => this.deps.fetchPageMarkdown(id, req.signal)
+          snapshot = await capturePageSnapshot(fetchPage, pageId)
           const expectedHash = this.readHashes.get(normalizeId(pageId) ?? pageId)
           if (expectedHash && expectedHash !== snapshot.hash) {
             throw new GuardViolation(
@@ -88,7 +89,7 @@ export class WriteGate {
           }
         }
         if (snapshot && !this.isUndoRequest(req)) {
-          await assertUnchanged(this.deps.fetchPageMarkdown, snapshot)
+          await assertUnchanged((id) => this.deps.fetchPageMarkdown(id, req.signal), snapshot)
         }
       }
     } catch (e) {
@@ -97,7 +98,7 @@ export class WriteGate {
       return textResult(`ERROR: could not capture a pre-image (${e instanceof Error ? e.message : e}). Write aborted.`)
     }
 
-    const result = await this.deps.callTool(req.tool, stripReservedArgs(req.args))
+    const result = await this.deps.callTool(req.tool, stripReservedArgs(req.args), req.signal)
     if (preImage.pageId) this.readHashes.delete(normalizeId(preImage.pageId) ?? preImage.pageId)
     const inverse = buildInverse(req.tool, req.args, preImage)
 

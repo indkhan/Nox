@@ -19,9 +19,9 @@ export function setAgentMode(mode: Mode): void {
 }
 
 export const writeGate = new WriteGate({
-  callTool: (name, args) => notion.scheduleCallTool(name, args),
-  fetchPageMarkdown: async (pageId) => {
-    const result = await notion.scheduleCallTool('notion-fetch', { id: pageId })
+  callTool: (name, args, signal) => notion.scheduleCallTool(name, args, signal),
+  fetchPageMarkdown: async (pageId, signal) => {
+    const result = await notion.scheduleCallTool('notion-fetch', { id: pageId }, signal)
     return result.content.filter((c) => c.type === 'text').map((c) => c.text ?? '').join('\n')
   },
   getMode: () => currentMode,
@@ -38,8 +38,8 @@ export const agentLoop = new AgentLoop({
   bridge,
   codex,
   executor: new ToolExecutor({
-    callTool: async (name, args) => {
-      const result = (await writeGate.handle({ rid: 0, tool: name, args, namespace: null })) as {
+    callTool: async (name, args, signal) => {
+      const result = (await writeGate.handle({ rid: 0, tool: name, args, namespace: null, signal })) as {
         content?: Array<{ type: string; text?: string }>
         isError?: boolean
       }

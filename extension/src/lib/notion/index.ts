@@ -132,10 +132,10 @@ export class Notion {
   }
 
   /** Scheduled tool call; transient failures retry inside the scheduler. */
-  scheduleCallTool(name: string, args: Record<string, unknown>): Promise<McpCallResult> {
+  scheduleCallTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<McpCallResult> {
     // Search has its own slower bucket; everything else rides the global one.
     const bucket = name === 'notion-search' ? 'search' : 'global'
-    return this.scheduler.schedule(bucket, () => this.client.callTool(name, args))
+    return this.scheduler.schedule(bucket, () => this.client.callTool(name, args, signal), signal)
   }
 
   readResource(uri: string): Promise<Array<{ uri: string; text?: string; mimeType?: string }>> {

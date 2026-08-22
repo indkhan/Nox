@@ -28,6 +28,7 @@ export class AgentLoop {
   private reconnectAttempted = false
   private toolUsedThisTurn = false
   private untrustedContextThisTurn = false
+  private turnAbort: AbortController | null = null
   /** User-selected model/effort applied on the next thread start or resume. */
   private overrides: Partial<ThreadSettings> = {}
 
@@ -101,7 +102,8 @@ export class AgentLoop {
     this.cancelled = false
     this.toolUsedThisTurn = false
     this.untrustedContextThisTurn = opts.currentPage != null
-    this.deps.executor.beginTurn()
+    this.turnAbort = new AbortController()
+    this.deps.executor.beginTurn(this.turnAbort.signal)
     await this.ensureThread()
 
     const preamble = buildContextPreamble({ currentPage: opts.currentPage ?? null })
@@ -130,12 +132,14 @@ export class AgentLoop {
       throw e
     } finally {
       clearTimeout(timer)
+      this.turnAbort = null
     }
   }
 
   cancel(): void {
     if (this.cancelled) return
     this.cancelled = true
+    this.turnAbort?.abort()
     void this.deps.codex.interrupt()
   }
 }

@@ -139,6 +139,19 @@ describe('Scheduler', () => {
     await expect(scheduler.schedule('global', ok, controller.signal)).rejects.toMatchObject({ name: 'AbortError' })
   })
 
+  it('aborts promptly during retry backoff', async () => {
+    const controller = new AbortController()
+    let calls = 0
+    const scheduler = new Scheduler({ sleep: () => new Promise(() => undefined) })
+    const pending = scheduler.schedule('global', async () => {
+      calls++
+      throw new McpHttpError(503, 'down')
+    }, controller.signal)
+    await vi.waitFor(() => expect(calls).toBe(1))
+    controller.abort()
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+  })
+
   it('honors Retry-After over exponential growth', async () => {
     const { scheduler, sleeps } = makeScheduler()
     let calls = 0

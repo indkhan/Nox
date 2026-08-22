@@ -78,8 +78,8 @@ export class McpClient {
     return result.tools ?? []
   }
 
-  async callTool(name: string, args: Record<string, unknown> = {}): Promise<McpCallResult> {
-    return (await this.rpc('tools/call', { name, arguments: args })) as McpCallResult
+  async callTool(name: string, args: Record<string, unknown> = {}, signal?: AbortSignal): Promise<McpCallResult> {
+    return (await this.rpc('tools/call', { name, arguments: args }, signal)) as McpCallResult
   }
 
   async readResource(uri: string): Promise<Array<{ uri: string; text?: string; mimeType?: string }>> {
@@ -102,10 +102,10 @@ export class McpClient {
     await this.send(JSON.stringify(buildNotification(method, params)))
   }
 
-  private async rpc(method: string, params: unknown): Promise<unknown> {
+  private async rpc(method: string, params: unknown, signal?: AbortSignal): Promise<unknown> {
     const request = buildRequest(method, params)
     const body = JSON.stringify(request)
-    const response = await this.send(body)
+    const response = await this.send(body, signal)
     const text = await response.text()
     const payload = pickResponse(parseSseOrJson(text), request.id)
     if (!payload) throw new Error(`${method}: no matching JSON-RPC payload in response`)
@@ -118,7 +118,7 @@ export class McpClient {
    * transport-level status codes (auth / origin / rate-limit are classified
    * by errors.ts upstream).
    */
-  private async send(body: string): Promise<Response> {
+  private async send(body: string, signal?: AbortSignal): Promise<Response> {
     const token = await this.deps.getAccessToken()
     if (!token) throw new McpUnauthenticatedError()
     const headers: Record<string, string> = {
@@ -131,6 +131,7 @@ export class McpClient {
       method: 'POST',
       headers,
       body,
+      signal,
     })
     // Session id may arrive on any response; echo it from then on.
     const sid = res.headers.get('mcp-session-id')
