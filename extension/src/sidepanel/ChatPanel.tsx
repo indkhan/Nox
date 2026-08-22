@@ -44,7 +44,8 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
       currentThreadIdRef.current = threadId
       setAgentHistoryThread(threadId)
       agentLoop.restoreThread(thread?.codexThreadId ?? null)
-      const restored = await Promise.all(restoreTurns(messages).map(async (turn) => ({
+      const journal = await writeGate.journal.newestFirst()
+      const restored = await Promise.all(restoreTurns(messages, journal).map(async (turn) => ({
         ...turn,
         view: { ...turn.view, activity: await attachJournalEntries(turn.view.activity) },
       })))

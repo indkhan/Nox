@@ -21,4 +21,15 @@ describe('restoreTurns', () => {
   it('marks a user message without an assistant response as interrupted', () => {
     expect(restoreTurns([row({ role: 'user', text: 'Do work' })])[0].view.error).toMatch(/interrupted/i)
   })
+
+  it('restores applied changes from the interrupted turn with targeted undo', () => {
+    const turns = restoreTurns([row({ role: 'user', text: 'Update it', ts: 1 })], [{
+      id: 'journal-1', ts: 2, threadId: 'thread-1', turnId: 'turn-latest', status: 'applied',
+      tool: 'notion-update-page', args: { page_id: 'p1' }, kind: 'content-update',
+      inverse: { tool: 'notion-update-page', args: { page_id: 'p1', status: 'old' } },
+    }])
+    expect(turns[0].view.activity).toEqual([expect.objectContaining({
+      journalId: 'journal-1', status: 'completed', undoable: true,
+    })])
+  })
 })
