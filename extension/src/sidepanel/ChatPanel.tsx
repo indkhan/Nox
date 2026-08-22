@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { useNoxStore } from './store'
-import { agentLoop, fetchCurrentPageContext } from '../lib/agent/panel'
+import { agentLoop, fetchCurrentPageContext, setAgentHistoryThread } from '../lib/agent/panel'
 import { AssistantMarkdown, ProgressBlock, type ProgressStep } from './MessageParts'
 import { Composer } from './Composer'
 import { EmptyState } from './EmptyState'
@@ -54,6 +54,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
       try {
         persisted = await startPersistedTurn(historyRepo, currentThreadIdRef.current, text)
         currentThreadIdRef.current = persisted.threadId
+        setAgentHistoryThread(persisted.threadId)
       } catch {
         /* persistence is best-effort; never block the chat */
       }
@@ -122,6 +123,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
     if (busy) return
     setTurns([])
     currentThreadIdRef.current = null
+    setAgentHistoryThread(null)
     agentLoop.newThread()
     setThreadTitle('New chat')
     void chrome.storage.local.remove('nox_thread_title')

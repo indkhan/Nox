@@ -14,8 +14,13 @@ import type { CurrentPage } from '../../shared/notion-page'
 import { useNoxStore } from '../../sidepanel/store'
 
 let currentMode: Mode = 'ask'
+let historyThreadId: string | null = null
 export function setAgentMode(mode: Mode): void {
   currentMode = mode
+}
+
+export function setAgentHistoryThread(threadId: string | null): void {
+  historyThreadId = threadId
 }
 
 export const writeGate = new WriteGate({
@@ -53,7 +58,11 @@ export const agentLoop = new AgentLoop({
       const verdict = notion.capabilities.can(name)
       if (!verdict.allowed) throw new Error(`"${name}" ${verdict.reason ?? 'is unavailable'}`)
     },
-  }, { onBeginTurn: () => writeGate.beginTurn() }),
+  }),
+  beginTurn: () => {
+    writeGate.journal.setThread(historyThreadId ?? 'unscoped')
+    writeGate.beginTurn()
+  },
   getDynamicTools: async () => toDynamicTools(await notion.listTools(), notion.capabilities),
   developerInstructions: buildDeveloperInstructions({
     userName: notion.identity?.userName,

@@ -14,6 +14,7 @@ export interface AgentLoopDeps {
   /** Returns tools already filtered through the capability gate. */
   getDynamicTools: () => Promise<unknown[]>
   developerInstructions: string
+  beginTurn?: () => void
 }
 
 export type TurnListener = (event: CodexEvent | { kind: 'bridge-reconnecting' }) => void
@@ -106,6 +107,7 @@ export class AgentLoop {
     this.turnAbort = new AbortController()
     this.deps.executor.beginTurn(this.turnAbort.signal)
     await this.ensureThread()
+    this.deps.beginTurn?.()
 
     const preamble = buildContextPreamble({ currentPage: opts.currentPage ?? null })
     const message = preamble ? `${preamble}\n\n${text}` : text

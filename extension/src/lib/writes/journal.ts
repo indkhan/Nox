@@ -1,6 +1,9 @@
 export interface JournalEntry {
   id: number
   ts: number
+  threadId: string
+  turnId: string
+  status: 'applied' | 'undone' | 'failed'
   tool: string
   args: Record<string, unknown>
   kind: string
@@ -47,13 +50,27 @@ export function idbJournalStore(db: () => Promise<IDBPDatabase>): JournalStore {
 
 export class MutationJournal {
   private nextId = 1
+  private threadId: string | null = null
+  private turnId: string | null = null
 
   constructor(private readonly store: JournalStore = memoryJournalStore()) {}
 
-  async record(input: Omit<JournalEntry, 'id' | 'ts'>): Promise<JournalEntry> {
+  setThread(threadId: string): void {
+    this.threadId = threadId
+    this.turnId = crypto.randomUUID()
+  }
+
+  async record(input: Omit<JournalEntry, 'id' | 'ts' | 'threadId' | 'turnId' | 'status'>): Promise<JournalEntry> {
     const existing = await this.store.list()
     const id = Math.max(this.nextId, ...existing.map((entry) => entry.id + 1))
-    const entry: JournalEntry = { ...input, id, ts: Date.now() }
+    const entry: JournalEntry = {
+      ...input,
+      id,
+      ts: Date.now(),
+      threadId: this.threadId ?? 'unscoped',
+      turnId: this.turnId ?? crypto.randomUUID(),
+      status: 'applied',
+    }
     await this.store.append(entry)
     this.nextId = id + 1
     return entry
@@ -61,7 +78,8 @@ export class MutationJournal {
 
   /** Newest-first for the undo UI (MVP §6.5). */
   async newestFirst(): Promise<JournalEntry[]> {
-    return (await this.store.list()).reverse()
+    const entries = await this.store.list()
+    return entries.filter((entry) => this.threadId == null || entry.threadId === this.threadId).reverse()
   }
 
   /** Entries that carry a runnable inverse. */

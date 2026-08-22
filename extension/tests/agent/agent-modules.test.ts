@@ -118,17 +118,6 @@ describe('ToolExecutor', () => {
     expect(calls).toHaveLength(1)
   })
 
-  it('runs the configured turn reset every turn', () => {
-    const onBeginTurn = vi.fn()
-    const resetting = new ToolExecutor(
-      { callTool: async () => ({ content: [] }), assertToolAllowed: () => undefined },
-      { onBeginTurn },
-    )
-    resetting.beginTurn()
-    resetting.beginTurn()
-    expect(onBeginTurn).toHaveBeenCalledTimes(2)
-  })
-
   it('refuses after the step budget is exhausted', async () => {
     for (let i = 0; i < DEFAULT_STEP_LIMIT; i++) {
       await executor.execute({ rid: i, tool: 'notion-search', args: {}, namespace: null })
