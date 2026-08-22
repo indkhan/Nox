@@ -59,10 +59,11 @@ export function App() {
         <span className="flex-1" />
         {role === 'owner' && <button
           onClick={() => setSettingsOpen(!settingsOpen)}
+          disabled={agentBusy}
           aria-label={settingsOpen ? 'Close settings' : 'Open settings'}
           title="Settings"
           data-testid="settings-button"
-          className="relative rounded-md p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+          className="relative rounded-md p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 disabled:cursor-not-allowed disabled:opacity-40"
         >
           <GearIcon />
           {setupIncomplete && !settingsOpen && (
