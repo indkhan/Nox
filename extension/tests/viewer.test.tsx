@@ -45,4 +45,27 @@ describe('viewer mode', () => {
       useNoxStore.getState().removeApproval(1)
     })
   })
+
+  it('presents approvals as clear decisions with technical details secondary', async () => {
+    const container = document.createElement('div')
+    const root = createRoot(container)
+    await act(async () => {
+      useNoxStore.getState().addApproval({
+        id: 2,
+        tool: 'notion-update-page',
+        summary: 'Change Status to In review',
+        payloadJson: '{"page_id":"p1"}',
+        reasons: ['This changes a Notion page'],
+      })
+      root.render(<ApprovalCards />)
+    })
+    expect(container.textContent).toContain('Make this change?')
+    expect(container.textContent).toContain('Change Status to In review')
+    expect(container.textContent).toContain('Technical details')
+    expect(container.textContent).toContain('Approve similar this turn')
+    await act(async () => {
+      root.unmount()
+      useNoxStore.getState().removeApproval(2)
+    })
+  })
 })

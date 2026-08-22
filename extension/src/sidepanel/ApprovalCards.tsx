@@ -17,28 +17,28 @@ export function ApprovalCards({ readOnly = false }: { readOnly?: boolean }) {
   if (readOnly || pending.length === 0) return null
 
   return (
-    <div className="space-y-2 border-t border-amber-900/50 bg-amber-950/20 p-3" data-testid="approval-cards">
+    <div className="space-y-2 border-t border-zinc-800 bg-zinc-950/80 p-3" data-testid="approval-cards">
       {pending.map((approval: CardApproval) => (
-        <div key={approval.id} className="rounded-lg border border-amber-800/60 bg-zinc-900 p-3" role="alert">
-          <p className="text-xs uppercase tracking-wide text-amber-400">Approval needed</p>
-          <p className="mt-0.5 text-sm font-medium" data-testid={`approval-summary-${approval.id}`}>{approval.summary}</p>
-          <ul className="mt-1 list-disc pl-4 text-[11px] text-zinc-500">
+        <div key={approval.id} className="rounded-xl border border-zinc-700 bg-zinc-900 p-3 shadow-lg shadow-black/20" role="alert">
+          <p className="text-xs font-medium text-indigo-300">Make this change?</p>
+          <p className="mt-1 text-sm font-medium leading-snug" data-testid={`approval-summary-${approval.id}`}>{approval.summary}</p>
+          <ul className="mt-1.5 list-disc pl-4 text-[11px] text-zinc-500">
             {approval.reasons.map((reason) => (
               <li key={reason}>{reason}</li>
             ))}
           </ul>
           <details className="mt-1.5">
-            <summary className="cursor-pointer select-none text-[11px] text-zinc-500">Exact payload</summary>
+            <summary className="cursor-pointer select-none text-[11px] text-zinc-500">Technical details</summary>
             <pre className="mt-1 max-h-32 overflow-auto rounded bg-zinc-950 p-2 font-mono text-[10px] text-zinc-400">{approval.payloadJson}</pre>
           </details>
-          <div className="mt-2 flex gap-2">
+          <div className="mt-3 flex flex-wrap gap-2">
             <button
               onClick={() => {
                 writeGate.approvals.answer(approval.id, 'approve')
                 removeApproval(approval.id)
               }}
               data-testid={`approve-${approval.id}`}
-              className="rounded-md bg-emerald-600 px-3 py-1 text-xs font-semibold hover:bg-emerald-500"
+              className="rounded-md bg-zinc-100 px-3 py-1.5 text-xs font-semibold text-zinc-900 hover:bg-white"
             >
               Approve
             </button>
@@ -47,9 +47,9 @@ export function ApprovalCards({ readOnly = false }: { readOnly?: boolean }) {
                 writeGate.approvals.answer(approval.id, 'approve-all')
                 useNoxStore.getState().pendingApprovals.forEach((a) => removeApproval(a.id))
               }}
-              className="rounded-md border border-emerald-700 px-3 py-1 text-xs text-emerald-400 hover:bg-emerald-900/40"
+              className="rounded-md border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800"
             >
-              Approve all this turn
+              Approve similar this turn
             </button>
             <button
               onClick={() => {
@@ -57,7 +57,7 @@ export function ApprovalCards({ readOnly = false }: { readOnly?: boolean }) {
                 removeApproval(approval.id)
               }}
               data-testid={`reject-${approval.id}`}
-              className="rounded-md bg-red-600 px-3 py-1 text-xs font-semibold hover:bg-red-500"
+              className="rounded-md px-3 py-1.5 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
             >
               Reject
             </button>
