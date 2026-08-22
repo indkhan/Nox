@@ -32,7 +32,9 @@ export async function deleteAllData(): Promise<void> {
     const request = indexedDB.deleteDatabase('nox')
     request.onsuccess = () => resolve()
     request.onerror = () => reject(request.error ?? new Error('Could not delete Nox database'))
-    request.onblocked = () => reject(new Error('Close other Nox panels before deleting all data'))
+    // A blocked deletion remains queued by IndexedDB and may later succeed;
+    // keep the UI pending until the request has a real success/error outcome.
+    request.onblocked = () => undefined
   })
   await chrome.storage.local.clear()
   await chrome.storage.session.clear()

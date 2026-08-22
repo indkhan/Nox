@@ -41,12 +41,13 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
 
   useEffect(() => {
     let cancelled = false
+    const generation = ++historyGenerationRef.current
     writeGate.journal.scopeThread(null)
     void chrome.storage.local.get('nox_thread_id').then(async (stored) => {
       const threadId = stored['nox_thread_id']
       if (typeof threadId !== 'string' || !threadId) return
       const [messages, thread, journal] = await Promise.all([historyRepo.getMessages(threadId), historyRepo.getThread(threadId), writeGate.journal.newestForThread(threadId)])
-      if (cancelled || historyRestoreCancelledRef.current) return
+      if (cancelled || historyRestoreCancelledRef.current || generation !== historyGenerationRef.current) return
       const restored = restoreTurns(messages, journal).map((turn) => ({
         ...turn, view: { ...turn.view, activity: attachJournalEntries(turn.view.activity, journal) },
       }))
@@ -55,7 +56,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
       setAgentHistoryThread(threadId)
       writeGate.journal.scopeThread(threadId)
       agentLoop.restoreThread(thread?.codexThreadId ?? null)
-      if (cancelled || historyRestoreCancelledRef.current) return
+      if (cancelled || historyRestoreCancelledRef.current || generation !== historyGenerationRef.current) return
       setTurns(restored)
     }).catch(() => undefined)
     return () => { cancelled = true }
@@ -196,7 +197,8 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
       const result = await agentLoop.sendUserMessage(text, { currentPage: pageContext ?? undefined })
 
       currentActivity = attachJournalEntries(currentActivity, await writeGate.journal.newestFirst())
-      await persisted?.persistAssistant(result.text || streamedAnswer || v_error_placeholder(), lastUsageRef.current ?? undefined, currentActivity).catch(() => undefined)
+      const finalText = result.text || streamedAnswer || (result.interrupted ? '' : v_error_placeholder())
+      await persisted?.persistAssistant(finalText, lastUsageRef.current ?? undefined, currentActivity, result.interrupted ? 'interrupted' : 'complete').catch(() => undefined)
 
       if (threadTitle === 'New chat') {
         const title = text.replace(/\s+/g, ' ').trim().slice(0, 48) || 'New chat'
@@ -204,8 +206,14 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
         void chrome.storage.local.set({ nox_thread_title: title })
         if (currentThreadIdRef.current) void historyRepo.renameThread(currentThreadIdRef.current, title)
       }
-      patch((v) => ({ ...v, activity: currentActivity, answer: result.text || v.answer || '(no content)', pending: false }))
-      logInfo('Turn complete')
+      patch((v) => ({
+        ...v,
+        activity: currentActivity,
+        answer: result.text || v.answer || (result.interrupted ? '' : '(no content)'),
+        error: result.interrupted ? 'Stopped before Nox finished responding.' : null,
+        pending: false,
+      }))
+      logInfo(result.interrupted ? 'Turn interrupted' : 'Turn complete')
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e)
       patch((v) => ({ ...v, error: message, pending: false }))

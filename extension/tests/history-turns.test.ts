@@ -32,4 +32,13 @@ describe('restoreTurns', () => {
       journalId: 'journal-1', status: 'completed', undoable: true,
     })])
   })
+
+  it('does not mistake a streamed partial assistant row for a completed turn', () => {
+    const turns = restoreTurns([
+      row({ role: 'user', text: 'Long task', ts: 1 }),
+      row({ role: 'assistant', text: 'Partial answer', turnStatus: 'streaming', ts: 2 }),
+    ])
+    expect(turns[0].view.answer).toBe('Partial answer')
+    expect(turns[0].view.error).toMatch(/interrupted/i)
+  })
 })

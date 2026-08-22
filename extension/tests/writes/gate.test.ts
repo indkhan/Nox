@@ -15,12 +15,17 @@ function makeGate(over: {
   contextSet?: Set<string>
 } = {}) {
   let answer: 'approve' | 'reject' | null = null
+  let simulatedMarkdown = '# Simple\noriginal text'
   const journal = new MutationJournal()
   const gate = new WriteGate({
     callTool:
       over.callTool ??
-      (async (name) => ({ content: [{ type: 'text', text: `ran ${name}` }] })),
-    fetchPageMarkdown: async () => over.markdown?.() ?? '# Simple\noriginal text',
+      (async (name, args) => {
+        const command = args.command as { type?: string; content?: string } | undefined
+        if (command?.type === 'replace_content' && typeof command.content === 'string') simulatedMarkdown = command.content
+        return { content: [{ type: 'text', text: `ran ${name}` }] }
+      }),
+    fetchPageMarkdown: async () => over.markdown?.() ?? simulatedMarkdown,
     getMode: () => over.mode ?? 'ask',
     getContextSet: () => over.contextSet ?? new Set([PAGE]),
     journal,

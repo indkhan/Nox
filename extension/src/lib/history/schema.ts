@@ -25,6 +25,7 @@ export interface MessageRow {
   toolCalls?: Array<{ tool: string; args: unknown }>
   usage?: Record<string, number>
   activity?: ActivityItem[]
+  turnStatus?: 'streaming' | 'complete' | 'interrupted'
   ts: number
 }
 

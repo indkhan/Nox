@@ -119,6 +119,11 @@ export class WriteGate {
     if (inverse.kind === 'execute-tool' && preImage.pageId) {
       try {
         const postWrite = await capturePageSnapshot((id) => this.deps.fetchPageMarkdown(id, req.signal), preImage.pageId)
+        const command = req.args.command as Record<string, unknown> | undefined
+        const intendedContent = command?.type === 'replace_content' && typeof command.content === 'string' ? command.content : null
+        if (intendedContent == null || postWrite.hash !== await hashMarkdown(intendedContent)) {
+          throw new Error('post-write state cannot be attributed safely')
+        }
         inverse.args = { ...inverse.args, __nox_expected_hash: postWrite.hash }
       } catch {
         inverse.kind = 'not-undoable'

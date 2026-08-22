@@ -26,7 +26,13 @@ export function restoreTurns(messages: MessageRow[], journal: JournalEntry[] = [
       })
     } else if (message.role === 'assistant' && turns.length > 0) {
       const turn = turns[turns.length - 1]
-      turn.view = { activity: message.activity ?? [], answer: message.text, error: null, pending: false }
+      const interrupted = message.turnStatus === 'streaming' || message.turnStatus === 'interrupted'
+      turn.view = {
+        activity: message.activity ?? [],
+        answer: message.text,
+        error: interrupted ? 'This turn was interrupted before Nox finished responding.' : null,
+        pending: false,
+      }
     }
   }
   const interrupted = turns.at(-1)
