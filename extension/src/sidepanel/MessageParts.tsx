@@ -37,7 +37,7 @@ function ActivityRow({ item, onUndo }: { item: ActivityItem; onUndo?: (journalId
   const base = toolActivityLabel(item.tool, item.args, completed)
   const label = item.status === 'failed' ? failedToolActivityLabel(item.tool) : base
   return (
-    <li className="flex items-start gap-2 py-1 text-xs">
+    <li className={`flex items-start gap-2 py-1 text-xs ${completed ? 'nox-resolve' : ''}`}>
       <span className={item.status === 'failed' ? 'text-rose-400' : completed ? 'text-emerald-400' : 'text-indigo-400'}>
         {item.status === 'failed' ? '×' : completed ? '✓' : '●'}
       </span>

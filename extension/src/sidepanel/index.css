@@ -1,5 +1,15 @@
 @import "tailwindcss";
 
+:root {
+  --nox-surface: #111113;
+  --nox-surface-raised: #19191c;
+  --nox-border: #2b2b30;
+  --nox-text: #f4f4f5;
+  --nox-muted: #8b8b94;
+  --nox-accent: #818cf8;
+  color-scheme: dark;
+}
+
 @theme {
   --color-surface: #09090b;
   --color-surface-raised: #18181b;
@@ -17,10 +27,57 @@ body,
 
 body {
   margin: 0;
-  color-scheme: dark;
-  background: #181818;
+  background: var(--nox-surface);
   font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased;
+}
+
+@keyframes nox-resolve-in {
+  from { opacity: 0.45; transform: translateY(2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.nox-resolve {
+  animation: nox-resolve-in 180ms ease-out both;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --nox-surface: #f7f7f5;
+    --nox-surface-raised: #ffffff;
+    --nox-border: #deded9;
+    --nox-text: #262624;
+    --nox-muted: #71716b;
+    --nox-accent: #4f46e5;
+    color-scheme: light;
+  }
+
+  #root > div,
+  .bg-zinc-950 { background-color: var(--nox-surface) !important; }
+  .bg-zinc-900,
+  .bg-zinc-800 { background-color: var(--nox-surface-raised) !important; }
+  .text-zinc-100,
+  .text-zinc-200,
+  .text-zinc-300 { color: var(--nox-text) !important; }
+  .text-zinc-400,
+  .text-zinc-500,
+  .text-zinc-600 { color: var(--nox-muted) !important; }
+  .border-zinc-700,
+  .border-zinc-800,
+  .border-zinc-900 { border-color: var(--nox-border) !important; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  .nox-resolve { animation: none; }
 }
 
 button,
