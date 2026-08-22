@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { retryDelayFor, Scheduler, SEARCH_RPS } from '../src/lib/mcp/scheduler'
 import { McpHttpError, McpRpcError } from '../src/lib/mcp/client'
 
@@ -105,6 +105,38 @@ describe('Scheduler', () => {
     expect(result).toBe('recovered')
     expect(calls).toBe(3)
     expect(sleeps.length).toBe(2)
+  })
+
+  it('caps transient retries', async () => {
+    const { scheduler } = makeScheduler()
+    let calls = 0
+    await expect(scheduler.schedule('global', async () => {
+      calls++
+      throw new McpHttpError(503, 'still down')
+    })).rejects.toThrow('still down')
+    expect(calls).toBe(4)
+  })
+
+  it('releases concurrency capacity while backing off', async () => {
+    let resumeSleep!: () => void
+    const sleeping = new Promise<void>((resolve) => { resumeSleep = resolve })
+    const scheduler = new Scheduler({ globalRps: 100, maxConcurrent: 1, sleep: () => sleeping })
+    let calls = 0
+    const retrying = scheduler.schedule('global', async () => {
+      if (calls++ === 0) throw new McpHttpError(503, 'retry')
+      return 'done'
+    })
+    await vi.waitFor(() => expect(calls).toBe(1))
+    await expect(scheduler.schedule('global', async () => 'second')).resolves.toBe('second')
+    resumeSleep()
+    await expect(retrying).resolves.toBe('done')
+  })
+
+  it('honors an already-aborted signal', async () => {
+    const { scheduler } = makeScheduler()
+    const controller = new AbortController()
+    controller.abort()
+    await expect(scheduler.schedule('global', ok, controller.signal)).rejects.toMatchObject({ name: 'AbortError' })
   })
 
   it('honors Retry-After over exponential growth', async () => {

@@ -6,6 +6,7 @@ export type Bucket = 'global' | 'search'
 export const GLOBAL_RPS = 3
 export const SEARCH_RPS = 0.5
 export const MAX_CONCURRENT = 3
+export const MAX_RETRIES = 3
 
 const INITIAL_BACKOFF_MS = 500
 const MAX_BACKOFF_MS = 30_000
@@ -16,6 +17,7 @@ export interface SchedulerOptions {
   maxConcurrent?: number
   now?: () => number
   sleep?: (ms: number) => Promise<void>
+  maxRetries?: number
 }
 
 interface BucketState {
@@ -38,6 +40,7 @@ export class Scheduler {
   private readonly sleep: (ms: number) => Promise<void>
   private readonly maxConcurrent: number
   private readonly rates: Record<Bucket, number>
+  private readonly maxRetries: number
 
   constructor(opts: SchedulerOptions = {}) {
     this.rates = {
@@ -49,6 +52,7 @@ export class Scheduler {
       opts.sleep ??
       ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
     this.maxConcurrent = opts.maxConcurrent ?? MAX_CONCURRENT
+    this.maxRetries = opts.maxRetries ?? MAX_RETRIES
     this.global = this.emptyBucket(this.rates.global)
     this.search = this.emptyBucket(this.rates.search)
   }
@@ -67,10 +71,11 @@ export class Scheduler {
     bucket.lastRefill = t
   }
 
-  private async acquire(bucketName: Bucket): Promise<void> {
+  private async acquire(bucketName: Bucket, signal?: AbortSignal): Promise<void> {
     // Concurrency gate first: never more than MAX_CONCURRENT calls in flight.
     while (this.inFlight >= this.maxConcurrent) {
       await new Promise<void>((resolve) => this.waiters.push(resolve))
+      signal?.throwIfAborted()
     }
     for (;;) {
       const bucket = bucketName === 'search' ? this.search : this.global
@@ -82,6 +87,7 @@ export class Scheduler {
       }
       const deficitMs = ((1 - bucket.tokens) / this.rates[bucketName]) * 1000
       await this.sleep(Math.max(10, Math.ceil(deficitMs)))
+      signal?.throwIfAborted()
     }
   }
 
@@ -96,19 +102,22 @@ export class Scheduler {
    * Retryable: HTTP 429 / 5xx and JSON-RPC -32001 ("Server overloaded").
    * Everything else propagates immediately.
    */
-  async schedule<T>(bucket: Bucket, fn: () => Promise<T>): Promise<T> {
+  async schedule<T>(bucket: Bucket, fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
     let attempt = 0
     for (;;) {
-      await this.acquire(bucket)
+      signal?.throwIfAborted()
+      await this.acquire(bucket, signal)
+      let delay: number | null = null
       try {
         return await fn()
       } catch (e) {
-        const delay = retryDelayFor(e, attempt++, this.now)
-        if (delay == null) throw e
-        await this.sleep(delay)
+        delay = retryDelayFor(e, attempt, this.now)
+        if (delay == null || attempt++ >= this.maxRetries) throw e
       } finally {
         this.release()
       }
+      await this.sleep(delay)
+      signal?.throwIfAborted()
     }
   }
 }
