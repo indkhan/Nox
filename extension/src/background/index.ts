@@ -1,25 +1,25 @@
 import { parseNotionUrl } from '../shared/notion-page'
 import type { CurrentPage } from '../shared/notion-page'
-import { buildOriginStripRule, originStripRuleIsActive } from './dnr'
+import { ensureOriginStripRule } from './dnr'
 
 // ── DNR Origin strip (load-bearing, RESEARCH §2.1) ──────────────────────────
-async function ensureOriginStripRule(): Promise<boolean> {
+// Installs the first rule variant that verifiably strips our own Origin
+// (self-probing canary — see dnr.ts). Re-runs on demand via nox/get-dnr-status.
+let originStripStatus: { active: boolean; variant?: string; probe?: string } = {
+  active: false,
+}
+
+async function ensureOriginStrip(): Promise<typeof originStripStatus> {
   try {
-    const existing = await chrome.declarativeNetRequest.getDynamicRules()
-    if (!originStripRuleIsActive(existing)) {
-      await chrome.declarativeNetRequest.updateDynamicRules({
-        removeRuleIds: [1],
-        addRules: [buildOriginStripRule(chrome.runtime.id)],
-      })
+    originStripStatus = await ensureOriginStripRule()
+    if (!originStripStatus.active) {
+      console.error('[nox] DNR origin-strip could not be verified — Notion MCP calls will 403', originStripStatus)
     }
-    const after = await chrome.declarativeNetRequest.getDynamicRules()
-    const active = originStripRuleIsActive(after)
-    if (!active) console.error('[nox] DNR origin-strip rule failed to install — Notion MCP calls will 403')
-    return active
   } catch (error) {
     console.error('[nox] DNR rule installation threw', error)
-    return false
+    originStripStatus = { active: false }
   }
+  return originStripStatus
 }
 
 const STORAGE_KEY = 'nox.currentPage'
@@ -80,14 +80,9 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) =
     (message as { type?: string }).type === 'nox/get-dnr-status'
   ) {
     void (async () => {
-      let dnrActive = false
-      try {
-        dnrActive = originStripRuleIsActive(await chrome.declarativeNetRequest.getDynamicRules())
-        if (!dnrActive) dnrActive = await ensureOriginStripRule()
-      } catch (error) {
-        console.error('[nox] dnr status check failed', error)
-      }
-      sendResponse({ active: dnrActive } satisfies { active: boolean })
+      // Always re-verify live: cheap when healthy, self-healing when not.
+      const status = await ensureOriginStrip()
+      sendResponse(status)
     })()
     return true
   }
@@ -96,7 +91,7 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) =
 
 void (async () => {
   // The origin-strip rule must exist before the panel can talk to Notion.
-  await ensureOriginStripRule()
+  await ensureOriginStrip()
   // Warm the session storage on startup.
   await setActiveTab(await getActiveTabId())
 })()

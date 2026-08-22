@@ -18,15 +18,17 @@ export function ConnectionCard() {
     setConnection({ connectionStatus: 'connecting', connectionError: null })
     setBusy(true)
     try {
-      // Load-bearing precondition (RESEARCH §2.1): the DNR rule must be active.
-      // A messaging hiccup here must NOT block connect — the 403 classifier
-      // catches a genuinely missing rule as dnr-missing later.
+      // Load-bearing precondition (RESEARCH §2.1): a working origin-strip rule.
+      // The SW self-probes rule variants; failure detail flows into the error.
       try {
-        const dnr = (await chrome.runtime.sendMessage({ type: 'nox/get-dnr-status' })) as
-          | { active?: boolean }
+        const status = (await chrome.runtime.sendMessage({ type: 'nox/get-dnr-status' })) as
+          | { active?: boolean; variant?: string; probe?: string }
           | undefined
-        if (dnr?.active === false) {
-          throw new Error('Origin-strip rule inactive — reload the extension (chrome://extensions → ↻) and retry.')
+        if (status?.active === false) {
+          throw new Error(
+            `Origin-strip rule could not be verified (probe=${status.probe ?? 'none'}, variant=${status.variant ?? 'none'}). ` +
+              'Reload the extension at chrome://extensions and retry.',
+          )
         }
       } catch (e) {
         if (e instanceof Error && e.message.includes('Origin-strip')) throw e
