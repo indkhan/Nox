@@ -8,7 +8,7 @@ import { agentLoop } from '../lib/agent/panel'
 import { claimWindowRole, type WindowRole } from '../lib/history/panel'
 import { installLogCapture, logInfo } from '../lib/log'
 import { connectCodexAction } from './codex-connect'
-import { ChevronDownIcon, GearIcon, NoxMark, PlusCircleIcon } from './Icons'
+import { GearIcon, NoxMark, PlusCircleIcon } from './Icons'
 
 export function App() {
   const connectionStatus = useNoxStore((s) => s.connectionStatus)
@@ -24,8 +24,6 @@ export function App() {
     logInfo('Panel opened')
     void hydrateCurrentPage()
     void claimWindowRole().then(setRole)
-    // Auto-connect codex so the model dropdown is usable without opening Settings.
-    void connectCodexAction()
     void (async () => {
       const settings = await loadSettings()
       applyTheme(settings.theme)
@@ -37,6 +35,10 @@ export function App() {
       if (typeof title === 'string' && title) useNoxStore.getState().setThreadTitle(title)
     })()
   }, [])
+
+  useEffect(() => {
+    if (role === 'owner') void connectCodexAction()
+  }, [role])
 
   // Amber dot on the gear until both connections are up.
   const setupIncomplete = connectionStatus !== 'connected' || codexStatus !== 'connected'
@@ -51,15 +53,6 @@ export function App() {
         <h1 className="min-w-0 truncate text-sm font-semibold tracking-tight" data-testid="thread-title">
           {threadTitle}
         </h1>
-        <button
-          onClick={() => requestNewChat()}
-          aria-label="Open chat menu"
-          title="New chat"
-          data-testid="header-menu"
-          className="shrink-0 rounded p-0.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
-        >
-          <ChevronDownIcon />
-        </button>
         <span className="flex-1" />
         <button
           onClick={() => setSettingsOpen(!settingsOpen)}

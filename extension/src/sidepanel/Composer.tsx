@@ -68,6 +68,11 @@ export function Composer({
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => {
+            if (e.key === 'Escape' && busy) {
+              e.preventDefault()
+              onCancel()
+              return
+            }
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault()
               submit()

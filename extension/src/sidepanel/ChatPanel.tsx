@@ -189,7 +189,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
       {!hasMessages ? (
         <EmptyState onSend={(t) => void send(t)} />
       ) : (
-        <div ref={scrollRef} className="min-h-0 flex-1 space-y-5 overflow-y-auto px-3 pb-2 pt-1" aria-live="polite" data-testid="chat-messages">
+        <div ref={scrollRef} className="min-h-0 flex-1 space-y-5 overflow-y-auto px-3 pb-2 pt-1" data-testid="chat-messages">
           {turns.map(({ id, userText, view }) => (
             <div key={id} className="space-y-1.5">
               <div className="flex justify-end">
@@ -211,6 +211,10 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
           ))}
         </div>
       )}
+
+      <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {busy ? 'Nox is working' : ''}
+      </div>
 
       {!readOnly && <ApprovalCards />}
       {hasMessages && !readOnly && <UndoBar />}

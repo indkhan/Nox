@@ -7,6 +7,10 @@
   --nox-text: #f4f4f5;
   --nox-muted: #8b8b94;
   --nox-accent: #818cf8;
+  --nox-info: #7dd3fc;
+  --nox-active: #a5b4fc;
+  --nox-success: #6ee7b7;
+  --nox-danger: #fda4af;
   color-scheme: dark;
 }
 
@@ -49,6 +53,10 @@ body {
     --nox-text: #262624;
     --nox-muted: #71716b;
     --nox-accent: #4f46e5;
+    --nox-info: #0369a1;
+    --nox-active: #4338ca;
+    --nox-success: #047857;
+    --nox-danger: #be123c;
     color-scheme: light;
   }
 
@@ -74,6 +82,10 @@ body {
   --nox-text: #262624;
   --nox-muted: #71716b;
   --nox-accent: #4f46e5;
+  --nox-info: #0369a1;
+  --nox-active: #4338ca;
+  --nox-success: #047857;
+  --nox-danger: #be123c;
   color-scheme: light;
 }
 
@@ -90,6 +102,13 @@ body {
 :root[data-theme="light"] .border-zinc-700,
 :root[data-theme="light"] .border-zinc-800,
 :root[data-theme="light"] .border-zinc-900 { border-color: var(--nox-border) !important; }
+
+.nox-info { color: var(--nox-info); }
+.nox-active { color: var(--nox-active); }
+.nox-success { color: var(--nox-success); }
+.nox-danger { color: var(--nox-danger); }
+.nox-active-dot { background-color: var(--nox-active); }
+.nox-change-result { border-color: color-mix(in srgb, var(--nox-success) 35%, transparent); }
 
 @media (prefers-reduced-motion: reduce) {
   *,

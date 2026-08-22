@@ -17,7 +17,7 @@ export function ActivityTimeline({ items, active, onUndo }: { items: ActivityIte
   return (
     <div className="rounded-xl border border-zinc-800/80 bg-zinc-900/45 px-2.5 py-1.5" data-testid="activity-timeline">
       <button onClick={() => setOpen(!open)} aria-expanded={open} className="flex w-full items-center gap-2 py-1 text-left text-xs text-zinc-400 hover:text-zinc-200">
-        <span className={`h-2 w-2 shrink-0 rounded-full ${active ? 'animate-pulse bg-indigo-400 motion-reduce:animate-none' : 'bg-zinc-600'}`} />
+        <span className={`h-2 w-2 shrink-0 rounded-full ${active ? 'nox-active-dot animate-pulse motion-reduce:animate-none' : 'bg-zinc-600'}`} />
         <span className="min-w-0 flex-1 truncate">{summary}</span>
         <ChevronDownIcon className={`h-3 w-3 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
@@ -32,18 +32,18 @@ export function ActivityTimeline({ items, active, onUndo }: { items: ActivityIte
 
 function ActivityRow({ item, onUndo }: { item: ActivityItem; onUndo?: (journalId: string) => void }) {
   if (item.kind === 'reasoning') return <li className="py-1 text-xs text-zinc-500">{item.text}</li>
-  if (item.kind === 'search') return <li className="py-1 text-xs text-sky-300">{item.status === 'completed' ? 'Searched the web' : 'Searching the web…'}</li>
+  if (item.kind === 'search') return <li className="nox-info py-1 text-xs">{item.status === 'completed' ? 'Searched the web' : 'Searching the web…'}</li>
   const completed = item.status === 'completed'
   const base = toolActivityLabel(item.tool, item.args, completed)
   const label = item.status === 'failed' ? failedToolActivityLabel(item.tool) : base
   return (
     <li className={`flex items-start gap-2 py-1 text-xs ${completed ? 'nox-resolve' : ''}`}>
-      <span className={item.status === 'failed' ? 'text-rose-400' : completed ? 'text-emerald-400' : 'text-indigo-400'}>
+      <span className={item.status === 'failed' ? 'nox-danger' : completed ? 'nox-success' : 'nox-active'}>
         {item.status === 'failed' ? '×' : completed ? '✓' : '●'}
       </span>
       <div className="min-w-0 flex-1 text-zinc-300">
         <span>{label}</span>
-        {item.error && <span className="ml-1 text-rose-400">— {item.error}</span>}
+        {item.error && <span className="nox-danger ml-1">— {item.error}</span>}
         <ActivityResult item={item} />
         <details className="mt-1 text-[10px] text-zinc-600">
           <summary className="cursor-pointer">Technical details</summary>
@@ -51,11 +51,11 @@ function ActivityRow({ item, onUndo }: { item: ActivityItem; onUndo?: (journalId
           <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap">{JSON.stringify(item.args)}</pre>
         </details>
         {item.undoable && item.journalId && onUndo && (
-          <button onClick={() => onUndo(item.journalId!)} className="mt-1 text-[11px] text-indigo-300 hover:text-indigo-200">
+          <button onClick={() => onUndo(item.journalId!)} className="nox-active mt-1 text-[11px] underline-offset-2 hover:underline">
             Undo this change
           </button>
         )}
-        {item.undoError && <p className="mt-1 text-[11px] text-rose-400" role="alert">Undo failed: {item.undoError}</p>}
+        {item.undoError && <p className="nox-danger mt-1 text-[11px]" role="alert">Undo failed: {item.undoError}</p>}
       </div>
       {item.durationMs != null && <span className="tabular-nums text-zinc-600">{formatDuration(item.durationMs)}</span>}
     </li>
@@ -78,7 +78,7 @@ function ActivityResult({ item }: { item: Extract<ActivityItem, { kind: 'tool' }
   if (category === 'change') {
     const changes = Object.entries(item.args).filter(([key]) => !/^(id|page_id|data_source_id)$/.test(key)).slice(0, 4)
     return (
-      <div data-testid="change-result" className="mt-1 rounded-md border border-emerald-900/50 bg-emerald-950/20 px-2 py-1.5 text-[11px] text-zinc-400">
+      <div data-testid="change-result" className="nox-change-result mt-1 rounded-md border px-2 py-1.5 text-[11px] text-zinc-400">
         {changes.length ? changes.map(([key, value]) => `${key.replace(/_/g, ' ')}: ${compactValue(value)}`).join(' · ') : 'Change applied'}
       </div>
     )

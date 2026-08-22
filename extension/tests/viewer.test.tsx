@@ -5,6 +5,7 @@ vi.hoisted(() => {
   ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
   vi.stubGlobal('chrome', {
     runtime: { onMessage: { addListener: vi.fn() } },
+    storage: { local: { get: vi.fn(async () => ({})), set: vi.fn(async () => undefined) } },
   })
 })
 
@@ -39,6 +40,18 @@ describe('viewer mode', () => {
     expect(html).not.toContain('Attach images (coming soon)')
     expect(html).not.toContain('Voice input (coming soon)')
     expect(html).toContain('Model settings')
+  })
+
+  it('cancels a busy turn with Escape', async () => {
+    const onCancel = vi.fn()
+    const container = document.createElement('div')
+    const root = createRoot(container)
+    await act(async () => root.render(<Composer busy onSend={vi.fn()} onCancel={onCancel} />))
+    await act(async () => {
+      container.querySelector('textarea')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    })
+    expect(onCancel).toHaveBeenCalledOnce()
+    await act(async () => root.unmount())
   })
 
   it('hides mutation approvals in read-only windows', async () => {
