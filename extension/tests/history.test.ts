@@ -66,6 +66,18 @@ describe('persistent mutation journal', () => {
     const journal = new MutationJournal({ append: async () => undefined, list: async () => entries })
     expect((await journal.newestFirst()).map((entry) => entry.tool)).toEqual(['new', 'old'])
   })
+
+  it('can scope reads without starting a new mutation turn', async () => {
+    const journal = new MutationJournal()
+    journal.setThread('first')
+    await journal.record({ tool: 'first-write', args: {}, kind: 'write' })
+    journal.setThread('second')
+    await journal.record({ tool: 'second-write', args: {}, kind: 'write' })
+    journal.scopeThread('first')
+    expect((await journal.newestFirst()).map((entry) => entry.tool)).toEqual(['first-write'])
+    journal.scopeThread(null)
+    expect(await journal.newestFirst()).toEqual([])
+  })
 })
 
 describe('ThreadRepository', () => {
@@ -119,6 +131,19 @@ describe('ThreadRepository', () => {
     expect((await repo.getMessages(t.id))[0].activity).toEqual([
       expect.objectContaining({ id: 'call-1', status: 'completed' }),
     ])
+  })
+
+  it('keeps message order deterministic when the clock does not advance', async () => {
+    const now = Date.now
+    Date.now = () => 1234
+    try {
+      const thread = await repo.createThread()
+      await repo.appendMessage(thread.id, { id: 'z-user', role: 'user', text: 'question' })
+      await repo.appendMessage(thread.id, { id: 'a-assistant', role: 'assistant', text: 'answer' })
+      expect((await repo.getMessages(thread.id)).map((message) => message.text)).toEqual(['question', 'answer'])
+    } finally {
+      Date.now = now
+    }
   })
 
   it('persists the user immediately and upserts streamed assistant text', async () => {

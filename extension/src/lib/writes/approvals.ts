@@ -121,6 +121,7 @@ export class ApprovalEngine {
   }
 
   answer(id: number, decision: 'approve' | 'reject' | 'approve-all'): void {
+    if (!this.pending.has(id)) return
     if (decision === 'approve-all') this.approveAllUntilTurnEnd = true
     // Resolve every waiting card on approve-all; just this one otherwise.
     if (decision === 'approve-all') {

@@ -109,6 +109,7 @@ export class WriteGate {
     }
 
     const result = await this.deps.callTool(req.tool, stripReservedArgs(req.args), req.signal)
+    if (isToolError(result)) return result
     if (preImage.pageId) this.readHashes.delete(normalizeId(preImage.pageId) ?? preImage.pageId)
     const inverse = buildInverse(req.tool, req.args, preImage)
 
@@ -135,6 +136,10 @@ export class WriteGate {
     // Reserved for E7 bulk undo flows that bypass the guard deliberately.
     return false
   }
+}
+
+function isToolError(result: unknown): boolean {
+  return typeof result === 'object' && result != null && (result as { isError?: unknown }).isError === true
 }
 
 function textResult(text: string): unknown {

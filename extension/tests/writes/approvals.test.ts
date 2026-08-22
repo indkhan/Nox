@@ -120,4 +120,21 @@ describe('ApprovalEngine cards', () => {
     engine.rejectAllPending()
     await pending
   })
+
+  it('ignores approve-all from a stale cancelled card', async () => {
+    let notified: { id: number } | undefined
+    const engine = new ApprovalEngine((approval) => { notified = approval })
+    engine.beginTurn()
+    const cancelled = engine.request(WRITE_CALL, { action: 'require-approval', reasons: [] })
+    await Promise.resolve()
+    engine.rejectAllPending()
+    await expect(cancelled).resolves.toBe(false)
+    engine.answer(notified!.id, 'approve-all')
+
+    const next = engine.request(WRITE_CALL, { action: 'require-approval', reasons: [] })
+    await Promise.resolve()
+    expect(engine.pendingCount).toBe(1)
+    engine.rejectAllPending()
+    await next
+  })
 })

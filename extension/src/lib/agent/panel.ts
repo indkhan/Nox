@@ -63,7 +63,10 @@ export const agentLoop = new AgentLoop({
     writeGate.journal.setThread(historyThreadId ?? 'unscoped')
     writeGate.beginTurn()
   },
-  cancelPending: () => writeGate.approvals.rejectAllPending(),
+  cancelPending: () => {
+    writeGate.approvals.rejectAllPending()
+    for (const approval of useNoxStore.getState().pendingApprovals) useNoxStore.getState().removeApproval(approval.id)
+  },
   getDynamicTools: async () => toDynamicTools(await notion.listTools(), notion.capabilities),
   developerInstructions: buildDeveloperInstructions({
     userName: notion.identity?.userName,

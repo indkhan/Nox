@@ -11,7 +11,7 @@ const PAGE = 'a'.repeat(32)
 function makeGate(over: {
   mode?: Mode
   markdown?: () => string
-  callTool?: (name: string, args: Record<string, unknown>) => Promise<{ content: Array<{ type: string; text?: string }> }>
+  callTool?: (name: string, args: Record<string, unknown>) => Promise<{ content: Array<{ type: string; text?: string }>; isError?: boolean }>
   contextSet?: Set<string>
 } = {}) {
   let answer: 'approve' | 'reject' | null = null
@@ -112,6 +112,15 @@ describe('WriteGate', () => {
     const out = (await pending) as { isError?: boolean; content: Array<{ text: string }> }
     expect(out.isError).toBe(true)
     expect(out.content[0].text).toContain('PAGE_CHANGED_SINCE_READ')
+  })
+
+  it('does not journal a tool-declared failed write as applied', async () => {
+    const { gate, journal } = makeGate({ mode: 'auto', callTool: async () => ({
+      content: [{ type: 'text', text: 'write failed' }], isError: true,
+    }) })
+    const result = await gate.handle({ rid: 20, tool: 'notion-update-page', args: { page_id: PAGE }, namespace: null }) as { isError?: boolean }
+    expect(result.isError).toBe(true)
+    expect(await journal.newestFirst()).toEqual([])
   })
 
   it('aborts when the page changed since the agent originally read it', async () => {

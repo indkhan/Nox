@@ -17,6 +17,7 @@ export interface ThreadRepository {
 
 export function threadRepository(db: () => Promise<IDBPDatabase>): ThreadRepository {
   const uid = (): string => (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`)
+  let lastMessageTimestamp = 0
 
   return {
     async createThread(title = 'New chat') {
@@ -93,7 +94,8 @@ export function threadRepository(db: () => Promise<IDBPDatabase>): ThreadReposit
 
     async appendMessage(threadId, message) {
       const conn = await db()
-      const row: MessageRow = { ...message, id: message.id ?? uid(), threadId, ts: Date.now() }
+      lastMessageTimestamp = Math.max(Date.now(), lastMessageTimestamp + 1)
+      const row: MessageRow = { ...message, id: message.id ?? uid(), threadId, ts: lastMessageTimestamp }
       await conn.put('messages', row)
       const thread = (await conn.get('threads', threadId)) as ThreadRow | undefined
       if (thread) await conn.put('threads', { ...thread, updatedAt: Date.now() })

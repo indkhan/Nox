@@ -36,6 +36,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
 
   useEffect(() => {
     let cancelled = false
+    writeGate.journal.scopeThread(null)
     void chrome.storage.local.get('nox_thread_id').then(async (stored) => {
       const threadId = stored['nox_thread_id']
       if (typeof threadId !== 'string' || !threadId) return
@@ -43,6 +44,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
       if (cancelled || historyRestoreCancelledRef.current) return
       currentThreadIdRef.current = threadId
       setAgentHistoryThread(threadId)
+      writeGate.journal.scopeThread(threadId)
       agentLoop.restoreThread(thread?.codexThreadId ?? null)
       const journal = await writeGate.journal.newestFirst()
       const restored = await Promise.all(restoreTurns(messages, journal).map(async (turn) => ({
@@ -62,6 +64,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
     setTurns([])
     currentThreadIdRef.current = null
     setAgentHistoryThread(null)
+    writeGate.journal.scopeThread(null)
     agentLoop.newThread()
     setThreadTitle('New chat')
     void chrome.storage.local.remove(['nox_thread_title', 'nox_thread_id'])

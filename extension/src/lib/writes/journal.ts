@@ -56,12 +56,19 @@ export class MutationJournal {
   private turnId: string | null = null
   private undoInFlight = false
   private lastTimestamp = 0
+  private scopeActive = false
 
   constructor(private readonly store: JournalStore = memoryJournalStore()) {}
 
   setThread(threadId: string): void {
     this.threadId = threadId
+    this.scopeActive = true
     this.turnId = crypto.randomUUID()
+  }
+
+  scopeThread(threadId: string | null): void {
+    this.threadId = threadId
+    this.scopeActive = true
   }
 
   async record(input: Omit<JournalEntry, 'id' | 'ts' | 'threadId' | 'turnId' | 'status'>): Promise<JournalEntry> {
@@ -81,8 +88,9 @@ export class MutationJournal {
   /** Newest-first for the undo UI (MVP §6.5). */
   async newestFirst(): Promise<JournalEntry[]> {
     const entries = await this.store.list()
+    if (this.scopeActive && this.threadId == null) return []
     return entries
-      .filter((entry) => this.threadId == null || entry.threadId === this.threadId)
+      .filter((entry) => !this.scopeActive || entry.threadId === this.threadId)
       .sort((a, b) => b.ts - a.ts)
   }
 
