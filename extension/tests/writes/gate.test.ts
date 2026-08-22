@@ -195,6 +195,23 @@ describe('WriteGate', () => {
     expect(error).toHaveBeenCalledOnce()
     error.mockRestore()
   })
+
+  it('runs an explicitly approved undo through the mutation gate', async () => {
+    let executed = false
+    const { gate } = makeGate({
+      mode: 'ask',
+      callTool: async () => {
+        executed = true
+        return { content: [{ type: 'text', text: 'undone' }] }
+      },
+    })
+    await gate.handleApproved('notion-update-page', {
+      data: { page_id: PAGE },
+      command: { type: 'update_properties', properties: {} },
+    })
+    expect(executed).toBe(true)
+    expect(gate.approvals.pendingCount).toBe(0)
+  })
 })
 
 describe('MutationJournal undo ordering', () => {

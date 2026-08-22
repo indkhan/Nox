@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useNoxStore } from './store'
 import { writeGate } from '../lib/agent/panel'
-import { notion } from '../lib/notion/panel'
 import { undoNewest } from '../lib/writes/undo'
 
 type CardApproval = { id: number; tool: string; summary: string; payloadJson: string; reasons: string[] }
@@ -104,7 +103,7 @@ export function UndoBar({ readOnly = false }: { readOnly?: boolean }) {
 async function runUndo(setStatus: (s: string) => void, readOnly: boolean): Promise<void> {
   if (readOnly) return
   try {
-    await undoNewest(writeGate.journal, (tool, args) => notion.scheduleCallTool(tool, args))
+    await undoNewest(writeGate.journal, (tool, args) => writeGate.handleApproved(tool, args))
     setStatus('Undone — note block ids change on content restores')
   } catch (e) {
     setStatus(`Partial failure: ${e instanceof Error ? e.message : String(e)}`)

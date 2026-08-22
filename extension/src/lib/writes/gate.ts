@@ -41,6 +41,18 @@ export class WriteGate {
   }
 
   async handle(req: ToolCallRequest): Promise<unknown> {
+    return this.handleRequest(req, false)
+  }
+
+  async handleApproved(tool: string, args: Record<string, unknown>): Promise<unknown> {
+    const result = await this.handleRequest({ rid: 0, tool, args, namespace: null, provenance: 'user-only' }, true)
+    if (isErrorResult(result)) {
+      throw new Error(result.content.map((part) => part.text ?? '').join('\n'))
+    }
+    return result
+  }
+
+  private async handleRequest(req: ToolCallRequest, approved: boolean): Promise<unknown> {
     const classification = classifyToolCall(req.tool, req.args)
     if (!classification.mutates) {
       const result = await this.deps.callTool(req.tool, req.args, req.signal)
@@ -59,7 +71,7 @@ export class WriteGate {
     if (verdict.action === 'refuse') {
       return textResult(`REFUSED: ${verdict.reasons.join('; ')}. No changes were made.`)
     }
-    if (verdict.action === 'require-approval') {
+    if (verdict.action === 'require-approval' && !approved) {
       const approved = await this.approvals.request({ ...classification, name: req.tool, args: req.args }, verdict)
       if (!approved) {
         return textResult('REJECTED_BY_USER: the user declined this change. Do not retry it without asking.')
@@ -140,4 +152,8 @@ function stripReservedArgs(args: Record<string, unknown>): Record<string, unknow
   const { injected_request, ...rest } = args
   void injected_request
   return rest
+}
+
+function isErrorResult(result: unknown): result is { isError: true; content: Array<{ text?: string }> } {
+  return typeof result === 'object' && result !== null && (result as { isError?: boolean }).isError === true
 }
