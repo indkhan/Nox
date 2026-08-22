@@ -66,13 +66,14 @@ export interface PageWithContext extends CurrentPage {
 export async function fetchCurrentPageContext(page: CurrentPage): Promise<PageWithContext> {
   try {
     const result = await notion.scheduleCallTool('notion-fetch', { id: page.pageId })
+    const markdown = result.content
+      .filter((c) => c.type === 'text')
+      .map((c) => c.text)
+      .join('\n')
+    await writeGate.rememberPageRead(page.pageId, markdown)
     return {
       ...page,
-      markdown: result.content
-        .filter((c) => c.type === 'text')
-        .map((c) => c.text)
-        .join('\n')
-        .slice(0, 8000),
+      markdown: markdown.slice(0, 8000),
     }
   } catch {
     return page // content is optional context; never block the turn on it

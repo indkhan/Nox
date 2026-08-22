@@ -4,6 +4,8 @@ import { buildInverse, type PreImage } from './inverse'
 import { capturePageSnapshot, assertUnchanged, GuardViolation, type PageSnapshot } from './guard'
 import { ApprovalEngine, evaluateApproval, type Mode } from './approvals'
 import { MutationJournal } from './journal'
+import { hashMarkdown } from './guard'
+import { normalizeId } from '../../shared/notion-page'
 
 export interface WriteGateDeps {
   callTool: (name: string, args: Record<string, unknown>) => Promise<{ content: Array<{ type: string; text?: string }> }>
@@ -23,6 +25,7 @@ const CONTENT_WRITE_KINDS = new Set(['content-replace', 'content-update'])
 export class WriteGate {
   readonly approvals: ApprovalEngine
   readonly journal: MutationJournal
+  private readonly readHashes = new Map<string, string>()
 
   constructor(private readonly deps: WriteGateDeps) {
     this.journal = deps.journal ?? new MutationJournal()
@@ -33,10 +36,20 @@ export class WriteGate {
     this.approvals.beginTurn()
   }
 
+  async rememberPageRead(pageId: string, markdown: string): Promise<void> {
+    this.readHashes.set(normalizeId(pageId) ?? pageId, await hashMarkdown(markdown))
+  }
+
   async handle(req: ToolCallRequest): Promise<unknown> {
     const classification = classifyToolCall(req.tool, req.args)
     if (!classification.mutates) {
-      return await this.deps.callTool(req.tool, req.args)
+      const result = await this.deps.callTool(req.tool, req.args)
+      const pageId = req.tool === 'notion-fetch' ? firstString(req.args.id) ?? firstString(req.args.page_id) : undefined
+      if (pageId) {
+        const markdown = result.content.filter((c) => c.type === 'text').map((c) => c.text ?? '').join('\n')
+        await this.rememberPageRead(pageId, markdown)
+      }
+      return result
     }
 
     const verdict = evaluateApproval({ ...classification, name: req.tool, args: req.args }, {
@@ -61,6 +74,12 @@ export class WriteGate {
         const pageId = firstString(req.args.page_id) ?? firstString((req.args.data as Record<string, unknown> | undefined)?.page_id)
         if (pageId) {
           snapshot = await capturePageSnapshot(this.deps.fetchPageMarkdown, pageId)
+          const expectedHash = this.readHashes.get(normalizeId(pageId) ?? pageId)
+          if (expectedHash && expectedHash !== snapshot.hash) {
+            throw new GuardViolation(
+              'PAGE_CHANGED_SINCE_READ: this page was edited in Notion after Nox read it. Re-read the page and try again — refusing to overwrite the newer edits.',
+            )
+          }
           preImage = {
             kind: classification.kind,
             pageId,
@@ -79,6 +98,7 @@ export class WriteGate {
     }
 
     const result = await this.deps.callTool(req.tool, stripReservedArgs(req.args))
+    if (preImage.pageId) this.readHashes.delete(normalizeId(preImage.pageId) ?? preImage.pageId)
     const inverse = buildInverse(req.tool, req.args, preImage)
 
     await this.journal.record({

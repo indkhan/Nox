@@ -110,6 +110,32 @@ describe('WriteGate', () => {
     expect(out.content[0].text).toContain('PAGE_CHANGED_SINCE_READ')
   })
 
+  it('aborts when the page changed since the agent originally read it', async () => {
+    let markdown = '# Original'
+    let writes = 0
+    const { gate } = makeGate({
+      mode: 'auto',
+      contextSet: new Set([PAGE]),
+      markdown: () => markdown,
+      callTool: async (name) => {
+        if (name === 'notion-fetch') return { content: [{ type: 'text', text: markdown }] }
+        writes++
+        return { content: [{ type: 'text', text: 'written' }] }
+      },
+    })
+    await gate.handle({ rid: 1, tool: 'notion-fetch', args: { id: PAGE }, namespace: null })
+    markdown = '# Human edit'
+    const out = (await gate.handle({
+      rid: 2,
+      tool: 'notion-update-page',
+      args: { data: { page_id: PAGE }, command: { type: 'replace_content', content: '# Agent edit' } },
+      namespace: null,
+    })) as { isError?: boolean; content: Array<{ text: string }> }
+    expect(out.isError).toBe(true)
+    expect(out.content[0].text).toContain('PAGE_CHANGED_SINCE_READ')
+    expect(writes).toBe(0)
+  })
+
   it('marks rich-page content replacements not-undoable with a reason', async () => {
     const { gate, journal } = makeGate({ mode: 'ask', markdown: () => '# Page\nsynced_block here' })
     const pending = gate.handle({
