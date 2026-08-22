@@ -15,4 +15,16 @@ describe('ActivityTimeline', () => {
     expect(html).toContain('conflict')
     expect(html).toContain('Milestones and launch risks')
   })
+
+  it('selects table, context, and change previews by tool type', () => {
+    const html = renderToStaticMarkup(<ActivityTimeline active items={[
+      { kind: 'tool', id: 'q', tool: 'notion-query-data-sources', args: {}, status: 'completed', resultText: '{"columns":["Name"],"rows":[["Alpha"]]}' },
+      { kind: 'tool', id: 'p', tool: 'notion-fetch', args: { title: 'Brief' }, status: 'completed', resultText: 'Page body' },
+      { kind: 'tool', id: 'u', tool: 'notion-update-page', args: { page_id: 'p1', status: 'In review' }, status: 'completed' },
+    ]} />)
+
+    expect(html).toContain('data-testid="results-table"')
+    expect(html).toContain('data-testid="context-result"')
+    expect(html).toContain('data-testid="change-result"')
+  })
 })

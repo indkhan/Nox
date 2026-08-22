@@ -2,6 +2,8 @@ import { useMemo, useState } from 'react'
 import { renderMarkdown } from '../lib/markdown'
 import { ChevronDownIcon } from './Icons'
 import { failedToolActivityLabel, toolActivityLabel, type ActivityItem } from '../lib/agent/activity'
+import { toResultTable } from '../lib/db/query'
+import { ResultsTable } from './ResultsTable'
 
 export function ActivityTimeline({ items, active }: { items: ActivityItem[]; active?: boolean }) {
   const [open, setOpen] = useState(active === true)
@@ -39,18 +41,43 @@ function ActivityRow({ item }: { item: ActivityItem }) {
       <span className={item.status === 'failed' ? 'text-rose-400' : completed ? 'text-emerald-400' : 'text-indigo-400'}>
         {item.status === 'failed' ? '×' : completed ? '✓' : '●'}
       </span>
-      <span className="min-w-0 flex-1 text-zinc-300">
+      <div className="min-w-0 flex-1 text-zinc-300">
         <span>{label}</span>
         {item.error && <span className="ml-1 text-rose-400">— {item.error}</span>}
-        {item.resultText && (
-          <span className="mt-1 block max-h-16 overflow-hidden rounded-md border border-zinc-800 bg-zinc-950/60 px-2 py-1.5 text-[11px] leading-relaxed text-zinc-500">
-            {item.resultText}
-          </span>
-        )}
-      </span>
+        <ActivityResult item={item} />
+      </div>
       {item.durationMs != null && <span className="tabular-nums text-zinc-600">{formatDuration(item.durationMs)}</span>}
     </li>
   )
+}
+
+function ActivityResult({ item }: { item: Extract<ActivityItem, { kind: 'tool' }> }) {
+  if (item.status !== 'completed') return null
+  if ((item.tool === 'notion-query-data-sources' || item.tool === 'notion-search') && item.resultText) {
+    return <div className="mt-1"><ResultsTable table={toResultTable({ content: [{ type: 'text', text: item.resultText }] })} /></div>
+  }
+  if (item.tool === 'notion-fetch' && item.resultText) {
+    return (
+      <div data-testid="context-result" className="mt-1 max-h-20 overflow-hidden rounded-md border border-zinc-800 bg-zinc-950/60 px-2 py-1.5 text-[11px] leading-relaxed text-zinc-500">
+        {item.resultText}
+      </div>
+    )
+  }
+  if (/update|create|move/.test(item.tool)) {
+    const changes = Object.entries(item.args).filter(([key]) => !/^(id|page_id|data_source_id)$/.test(key)).slice(0, 4)
+    return (
+      <div data-testid="change-result" className="mt-1 rounded-md border border-emerald-900/50 bg-emerald-950/20 px-2 py-1.5 text-[11px] text-zinc-400">
+        {changes.length ? changes.map(([key, value]) => `${key.replace(/_/g, ' ')}: ${compactValue(value)}`).join(' · ') : 'Change applied'}
+      </div>
+    )
+  }
+  if (!item.resultText) return null
+  return <div className="mt-1 max-h-16 overflow-hidden rounded-md border border-zinc-800 bg-zinc-950/60 px-2 py-1.5 text-[11px] leading-relaxed text-zinc-500">{item.resultText}</div>
+}
+
+function compactValue(value: unknown): string {
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value)
+  return JSON.stringify(value).slice(0, 80)
 }
 
 function formatDuration(ms: number): string {
