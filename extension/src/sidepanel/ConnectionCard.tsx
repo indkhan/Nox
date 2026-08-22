@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useNoxStore } from './store'
 import { launchConsentFlow, notion } from '../lib/notion/panel'
+import { logError, logInfo } from '../lib/log'
 
 /** Dev-only: paste a token JSON (from spikes/.notion-token.json) to skip consent. */
 async function importDevToken(): Promise<void> {
@@ -17,6 +18,7 @@ export function ConnectionCard() {
   async function connect() {
     setConnection({ connectionStatus: 'connecting', connectionError: null })
     setBusy(true)
+    logInfo('Notion connect: starting')
     try {
       // Load-bearing precondition (RESEARCH §2.1): a working origin-strip rule.
       // The SW self-probes rule variants; failure detail flows into the error.
@@ -36,6 +38,7 @@ export function ConnectionCard() {
       }
 
       const info = await notion.connect(launchConsentFlow)
+      logInfo(`Notion connected: ${info.identity.workspaceName ?? info.identity.userName ?? 'workspace'}`)
       setConnection({
         connectionStatus: 'connected',
         identity: info.identity,
@@ -44,6 +47,7 @@ export function ConnectionCard() {
     } catch (e) {
       const raw = e instanceof Error ? e.message : String(e)
       console.error('[nox] Notion connect failed:', e)
+      logError(`Notion connect failed: ${raw}`)
       const explained = notion.explain(e)
       // Friendly line + raw hop-level detail ([discovery]/[register]/[consent]/…)
       const detail = explained.userMessage === raw ? raw : `${explained.userMessage} (${raw})`
@@ -55,6 +59,7 @@ export function ConnectionCard() {
 
   async function disconnect() {
     setBusy(true)
+    logInfo('Notion disconnect')
     try {
       await notion.signOut()
       setConnection({ connectionStatus: 'disconnected', identity: null, limitations: [], connectionError: null })

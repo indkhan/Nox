@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useNoxStore } from './store'
 import { connectCodex, bridge, codex, type CodexSession } from '../lib/codex/panel'
 import { classifyBridgeFailure, healthHint } from '../lib/codex/health'
+import { logError, logInfo } from '../lib/log'
 
 export function BridgeCard() {
   const setCodex = useNoxStore((s) => s.setCodex)
@@ -10,9 +11,11 @@ export function BridgeCard() {
 
   async function connect() {
     setBusy(true)
+    logInfo('Codex connect: starting bridge')
     setCodex({ codexStatus: 'connecting', codexHint: null })
     try {
       const session: CodexSession = await connectCodex()
+      logInfo(`Codex connected: ${session.userAgent} (${session.models.length} models)`)
       setCodex({
         codexStatus: 'connected',
         codexVersion: session.userAgent,
@@ -22,6 +25,7 @@ export function BridgeCard() {
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e)
       const health = classifyBridgeFailure(message)
+      logError(`Codex connect failed: ${message}`)
       // Leave the port clean for the next attempt.
       try {
         bridge.disconnect()
