@@ -30,6 +30,7 @@ export class AgentLoop {
   private toolUsedThisTurn = false
   private untrustedContextThisTurn = false
   private turnAbort: AbortController | null = null
+  private turnRunning = false
   /** User-selected model/effort applied on the next thread start or resume. */
   private overrides: Partial<ThreadSettings> = {}
 
@@ -100,6 +101,19 @@ export class AgentLoop {
   async sendUserMessage(
     text: string,
     opts: { currentPage?: CurrentPage & { markdown?: string }; timeoutMs?: number } = {},
+  ): Promise<{ text: string; interrupted: boolean }> {
+    if (this.turnRunning) throw new Error('turn already running')
+    this.turnRunning = true
+    try {
+      return await this.runUserMessage(text, opts)
+    } finally {
+      this.turnRunning = false
+    }
+  }
+
+  private async runUserMessage(
+    text: string,
+    opts: { currentPage?: CurrentPage & { markdown?: string }; timeoutMs?: number },
   ): Promise<{ text: string; interrupted: boolean }> {
     this.cancelled = false
     this.toolUsedThisTurn = false

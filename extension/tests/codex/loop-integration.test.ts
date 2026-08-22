@@ -206,4 +206,20 @@ describe('AgentLoop integration (scripted codex)', () => {
     loop.newThread()
     expect(loop.currentThreadId).toBeNull()
   })
+
+  it('rejects a second turn before resetting active turn state', async () => {
+    let release!: () => void
+    const blocked = new Promise<unknown[]>((resolve) => { release = () => resolve([]) })
+    loop = new AgentLoop({
+      bridge: bridge as unknown as NativeBridge,
+      codex,
+      executor,
+      getDynamicTools: () => blocked,
+      developerInstructions: buildInstructionsStub(),
+    })
+    const first = loop.sendUserMessage('first')
+    await expect(loop.sendUserMessage('second')).rejects.toThrow('turn already running')
+    release()
+    await first
+  })
 })
