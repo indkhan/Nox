@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyActivityEvent, type ActivityItem } from '../src/lib/agent/activity'
+import { applyActivityEvent, toolActivityLabel, type ActivityItem } from '../src/lib/agent/activity'
 
 describe('agent activity', () => {
   it('correlates a completed tool with its running activity', () => {
@@ -27,5 +27,17 @@ describe('agent activity', () => {
 
     expect(items.map((item) => item.kind)).toEqual(['reasoning', 'search', 'tool'])
     expect(items[2]).toMatchObject({ status: 'failed', error: 'rate limited' })
+  })
+})
+
+describe('tool activity labels', () => {
+  it('describes known Notion tools using their target', () => {
+    expect(toolActivityLabel('notion-fetch', { title: 'Launch plan' })).toBe('Reading “Launch plan”')
+    expect(toolActivityLabel('notion-search', { query: 'roadmap' })).toBe('Searching for “roadmap”')
+    expect(toolActivityLabel('notion-update-page', { page_id: 'p1' })).toBe('Updating a page')
+  })
+
+  it('turns unknown tool names into readable labels', () => {
+    expect(toolActivityLabel('custom_sync_records', {})).toBe('Custom sync records')
   })
 })

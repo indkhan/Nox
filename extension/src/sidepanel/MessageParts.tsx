@@ -1,6 +1,56 @@
 import { useMemo, useState } from 'react'
 import { renderMarkdown } from '../lib/markdown'
 import { ChevronDownIcon } from './Icons'
+import { failedToolActivityLabel, toolActivityLabel, type ActivityItem } from '../lib/agent/activity'
+
+export function ActivityTimeline({ items, active }: { items: ActivityItem[]; active?: boolean }) {
+  const [open, setOpen] = useState(active === true)
+  if (items.length === 0 && !active) return null
+  const tools = items.filter((item) => item.kind === 'tool')
+  const running = [...items].reverse().find((item) => item.kind === 'tool' && item.status === 'running')
+  const summary = running?.kind === 'tool'
+    ? toolActivityLabel(running.tool, running.args)
+    : active ? 'Thinking…' : `${tools.length} action${tools.length === 1 ? '' : 's'}`
+
+  return (
+    <div className="rounded-xl border border-zinc-800/80 bg-zinc-900/45 px-2.5 py-1.5" data-testid="activity-timeline">
+      <button onClick={() => setOpen(!open)} aria-expanded={open} className="flex w-full items-center gap-2 py-1 text-left text-xs text-zinc-400 hover:text-zinc-200">
+        <span className={`h-2 w-2 shrink-0 rounded-full ${active ? 'animate-pulse bg-indigo-400 motion-reduce:animate-none' : 'bg-zinc-600'}`} />
+        <span className="min-w-0 flex-1 truncate">{summary}</span>
+        <ChevronDownIcon className={`h-3 w-3 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && items.length > 0 && (
+        <ol className="ml-1 border-l border-zinc-800 py-1 pl-3">
+          {items.map((item) => <ActivityRow key={item.id} item={item} />)}
+        </ol>
+      )}
+    </div>
+  )
+}
+
+function ActivityRow({ item }: { item: ActivityItem }) {
+  if (item.kind === 'reasoning') return <li className="py-1 text-xs text-zinc-500">{item.text}</li>
+  if (item.kind === 'search') return <li className="py-1 text-xs text-sky-300">Searching the web…</li>
+  const completed = item.status === 'completed'
+  const base = toolActivityLabel(item.tool, item.args, completed)
+  const label = item.status === 'failed' ? failedToolActivityLabel(item.tool) : base
+  return (
+    <li className="flex items-start gap-2 py-1 text-xs">
+      <span className={item.status === 'failed' ? 'text-rose-400' : completed ? 'text-emerald-400' : 'text-indigo-400'}>
+        {item.status === 'failed' ? '×' : completed ? '✓' : '●'}
+      </span>
+      <span className="min-w-0 flex-1 text-zinc-300">
+        {label}
+        {item.error && <span className="ml-1 text-rose-400">— {item.error}</span>}
+      </span>
+      {item.durationMs != null && <span className="tabular-nums text-zinc-600">{formatDuration(item.durationMs)}</span>}
+    </li>
+  )
+}
+
+function formatDuration(ms: number): string {
+  return ms < 100 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`
+}
 
 /** One collapsible progress block per assistant turn (MVP §7). */
 export interface ProgressStep {

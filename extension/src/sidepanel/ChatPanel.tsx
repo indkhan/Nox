@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNoxStore } from './store'
 import { agentLoop, fetchCurrentPageContext, setAgentHistoryThread } from '../lib/agent/panel'
-import { AssistantMarkdown, ProgressBlock, type ProgressStep } from './MessageParts'
+import { ActivityTimeline, AssistantMarkdown } from './MessageParts'
+import { applyActivityEvent, type ActivityItem } from '../lib/agent/activity'
 import { Composer } from './Composer'
 import { EmptyState } from './EmptyState'
 import { ApprovalCards, UndoBar } from './ApprovalCards'
@@ -10,7 +11,7 @@ import { startPersistedTurn } from '../lib/history/turn'
 import { logError, logInfo } from '../lib/log'
 
 interface TurnView {
-  progress: ProgressStep[]
+  activity: ActivityItem[]
   answer: string
   error: string | null
   pending: boolean
@@ -46,12 +47,12 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
   async function send(text: string) {
     if (busy || readOnly) return
     if (connectionStatus !== 'connected') {
-      setTurns((t) => [...t, { userText: text, view: { progress: [], answer: '', error: 'Connect Notion first — open Settings (top right) to connect.', pending: false } }])
+      setTurns((t) => [...t, { userText: text, view: { activity: [], answer: '', error: 'Connect Notion first — open Settings (top right) to connect.', pending: false } }])
       return
     }
     setBusy(true)
     logInfo(`Send: ${text.slice(0, 120)}`)
-    setTurns((t) => [...t, { userText: text, view: { progress: [], answer: '', error: null, pending: true } }])
+    setTurns((t) => [...t, { userText: text, view: { activity: [], answer: '', error: null, pending: true } }])
     const patch = (fn: (v: TurnView) => TurnView) =>
       setTurns((all) => {
         const copy = [...all]
@@ -59,6 +60,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
         return copy
       })
     let pendingReasoning = ''
+    let currentActivity: ActivityItem[] = []
     let streamedAnswer = ''
     let unsubscribe: (() => void) | null = null
     let persisted: Awaited<ReturnType<typeof startPersistedTurn>> | null = null
@@ -81,29 +83,29 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
             break
           case 'web-search':
             logInfo('Web search started')
-            patch((v) => ({ ...v, progress: [...v.progress, { kind: 'web-search', label: 'Searching the web' }] }))
+            currentActivity = applyActivityEvent(currentActivity, event)
+            patch((v) => ({ ...v, activity: currentActivity }))
             break
           case 'tool-call': {
-            const steps: ProgressStep[] = []
             if (pendingReasoning) {
-              steps.push({ kind: 'reasoning', label: 'Thought', detail: pendingReasoning.slice(0, 120) })
+              currentActivity = applyActivityEvent(currentActivity, { kind: 'reasoning', text: pendingReasoning.slice(0, 240) })
               pendingReasoning = ''
             }
-            steps.push({
-              kind: 'tool',
-              label: event.tool,
-              detail: JSON.stringify(event.args).slice(0, 80),
-            })
+            currentActivity = applyActivityEvent(currentActivity, event)
             logInfo(`Tool call: ${event.tool}`)
-            patch((v) => ({ ...v, progress: [...v.progress, ...steps] }))
+            patch((v) => ({ ...v, activity: currentActivity }))
             break
           }
+          case 'tool-completed':
+            currentActivity = applyActivityEvent(currentActivity, event)
+            patch((v) => ({ ...v, activity: currentActivity }))
+            break
           case 'usage':
             lastUsageRef.current = (event.usage as Record<string, number> | null) ?? null
             break
           case 'text-delta':
             streamedAnswer += event.text
-            void persisted?.persistAssistant(streamedAnswer).catch(() => undefined)
+            void persisted?.persistAssistant(streamedAnswer, undefined, currentActivity).catch(() => undefined)
             patch((v) => ({ ...v, answer: v.answer + event.text }))
             scrollToEnd()
             break
@@ -115,7 +117,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
 
       const result = await agentLoop.sendUserMessage(text, { currentPage: pageContext ?? undefined })
 
-      await persisted?.persistAssistant(result.text || streamedAnswer || v_error_placeholder(), lastUsageRef.current ?? undefined).catch(() => undefined)
+      await persisted?.persistAssistant(result.text || streamedAnswer || v_error_placeholder(), lastUsageRef.current ?? undefined, currentActivity).catch(() => undefined)
 
       if (threadTitle === 'New chat') {
         const title = text.replace(/\s+/g, ' ').trim().slice(0, 48) || 'New chat'
@@ -149,7 +151,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
               <div className="flex justify-end">
                 <span className="max-w-[85%] whitespace-pre-wrap rounded-2xl bg-zinc-800 px-3.5 py-2 text-sm leading-relaxed">{userText}</span>
               </div>
-              {(view.progress.length > 0 || view.pending) && <ProgressBlock steps={view.progress} active={view.pending} />}
+              {(view.activity.length > 0 || view.pending) && <ActivityTimeline items={view.activity} active={view.pending} />}
               {view.answer && <AssistantMarkdown markdown={view.answer} />}
               {view.error && (
                 <p className="rounded-md border border-amber-800/50 bg-amber-950/40 px-2 py-1.5 text-xs text-amber-400" role="alert">

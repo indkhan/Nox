@@ -47,3 +47,41 @@ export function applyActivityEvent(items: ActivityItem[], event: ActivityEvent):
   }
   return next
 }
+
+export function toolActivityLabel(tool: string, args: Record<string, unknown>, completed = false): string {
+  const named = stringArg(args, 'title', 'query', 'name')
+  const labels: Record<string, [string, string]> = {
+    'notion-fetch': ['Reading', 'Read'],
+    'notion-search': ['Searching for', 'Searched for'],
+    'notion-update-page': ['Updating a page', 'Updated a page'],
+    'notion-create-pages': ['Creating pages', 'Created pages'],
+    'notion-query-data-sources': ['Querying a database', 'Queried a database'],
+    'notion-move-pages': ['Moving pages', 'Moved pages'],
+  }
+  const pair = labels[tool]
+  if (!pair) return humanize(tool)
+  const label = pair[completed ? 1 : 0]
+  return named && (tool === 'notion-fetch' || tool === 'notion-search') ? `${label} “${named}”` : label
+}
+
+export function failedToolActivityLabel(tool: string): string {
+  const labels: Record<string, string> = {
+    'notion-fetch': 'read a page',
+    'notion-search': 'search the workspace',
+    'notion-update-page': 'update a page',
+    'notion-create-pages': 'create pages',
+    'notion-query-data-sources': 'query a database',
+    'notion-move-pages': 'move pages',
+  }
+  return `Failed to ${labels[tool] ?? humanize(tool).toLowerCase()}`
+}
+
+function stringArg(args: Record<string, unknown>, ...keys: string[]): string | null {
+  for (const key of keys) if (typeof args[key] === 'string' && args[key]) return args[key] as string
+  return null
+}
+
+function humanize(tool: string): string {
+  const text = tool.replace(/^notion[-_]/, '').replace(/[-_]+/g, ' ')
+  return text.charAt(0).toUpperCase() + text.slice(1)
+}
