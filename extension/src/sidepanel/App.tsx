@@ -3,7 +3,7 @@ import { hydrateCurrentPage, useNoxStore } from './store'
 import { ChatPanel } from './ChatPanel'
 import { SettingsModal } from './SettingsModal'
 import { ViewerBanner } from './Onboarding'
-import { loadSettings } from '../lib/settings'
+import { applyTheme, loadSettings } from '../lib/settings'
 import { agentLoop } from '../lib/agent/panel'
 import { claimWindowRole, type WindowRole } from '../lib/history/panel'
 import { installLogCapture, logInfo } from '../lib/log'
@@ -28,6 +28,7 @@ export function App() {
     void connectCodexAction()
     void (async () => {
       const settings = await loadSettings()
+      applyTheme(settings.theme)
       if (settings.model || settings.effort) {
         agentLoop.setOverrides({ model: settings.model, effort: settings.effort })
       }

@@ -1,7 +1,10 @@
 export interface NoxSettings {
   model?: string
   effort?: string
+  theme?: ThemePreference
 }
+
+export type ThemePreference = 'system' | 'light' | 'dark'
 
 const KEY = 'nox.settings'
 
@@ -12,4 +15,9 @@ export async function loadSettings(): Promise<NoxSettings> {
 
 export async function saveSettings(settings: NoxSettings): Promise<void> {
   await chrome.storage.local.set({ [KEY]: settings })
+}
+
+export function applyTheme(theme: ThemePreference = 'system'): void {
+  if (theme === 'system') delete document.documentElement.dataset.theme
+  else document.documentElement.dataset.theme = theme
 }

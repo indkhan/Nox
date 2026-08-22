@@ -10,6 +10,7 @@ import {
   subscribeLogs,
   type LogEntry,
 } from '../lib/log'
+import { applyTheme, loadSettings, saveSettings, type ThemePreference } from '../lib/settings'
 
 /** Full-panel settings: connections, diagnostics, and local data controls. */
 export function SettingsModal() {
@@ -49,11 +50,39 @@ export function SettingsModal() {
           </div>
         </section>
 
+        <ThemeSection />
+
         <LogsSection />
 
         <DataSection />
       </div>
     </div>
+  )
+}
+
+function ThemeSection() {
+  const [theme, setTheme] = useState<ThemePreference>('system')
+  useEffect(() => { void loadSettings().then((settings) => setTheme(settings.theme ?? 'system')) }, [])
+
+  function change(next: ThemePreference) {
+    setTheme(next)
+    applyTheme(next)
+    void loadSettings().then((settings) => saveSettings({ ...settings, theme: next }))
+  }
+
+  return (
+    <section aria-label="Appearance">
+      <h3 className="mb-1.5 text-xs uppercase tracking-wide text-zinc-500">Appearance</h3>
+      <label className="flex items-center justify-between rounded-md border border-zinc-800 bg-zinc-900/60 p-2.5 text-xs">
+        Theme
+        <select value={theme} onChange={(event) => change(event.target.value as ThemePreference)} className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1 text-zinc-300">
+          <option value="system">System</option>
+          <option value="light">Light</option>
+          <option value="dark">Dark</option>
+        </select>
+      </label>
+      <p className="mt-1 text-[10px] text-zinc-600">Choose Light or Dark to match a Notion theme that differs from your system.</p>
+    </section>
   )
 }
 

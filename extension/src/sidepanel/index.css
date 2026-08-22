@@ -42,7 +42,7 @@ body {
 }
 
 @media (prefers-color-scheme: light) {
-  :root {
+  :root:not([data-theme="dark"]) {
     --nox-surface: #f7f7f5;
     --nox-surface-raised: #ffffff;
     --nox-border: #deded9;
@@ -52,20 +52,44 @@ body {
     color-scheme: light;
   }
 
-  #root > div,
-  .bg-zinc-950 { background-color: var(--nox-surface) !important; }
-  .bg-zinc-900,
-  .bg-zinc-800 { background-color: var(--nox-surface-raised) !important; }
-  .text-zinc-100,
-  .text-zinc-200,
-  .text-zinc-300 { color: var(--nox-text) !important; }
-  .text-zinc-400,
-  .text-zinc-500,
-  .text-zinc-600 { color: var(--nox-muted) !important; }
-  .border-zinc-700,
-  .border-zinc-800,
-  .border-zinc-900 { border-color: var(--nox-border) !important; }
+  :root:not([data-theme="dark"]) #root > div,
+  :root:not([data-theme="dark"]) .bg-zinc-950 { background-color: var(--nox-surface) !important; }
+  :root:not([data-theme="dark"]) .bg-zinc-900,
+  :root:not([data-theme="dark"]) .bg-zinc-800 { background-color: var(--nox-surface-raised) !important; }
+  :root:not([data-theme="dark"]) .text-zinc-100,
+  :root:not([data-theme="dark"]) .text-zinc-200,
+  :root:not([data-theme="dark"]) .text-zinc-300 { color: var(--nox-text) !important; }
+  :root:not([data-theme="dark"]) .text-zinc-400,
+  :root:not([data-theme="dark"]) .text-zinc-500,
+  :root:not([data-theme="dark"]) .text-zinc-600 { color: var(--nox-muted) !important; }
+  :root:not([data-theme="dark"]) .border-zinc-700,
+  :root:not([data-theme="dark"]) .border-zinc-800,
+  :root:not([data-theme="dark"]) .border-zinc-900 { border-color: var(--nox-border) !important; }
 }
+
+:root[data-theme="light"] {
+  --nox-surface: #f7f7f5;
+  --nox-surface-raised: #ffffff;
+  --nox-border: #deded9;
+  --nox-text: #262624;
+  --nox-muted: #71716b;
+  --nox-accent: #4f46e5;
+  color-scheme: light;
+}
+
+:root[data-theme="light"] #root > div,
+:root[data-theme="light"] .bg-zinc-950 { background-color: var(--nox-surface) !important; }
+:root[data-theme="light"] .bg-zinc-900,
+:root[data-theme="light"] .bg-zinc-800 { background-color: var(--nox-surface-raised) !important; }
+:root[data-theme="light"] .text-zinc-100,
+:root[data-theme="light"] .text-zinc-200,
+:root[data-theme="light"] .text-zinc-300 { color: var(--nox-text) !important; }
+:root[data-theme="light"] .text-zinc-400,
+:root[data-theme="light"] .text-zinc-500,
+:root[data-theme="light"] .text-zinc-600 { color: var(--nox-muted) !important; }
+:root[data-theme="light"] .border-zinc-700,
+:root[data-theme="light"] .border-zinc-800,
+:root[data-theme="light"] .border-zinc-900 { border-color: var(--nox-border) !important; }
 
 @media (prefers-reduced-motion: reduce) {
   *,
