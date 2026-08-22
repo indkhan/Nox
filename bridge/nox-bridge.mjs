@@ -13,6 +13,7 @@ const MAX = 1024 * 1024;
 // (e.g. a quote becomes \"), so stay well under the cap.
 const SAFE_CHUNK = 256 * 1024;
 const MAX_RESTARTS = 5;
+const STABLE_RUN_MS = 60_000;
 
 let nextChunkId = 1;
 let nextOutId = 1;
@@ -28,6 +29,7 @@ const state = {
   restarts: 0,
   startedAt: 0,
   stderrTail: '',
+  stableTimer: null,
 };
 
 function write(obj) {
@@ -95,7 +97,10 @@ export function startCodex({ force = false } = {}) {
 
   proc.on('spawn', () => {
     state.spawnState = 'running';
-    state.restarts = 0;
+    clearTimeout(state.stableTimer);
+    state.stableTimer = setTimeout(() => {
+      if (state.proc === proc && state.spawnState === 'running') state.restarts = 0;
+    }, STABLE_RUN_MS);
     sendToExtension({ t: 'status', state: 'running', detail: { codexPath: info.path, pid: proc.pid } });
   });
 
@@ -113,6 +118,8 @@ export function startCodex({ force = false } = {}) {
   proc.stderr.on('data', (d) => noteStderr(d.toString()));
 
   proc.on('exit', (code, signal) => {
+    clearTimeout(state.stableTimer);
+    state.stableTimer = null;
     state.proc = null;
     failAllPending(`codex exited (${code ?? signal})`);
     declineAllIncoming();

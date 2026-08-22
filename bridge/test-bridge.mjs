@@ -141,6 +141,20 @@ send({ t: 'rpc', cid: 'after-crash', method: 'model/list', params: {} });
 await waitFor((m) => m.t === 'resp' && m.cid === 'after-crash', 'response after crash restart', 5000);
 console.log('✔ codex restarted after crash');
 
+// Repeated crashes exhaust the consecutive restart budget.
+for (let i = 0; i < 3; i++) {
+  const before = messages.filter((m) => m.t === 'status' && m.state === 'running').length;
+  send({ t: 'rpc', cid: `crash-${i}`, method: 'test/crash', params: {} });
+  await waitFor(
+    () => messages.filter((m) => m.t === 'status' && m.state === 'running').length > before,
+    `restart ${i + 2}`,
+    6000,
+  );
+}
+send({ t: 'rpc', cid: 'final-crash', method: 'test/crash', params: {} });
+await waitFor((m) => m.t === 'status' && m.state === 'dead', 'restart budget exhaustion', 7000);
+console.log('✔ repeated crashes exhaust restart budget');
+
 child.kill();
 console.log('\nall bridge checks passed');
 process.exit(0);
