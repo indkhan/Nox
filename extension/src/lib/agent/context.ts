@@ -1,4 +1,5 @@
 import type { CurrentPage } from '../../shared/notion-page'
+import { wrapUntrusted } from './untrusted'
 
 export const TRUNCATION_MARKER = '\n…[truncated by Nox]'
 
@@ -22,9 +23,9 @@ export function buildContextPreamble(input: ContextInput): string {
   const blocks: string[] = []
   const { currentPage, mentions = [], extraNotes = [] } = input
 
-  blocks.push('<context>')
+  const content: string[] = []
   if (currentPage) {
-    blocks.push(
+    content.push(
       [
         `<current_page id="${currentPage.pageId}"${currentPage.viewId ? ` view="${currentPage.viewId}"` : ''}>`,
         `title: ${currentPage.title ?? 'Untitled'}`,
@@ -34,9 +35,11 @@ export function buildContextPreamble(input: ContextInput): string {
     )
   }
   for (const m of mentions) {
-    blocks.push(`<mentioned_page id="${m.pageId}">${m.title ?? 'Untitled'}</mentioned_page>`)
+    content.push(`<mentioned_page id="${m.pageId}">${m.title ?? 'Untitled'}</mentioned_page>`)
   }
-  for (const note of extraNotes) blocks.push(`<note>${note}</note>`)
+  for (const note of extraNotes) content.push(`<note>${note}</note>`)
+  blocks.push('<context>')
+  if (content.length) blocks.push(wrapUntrusted(content.join('\n')))
   blocks.push('</context>')
   return blocks.join('\n')
 }

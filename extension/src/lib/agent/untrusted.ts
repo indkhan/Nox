@@ -3,7 +3,10 @@ export const UNTRUSTED_END = '<<<END_UNTRUSTED_CONTENT>>>'
 
 /** Every tool result passes through this before reaching the model. */
 export function wrapUntrusted(text: string): string {
-  return `${UNTRUSTED_BEGIN}\n${text}\n${UNTRUSTED_END}`
+  const escaped = text
+    .replaceAll(UNTRUSTED_BEGIN, '<<<UNTRUSTED_CONTENT_ESCAPED>>>')
+    .replaceAll(UNTRUSTED_END, '<<<END_UNTRUSTED_CONTENT_ESCAPED>>>')
+  return `${UNTRUSTED_BEGIN}\n${escaped}\n${UNTRUSTED_END}`
 }
 
 /** Appended to developer_instructions (RESEARCH §6.2, Notion's own guidance). */

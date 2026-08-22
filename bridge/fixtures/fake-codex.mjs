@@ -26,6 +26,8 @@ rl.on('line', (line) => {
   }
 
   switch (m.method) {
+    case 'test/crash':
+      return process.exit(23);
     case 'initialize':
       return send({ id: m.id, result: { userAgent: 'codex-fixture/0.0.1 (fake)' } });
     case 'model/list':

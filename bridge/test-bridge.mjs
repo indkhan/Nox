@@ -129,6 +129,18 @@ assert.equal(legacy.payload.length, 2 * 1024 * 1024);
 assert(chunkFrames.length > chunkFramesBefore, 'legacy payload rode chunk framing too');
 console.log(`✔ legacy 2 MB payload delivered via ${chunkFrames.length - chunkFramesBefore} additional chunk frames`);
 
+// ── 6. crash restart ──
+const runningBefore = messages.filter((m) => m.t === 'status' && m.state === 'running').length;
+send({ t: 'rpc', cid: 'crash', method: 'test/crash', params: {} });
+await waitFor(
+  () => messages.filter((m) => m.t === 'status' && m.state === 'running').length > runningBefore,
+  'codex restart after crash',
+  5000,
+);
+send({ t: 'rpc', cid: 'after-crash', method: 'model/list', params: {} });
+await waitFor((m) => m.t === 'resp' && m.cid === 'after-crash', 'response after crash restart', 5000);
+console.log('✔ codex restarted after crash');
+
 child.kill();
 console.log('\nall bridge checks passed');
 process.exit(0);

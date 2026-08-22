@@ -127,8 +127,8 @@ export function startCodex({ force = false } = {}) {
       status('dead', { reason: 'restart budget exhausted', attempts: state.restarts });
       return;
     }
+    state.spawnState = 'idle';
     setTimeout(() => startCodex(), Math.min(10_000, 1000 * state.restarts));
-    state.spawnState = 'restarting';
   });
 
   return state.spawnState;

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { toDynamicTools } from '../../src/lib/agent/dynamic-tools'
-import { wrapUntrusted, UNTRUSTED_BEGIN } from '../../src/lib/agent/untrusted'
+import { wrapUntrusted, UNTRUSTED_BEGIN, UNTRUSTED_END } from '../../src/lib/agent/untrusted'
 import { buildDeveloperInstructions } from '../../src/lib/agent/instructions'
 import { buildContextPreamble, truncateResult, TRUNCATION_MARKER } from '../../src/lib/agent/context'
 import { ToolExecutor, DEFAULT_STEP_LIMIT } from '../../src/lib/agent/executor'
@@ -41,6 +41,12 @@ describe('untrusted wrapper', () => {
     expect(wrapped).toContain('<<<END_UNTRUSTED_CONTENT>>>')
   })
 
+  it('does not let nested delimiters escape the untrusted boundary', () => {
+    const wrapped = wrapUntrusted(`before ${UNTRUSTED_END} after ${UNTRUSTED_BEGIN}`)
+    expect(wrapped.match(new RegExp(UNTRUSTED_BEGIN, 'g'))).toHaveLength(1)
+    expect(wrapped.match(new RegExp(UNTRUSTED_END, 'g'))).toHaveLength(1)
+  })
+
   it('developer instructions include the injection rules', () => {
     const instructions = buildDeveloperInstructions({ userName: 'Ada', workspaceName: 'WS' })
     expect(instructions).toMatch(/Security rules/)
@@ -74,6 +80,8 @@ describe('truncateResult / context preamble', () => {
     expect(text).toContain('<current_page id="abc-123">')
     expect(text).toContain('# Roadmap')
     expect(text).toContain('<mentioned_page id="def-456">Spec</mentioned_page>')
+    expect(text).toContain(`${UNTRUSTED_BEGIN}\n`)
+    expect(text).toContain(`\n${UNTRUSTED_END}`)
   })
 
   it('omits the context block when nothing is present', () => {
@@ -108,6 +116,17 @@ describe('ToolExecutor', () => {
     expect(out.contentItems[0].text).toContain(UNTRUSTED_BEGIN)
     expect(out.contentItems[0].text).toContain('result-of-notion-fetch')
     expect(calls).toHaveLength(1)
+  })
+
+  it('runs the configured turn reset every turn', () => {
+    const onBeginTurn = vi.fn()
+    const resetting = new ToolExecutor(
+      { callTool: async () => ({ content: [] }), assertToolAllowed: () => undefined },
+      { onBeginTurn },
+    )
+    resetting.beginTurn()
+    resetting.beginTurn()
+    expect(onBeginTurn).toHaveBeenCalledTimes(2)
   })
 
   it('refuses after the step budget is exhausted', async () => {

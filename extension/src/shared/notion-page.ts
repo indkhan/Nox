@@ -7,7 +7,7 @@ export interface CurrentPage {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
-function normalizeId(raw: string): string | null {
+export function normalizeId(raw: string): string | null {
   const id = raw.toLowerCase()
   if (UUID_RE.test(id)) return id
   if (/^[0-9a-f]{32}$/.test(id)) {

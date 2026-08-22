@@ -26,11 +26,12 @@ export class ToolExecutor {
 
   constructor(
     private readonly deps: ExecutorDeps,
-    private readonly opts: { stepLimit?: number; resultBudgetChars?: number; onJournalEvent?: (e: JournalEvent) => void } = {},
+    private readonly opts: { stepLimit?: number; resultBudgetChars?: number; onJournalEvent?: (e: JournalEvent) => void; onBeginTurn?: () => void } = {},
   ) {}
 
   beginTurn(): void {
     this.stepsUsed = 0
+    this.opts.onBeginTurn?.()
   }
 
   get stepsTaken(): number {

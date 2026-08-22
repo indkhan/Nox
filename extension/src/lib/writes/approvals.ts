@@ -1,4 +1,5 @@
 import type { CallClassification } from './classify'
+import { normalizeId } from '../../shared/notion-page'
 
 export type Mode = 'ask' | 'auto'
 
@@ -30,12 +31,13 @@ export function evaluateApproval(call: CallClassification & { name: string; args
   }
 
   const targetPageId = extractTargetPageId(call.args)
-  if (targetPageId && !ctx.contextSet.has(targetPageId)) {
+  if (targetPageId && ![...ctx.contextSet].some((id) => (normalizeId(id) ?? id) === targetPageId)) {
     reasons.push('the target page is outside this conversation’s context')
   }
 
   if (call.kind === 'move') reasons.push('moving pages is always confirmed')
   if (call.kind === 'schema' || call.kind === 'view') reasons.push('schema and view changes are always confirmed')
+  if (call.kind === 'unknown') reasons.push('unknown tools are always confirmed')
   if (typeof ctx.rowCount === 'number' && ctx.rowCount > BULK_CONFIRM_ROWS) {
     reasons.push(`bulk runs over ${BULK_CONFIRM_ROWS} rows are always confirmed`)
   }
@@ -50,11 +52,13 @@ export function evaluateApproval(call: CallClassification & { name: string; args
 function extractTargetPageId(args: Record<string, unknown>): string | null {
   const candidates = [args.page_id, args.parent, args.data, args.command]
   for (const c of candidates) {
-    if (typeof c === 'string' && /^[0-9a-f-]{32}$/i.test(c)) return c
+    if (typeof c === 'string') {
+      return normalizeId(c) ?? c
+    }
     if (c && typeof c === 'object') {
       const nested = c as Record<string, unknown>
       const id = nested.page_id ?? nested.id
-      if (typeof id === 'string') return id
+      if (typeof id === 'string') return normalizeId(id) ?? id
     }
   }
   return null

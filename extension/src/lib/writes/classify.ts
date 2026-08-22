@@ -13,6 +13,7 @@ export type MutationKind =
   | 'create-comment'
   | 'schema'
   | 'view'
+  | 'unknown'
 
 export interface CallClassification {
   mutates: boolean
@@ -60,8 +61,7 @@ export function classifyToolCall(name: string, args: Record<string, unknown> = {
   if (name === 'notion-update-view') return { mutates: true, kind: 'view' }
   if (name === 'notion-create-view') return { mutates: true, kind: 'view' }
 
-  // Unknown tools default to read-only behavior; capability gate still applies.
-  return { mutates: false, kind: 'read' }
+  return { mutates: true, kind: 'unknown' }
 }
 
 /** Property types whose previous values can be faithfully restored (MVP §6.5). */

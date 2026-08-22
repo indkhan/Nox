@@ -31,8 +31,8 @@ describe('classifyToolCall', () => {
     expect(classifyToolCall('notion-create-view').kind).toBe('view')
   })
 
-  it('defaults unknown tools to read-only (capability gate still applies)', () => {
-    expect(classifyToolCall('notion-something-new')).toEqual({ mutates: false, kind: 'read' })
+  it('fails closed for unknown tools', () => {
+    expect(classifyToolCall('notion-something-new')).toEqual({ mutates: true, kind: 'unknown' })
   })
 })
 

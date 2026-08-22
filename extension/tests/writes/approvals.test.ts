@@ -27,6 +27,24 @@ describe('evaluateApproval', () => {
     expect((verdict as { reasons: string[] }).reasons.join()).toMatch(/context/)
   })
 
+  it('compares normalized page ids when checking turn context', () => {
+    const undashed = 'A1B2C3D4E5F64789ABCDEF0123456789'
+    const dashed = 'a1b2c3d4-e5f6-4789-abcd-ef0123456789'
+    const verdict = evaluateApproval(
+      { ...WRITE_CALL, args: { data: { page_id: undashed } } },
+      { mode: 'auto', contextSet: new Set([dashed]) },
+    )
+    expect(verdict.action).toBe('allow')
+  })
+
+  it('always confirms unknown tools', () => {
+    const verdict = evaluateApproval(
+      { name: 'notion-something-new', mutates: true, kind: 'unknown', args: {} },
+      { mode: 'auto', contextSet: new Set() },
+    )
+    expect(verdict.action).toBe('require-approval')
+  })
+
   it('moves always need confirmation even in auto', () => {
     expect(evaluateApproval(MOVE_CALL, { mode: 'auto', contextSet: new Set(['p1']) }).action).toBe('require-approval')
   })

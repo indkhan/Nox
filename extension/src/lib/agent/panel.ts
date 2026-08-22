@@ -12,14 +12,8 @@ import type { CurrentPage } from '../../shared/notion-page'
 import { useNoxStore } from '../../sidepanel/store'
 
 let currentMode: Mode = 'ask'
-let contextSet = new Set<string>()
-
 export function setAgentMode(mode: Mode): void {
   currentMode = mode
-}
-
-export function setTurnContext(page: CurrentPage | null): void {
-  contextSet = page ? new Set([page.pageId]) : new Set<string>()
 }
 
 export const writeGate = new WriteGate({
@@ -29,7 +23,10 @@ export const writeGate = new WriteGate({
     return result.content.filter((c) => c.type === 'text').map((c) => c.text ?? '').join('\n')
   },
   getMode: () => currentMode,
-  getContextSet: () => contextSet,
+  getContextSet: () => {
+    const page = useNoxStore.getState().currentPage
+    return new Set(page ? [page.pageId] : [])
+  },
   onApproval: (approval) => useNoxStore.getState().addApproval(approval),
 })
 
@@ -53,7 +50,7 @@ export const agentLoop = new AgentLoop({
       const verdict = notion.capabilities.can(name)
       if (!verdict.allowed) throw new Error(`"${name}" ${verdict.reason ?? 'is unavailable'}`)
     },
-  }),
+  }, { onBeginTurn: () => writeGate.beginTurn() }),
   getDynamicTools: async () => toDynamicTools(await notion.listTools(), notion.capabilities),
   developerInstructions: buildDeveloperInstructions({
     userName: notion.identity?.userName,
