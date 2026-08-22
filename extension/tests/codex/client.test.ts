@@ -202,7 +202,7 @@ describe('CodexClient', () => {
     h.bridge.onCodexRequest?.({ rid: 45, method: 'item/tool/call', params: { tool: 'notion-update-page', arguments: {}, callId: 'rejected-1' } })
     await vi.waitFor(() => expect(h.responses.some((r) => r.rid === 45)).toBe(true))
     expect(events.find((e) => e.kind === 'tool-completed')).toMatchObject({
-      kind: 'tool-completed', callId: 'rejected-1', success: false, resultText: 'REJECTED_BY_USER',
+      kind: 'tool-completed', callId: 'rejected-1', success: false, resultText: 'REJECTED_BY_USER', error: 'REJECTED_BY_USER',
     })
     emit(h.bridge, 'turn/completed', {})
     await turnPromise

@@ -21,6 +21,25 @@ export type ActivityEvent =
   | { kind: 'tool-call'; tool: string; args: Record<string, unknown>; callId?: string }
   | { kind: 'tool-completed'; tool?: string; callId?: string; success?: boolean; durationMs?: number; error?: string; resultText?: string }
 
+export type ToolResultCategory = 'context' | 'table' | 'change' | 'generic'
+
+interface ToolPresentation {
+  running: string
+  completed: string
+  failed: string
+  category: ToolResultCategory
+  followUps?: [string, string]
+}
+
+const TOOL_PRESENTATION: Record<string, ToolPresentation> = {
+  'notion-fetch': { running: 'Reading', completed: 'Read', failed: 'read a page', category: 'context', followUps: ['What are the key decisions?', 'Find related pages'] },
+  'notion-search': { running: 'Searching for', completed: 'Searched for', failed: 'search the workspace', category: 'table', followUps: ['Summarize these results', 'Compare the matching pages'] },
+  'notion-query-data-sources': { running: 'Querying a database', completed: 'Queried a database', failed: 'query a database', category: 'table', followUps: ['Summarize these results', 'Compare the matching pages'] },
+  'notion-update-page': { running: 'Updating a page', completed: 'Updated a page', failed: 'update a page', category: 'change', followUps: ['Show me what changed', 'Make another update'] },
+  'notion-create-pages': { running: 'Creating pages', completed: 'Created pages', failed: 'create pages', category: 'change', followUps: ['Show me what changed', 'Make another update'] },
+  'notion-move-pages': { running: 'Moving pages', completed: 'Moved pages', failed: 'move pages', category: 'change', followUps: ['Show me what changed', 'Make another update'] },
+}
+
 export function applyActivityEvent(items: ActivityItem[], event: ActivityEvent): ActivityItem[] {
   if (event.kind === 'reasoning') {
     return [...items, { kind: 'reasoning', id: `reasoning-${items.length}`, text: event.text }]
@@ -61,30 +80,18 @@ export function applyActivityEvent(items: ActivityItem[], event: ActivityEvent):
 
 export function toolActivityLabel(tool: string, args: Record<string, unknown>, completed = false): string {
   const named = stringArg(args, 'title', 'query', 'name')
-  const labels: Record<string, [string, string]> = {
-    'notion-fetch': ['Reading', 'Read'],
-    'notion-search': ['Searching for', 'Searched for'],
-    'notion-update-page': ['Updating a page', 'Updated a page'],
-    'notion-create-pages': ['Creating pages', 'Created pages'],
-    'notion-query-data-sources': ['Querying a database', 'Queried a database'],
-    'notion-move-pages': ['Moving pages', 'Moved pages'],
-  }
-  const pair = labels[tool]
-  if (!pair) return humanize(tool)
-  const label = pair[completed ? 1 : 0]
+  const presentation = toolPresentation(tool)
+  if (!TOOL_PRESENTATION[tool]) return humanize(tool)
+  const label = completed ? presentation.completed : presentation.running
   return named && (tool === 'notion-fetch' || tool === 'notion-search') ? `${label} “${named}”` : label
 }
 
 export function failedToolActivityLabel(tool: string): string {
-  const labels: Record<string, string> = {
-    'notion-fetch': 'read a page',
-    'notion-search': 'search the workspace',
-    'notion-update-page': 'update a page',
-    'notion-create-pages': 'create pages',
-    'notion-query-data-sources': 'query a database',
-    'notion-move-pages': 'move pages',
-  }
-  return `Failed to ${labels[tool] ?? humanize(tool).toLowerCase()}`
+  return `Failed to ${toolPresentation(tool).failed}`
+}
+
+export function toolResultCategory(tool: string): ToolResultCategory {
+  return toolPresentation(tool).category
 }
 
 function stringArg(args: Record<string, unknown>, ...keys: string[]): string | null {
@@ -100,10 +107,12 @@ function humanize(tool: string): string {
 export function followUpsForActivity(items: ActivityItem[]): string[] {
   const last = [...items].reverse().find((item): item is Extract<ActivityItem, { kind: 'tool' }> => item.kind === 'tool' && item.status === 'completed')
   if (!last) return []
-  if (last.tool === 'notion-search' || last.tool === 'notion-query-data-sources') {
-    return ['Summarize these results', 'Compare the matching pages']
+  return toolPresentation(last.tool).followUps ?? []
+}
+
+function toolPresentation(tool: string): ToolPresentation {
+  return TOOL_PRESENTATION[tool] ?? {
+    running: humanize(tool), completed: humanize(tool), failed: humanize(tool).toLowerCase(),
+    category: /update|create|move/.test(tool) ? 'change' : 'generic',
   }
-  if (last.tool === 'notion-fetch') return ['What are the key decisions?', 'Find related pages']
-  if (/update|create|move/.test(last.tool)) return ['Show me what changed', 'Make another update']
-  return []
 }

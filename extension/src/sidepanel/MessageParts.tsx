@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { renderMarkdown } from '../lib/markdown'
 import { ChevronDownIcon } from './Icons'
-import { failedToolActivityLabel, toolActivityLabel, type ActivityItem } from '../lib/agent/activity'
+import { failedToolActivityLabel, toolActivityLabel, toolResultCategory, type ActivityItem } from '../lib/agent/activity'
 import { toResultTable } from '../lib/db/query'
 import { ResultsTable } from './ResultsTable'
 
@@ -63,17 +63,18 @@ function ActivityRow({ item, onUndo }: { item: ActivityItem; onUndo?: (journalId
 
 function ActivityResult({ item }: { item: Extract<ActivityItem, { kind: 'tool' }> }) {
   if (item.status !== 'completed') return null
-  if ((item.tool === 'notion-query-data-sources' || item.tool === 'notion-search') && item.resultText) {
+  const category = toolResultCategory(item.tool)
+  if (category === 'table' && item.resultText) {
     return <div className="mt-1"><ResultsTable table={toResultTable({ content: [{ type: 'text', text: item.resultText }] })} /></div>
   }
-  if (item.tool === 'notion-fetch' && item.resultText) {
+  if (category === 'context' && item.resultText) {
     return (
       <div data-testid="context-result" className="mt-1 max-h-20 overflow-hidden rounded-md border border-zinc-800 bg-zinc-950/60 px-2 py-1.5 text-[11px] leading-relaxed text-zinc-500">
         {item.resultText}
       </div>
     )
   }
-  if (/update|create|move/.test(item.tool)) {
+  if (category === 'change') {
     const changes = Object.entries(item.args).filter(([key]) => !/^(id|page_id|data_source_id)$/.test(key)).slice(0, 4)
     return (
       <div data-testid="change-result" className="mt-1 rounded-md border border-emerald-900/50 bg-emerald-950/20 px-2 py-1.5 text-[11px] text-zinc-400">

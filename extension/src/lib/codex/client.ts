@@ -205,9 +205,10 @@ export class CodexClient {
           : { decision: 'decline' }
         this.bridge.respondTool(req.rid, result)
         const outcome = toolOutcomeMeta(result)
+        const resultText = toolResultText(result)
         this.emit({
           kind: 'tool-completed', tool, callId: p.callId, success: outcome.success,
-          durationMs: Date.now() - startedAt, resultText: toolResultText(result),
+          durationMs: Date.now() - startedAt, resultText, error: outcome.success ? undefined : resultText,
         })
       } catch (e) {
         // Errors become model-readable results, never a crashed turn (MVP §6).
