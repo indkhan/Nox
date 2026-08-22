@@ -215,6 +215,21 @@ describe('WriteGate', () => {
     })
     expect(await journal.newestFirst()).toHaveLength(0)
   })
+
+  it('refuses undo after the page changed again', async () => {
+    let markdown = '# Original'
+    const { gate, journal } = makeGate({
+      mode: 'auto',
+      markdown: () => markdown,
+      callTool: async () => { markdown = '# Nox edit'; return { content: [] } },
+    })
+    await gate.handle({ rid: 21, tool: 'notion-update-page', args: {
+      data: { page_id: PAGE }, command: { type: 'replace_content', content: '# Nox edit' },
+    }, namespace: null })
+    const entry = (await journal.undoable())[0]
+    markdown = '# Later human edit'
+    await expect(gate.handleUndo(entry.inverse!.tool, entry.inverse!.args)).rejects.toThrow(/changed after Nox/i)
+  })
 })
 
 describe('MutationJournal undo ordering', () => {

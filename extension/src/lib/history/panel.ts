@@ -1,4 +1,4 @@
-import { openNoxDB } from './schema'
+import { closeNoxDBConnections, openNoxDB } from './schema'
 import { threadRepository, type ThreadRepository } from './repository'
 import { OwnerLock } from './lock'
 import { chromeArea } from '../chrome-storage'
@@ -27,7 +27,13 @@ export async function storageUsageBytes(): Promise<{ usage: number; quota: numbe
 
 /** Nukes IndexedDB and both chrome.storage areas ("Delete all data"). */
 export async function deleteAllData(): Promise<void> {
-  await indexedDB.deleteDatabase('nox')
+  closeNoxDBConnections()
+  await new Promise<void>((resolve, reject) => {
+    const request = indexedDB.deleteDatabase('nox')
+    request.onsuccess = () => resolve()
+    request.onerror = () => reject(request.error ?? new Error('Could not delete Nox database'))
+    request.onblocked = () => reject(new Error('Close other Nox panels before deleting all data'))
+  })
   await chrome.storage.local.clear()
   await chrome.storage.session.clear()
 }

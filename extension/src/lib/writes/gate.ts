@@ -85,6 +85,10 @@ export class WriteGate {
         if (pageId) {
           const fetchPage = (id: string) => this.deps.fetchPageMarkdown(id, req.signal)
           snapshot = await capturePageSnapshot(fetchPage, pageId)
+          const undoExpectedHash = firstString(req.args.__nox_expected_hash)
+          if (undoExpectedHash && undoExpectedHash !== snapshot.hash) {
+            throw new GuardViolation('PAGE_CHANGED_AFTER_NOX_WRITE: this page changed after Nox edited it. Undo was refused to protect the newer edits.')
+          }
           const expectedHash = this.readHashes.get(normalizeId(pageId) ?? pageId)
           if (expectedHash && expectedHash !== snapshot.hash) {
             throw new GuardViolation(
@@ -112,6 +116,17 @@ export class WriteGate {
     if (isToolError(result)) return result
     if (preImage.pageId) this.readHashes.delete(normalizeId(preImage.pageId) ?? preImage.pageId)
     const inverse = buildInverse(req.tool, req.args, preImage)
+    if (inverse.kind === 'execute-tool' && preImage.pageId) {
+      try {
+        const postWrite = await capturePageSnapshot((id) => this.deps.fetchPageMarkdown(id, req.signal), preImage.pageId)
+        inverse.args = { ...inverse.args, __nox_expected_hash: postWrite.hash }
+      } catch {
+        inverse.kind = 'not-undoable'
+        inverse.reason = 'the page could not be verified after the change'
+        inverse.tool = undefined
+        inverse.args = undefined
+      }
+    }
 
     try {
       if (!record) return result
@@ -154,8 +169,9 @@ function firstString(v: unknown): string | undefined {
 }
 
 function stripReservedArgs(args: Record<string, unknown>): Record<string, unknown> {
-  const { injected_request, ...rest } = args
+  const { injected_request, __nox_expected_hash, ...rest } = args
   void injected_request
+  void __nox_expected_hash
   return rest
 }
 

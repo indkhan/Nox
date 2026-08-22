@@ -109,7 +109,7 @@ export function ConnectionCard() {
     <section className="rounded-lg border border-zinc-800 bg-zinc-900 p-3" data-testid="connection-card">
       <p className="mb-1 text-xs uppercase tracking-wide text-zinc-500">Notion</p>
       {connectionError ? (
-        <p className="mb-2 text-xs text-amber-400" data-testid="connection-error">{connectionError}</p>
+        <p className="nox-warning mb-2 text-xs" data-testid="connection-error">{connectionError}</p>
       ) : (
         <p className="mb-2 text-sm text-zinc-400">
           Connect your workspace so Nox can read and act on it.

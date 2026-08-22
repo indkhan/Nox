@@ -1,40 +1,78 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { ThreadRow } from '../lib/history/schema'
 import { historyRepo } from '../lib/history/panel'
 import { useNoxStore } from './store'
 import { ChevronDownIcon } from './Icons'
 
-export function ThreadMenu() {
+export function ThreadMenu({ disabled = false }: { disabled?: boolean }) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [threads, setThreads] = useState<ThreadRow[]>([])
+  const [error, setError] = useState<string | null>(null)
+  const [pendingId, setPendingId] = useState<string | null>(null)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const searchGenerationRef = useRef(0)
   const requestOpenThread = useNoxStore((state) => state.requestOpenThread)
+  const activeThreadId = useNoxStore((state) => state.activeThreadId)
+  const requestNewChat = useNoxStore((state) => state.requestNewChat)
 
   useEffect(() => {
     if (!open) return
+    const generation = ++searchGenerationRef.current
     const load = query.trim() ? historyRepo.searchThreads(query).then((rows) => rows.map((row) => row.thread)) : historyRepo.listThreads()
-    void load.then(setThreads).catch(() => setThreads([]))
+    void load.then((rows) => { if (generation === searchGenerationRef.current) setThreads(rows) }).catch((cause) => {
+      if (generation === searchGenerationRef.current) setError(cause instanceof Error ? cause.message : String(cause))
+    })
   }, [open, query])
+
+  useEffect(() => {
+    if (!open) return
+    const close = (event: KeyboardEvent | PointerEvent) => {
+      if (event instanceof KeyboardEvent && event.key !== 'Escape') return
+      if (event instanceof PointerEvent && rootRef.current?.contains(event.target as Node)) return
+      setOpen(false)
+      triggerRef.current?.focus()
+    }
+    window.addEventListener('keydown', close)
+    window.addEventListener('pointerdown', close)
+    return () => { window.removeEventListener('keydown', close); window.removeEventListener('pointerdown', close) }
+  }, [open])
+
+  useEffect(() => { if (disabled) setOpen(false) }, [disabled])
 
   async function remove(thread: ThreadRow) {
     if (!window.confirm(`Delete “${thread.title}”?`)) return
-    await historyRepo.deleteThread(thread.id)
-    setThreads((all) => all.filter((candidate) => candidate.id !== thread.id))
+    setPendingId(thread.id)
+    setError(null)
+    try {
+      await historyRepo.deleteThread(thread.id)
+      setThreads((all) => all.filter((candidate) => candidate.id !== thread.id))
+      if (thread.id === activeThreadId) requestNewChat()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    } finally { setPendingId(null) }
   }
 
   async function exportThread(thread: ThreadRow) {
-    const markdown = await historyRepo.exportThread(thread.id, 'markdown')
-    const url = URL.createObjectURL(new Blob([markdown], { type: 'text/markdown' }))
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `${thread.title.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '') || 'nox-chat'}.md`
-    link.click()
-    URL.revokeObjectURL(url)
+    setPendingId(thread.id)
+    setError(null)
+    try {
+      const markdown = await historyRepo.exportThread(thread.id, 'markdown')
+      const url = URL.createObjectURL(new Blob([markdown], { type: 'text/markdown' }))
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `${thread.title.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '') || 'nox-chat'}.md`
+      link.click()
+      URL.revokeObjectURL(url)
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    } finally { setPendingId(null) }
   }
 
   return (
-    <div className="relative">
-      <button onClick={() => setOpen((value) => !value)} aria-label="Open chat history" aria-expanded={open} className="rounded p-0.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300">
+    <div ref={rootRef} className="relative">
+      <button ref={triggerRef} disabled={disabled} onClick={() => setOpen((value) => !value)} aria-label="Open chat history" aria-expanded={open} className="rounded p-0.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300 disabled:cursor-not-allowed disabled:opacity-40">
         <ChevronDownIcon />
       </button>
       {open && (
@@ -44,11 +82,12 @@ export function ThreadMenu() {
             {threads.map((thread) => (
               <div key={thread.id} className="flex items-center gap-1 rounded-md hover:bg-zinc-800">
                 <button onClick={() => { requestOpenThread(thread.id); setOpen(false) }} className="min-w-0 flex-1 truncate px-2 py-1.5 text-left text-xs">{thread.title}</button>
-                <button onClick={() => void exportThread(thread)} aria-label={`Export ${thread.title}`} className="px-1 text-[10px] text-zinc-500 hover:text-zinc-200">Export</button>
-                <button onClick={() => void remove(thread)} aria-label={`Delete ${thread.title}`} className="px-1 text-[10px] text-zinc-500 hover:text-red-400">Delete</button>
+                <button disabled={pendingId != null} onClick={() => void exportThread(thread)} aria-label={`Export ${thread.title}`} className="px-1 text-[10px] text-zinc-500 hover:text-zinc-200 disabled:opacity-40">Export</button>
+                <button disabled={pendingId != null} onClick={() => void remove(thread)} aria-label={`Delete ${thread.title}`} className="px-1 text-[10px] text-zinc-500 hover:text-red-400 disabled:opacity-40">Delete</button>
               </div>
             ))}
             {threads.length === 0 && <p className="px-2 py-3 text-center text-xs text-zinc-500">No chats found</p>}
+            {error && <p className="nox-danger px-2 py-2 text-xs" role="alert">{error}</p>}
           </div>
         </div>
       )}

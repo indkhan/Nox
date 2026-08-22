@@ -4,6 +4,7 @@ import type { ActivityItem } from '../agent/activity'
 
 export const DB_NAME = 'nox'
 export const DB_VERSION = 2
+const openConnections = new Set<IDBPDatabase>()
 
 export interface ThreadRow {
   id: string
@@ -62,9 +63,16 @@ function migrations(db: IDBDatabase, oldVersion: number): void {
 }
 
 export async function openNoxDB(): Promise<IDBPDatabase> {
-  return openDB(DB_NAME, DB_VERSION, {
+  const connection = await openDB(DB_NAME, DB_VERSION, {
     upgrade(db, oldVersion) {
       migrations(db as unknown as IDBDatabase, oldVersion)
     },
   })
+  openConnections.add(connection)
+  return connection
+}
+
+export function closeNoxDBConnections(): void {
+  for (const connection of openConnections) connection.close()
+  openConnections.clear()
 }

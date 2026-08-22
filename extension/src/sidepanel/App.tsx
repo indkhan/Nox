@@ -19,6 +19,7 @@ export function App() {
   const settingsOpen = useNoxStore((s) => s.settingsOpen)
   const setSettingsOpen = useNoxStore((s) => s.setSettingsOpen)
   const [role, setRole] = useState<WindowRole>('pending')
+  const agentBusy = useNoxStore((s) => s.agentBusy)
 
   useEffect(() => {
     installLogCapture()
@@ -54,7 +55,7 @@ export function App() {
         <h1 className="min-w-0 truncate text-sm font-semibold tracking-tight" data-testid="thread-title">
           {threadTitle}
         </h1>
-        {role === 'owner' && <ThreadMenu />}
+        {role === 'owner' && <ThreadMenu disabled={agentBusy} />}
         <span className="flex-1" />
         {role === 'owner' && <button
           onClick={() => setSettingsOpen(!settingsOpen)}
@@ -70,10 +71,11 @@ export function App() {
         </button>}
         {role === 'owner' && <button
           onClick={() => requestNewChat()}
+          disabled={agentBusy}
           aria-label="New chat"
           title="New chat"
           data-testid="new-chat"
-          className="rounded-md p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+          className="rounded-md p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 disabled:cursor-not-allowed disabled:opacity-40"
         >
           <PlusCircleIcon />
         </button>}

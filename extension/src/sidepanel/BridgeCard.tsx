@@ -19,7 +19,7 @@ export function BridgeCard() {
     return (
       <section className="rounded-lg border border-zinc-800 bg-zinc-900 p-3" data-testid="bridge-card">
         <p className="text-xs uppercase tracking-wide text-zinc-500">Codex</p>
-        <p className="text-sm font-medium text-emerald-400" data-testid="bridge-status">
+        <p className="nox-success text-sm font-medium" data-testid="bridge-status">
           Connected — {codexVersion}
         </p>
         <p className="text-xs text-zinc-500">{codexModelCount} models available</p>
@@ -31,7 +31,7 @@ export function BridgeCard() {
     <section className="rounded-lg border border-zinc-800 bg-zinc-900 p-3" data-testid="bridge-card">
       <p className="mb-1 text-xs uppercase tracking-wide text-zinc-500">Codex</p>
       {codexHint ? (
-        <p className="mb-2 text-xs text-amber-400" data-testid="bridge-hint">{codexHint}</p>
+        <p className="nox-warning mb-2 text-xs" data-testid="bridge-hint">{codexHint}</p>
       ) : (
         <p className="mb-2 text-sm text-zinc-400">Connect to your local Codex install.</p>
       )}

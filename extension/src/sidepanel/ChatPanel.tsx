@@ -28,12 +28,16 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
   const currentThreadIdRef = useRef<string | null>(null)
   const lastUsageRef = useRef<Record<string, number> | null>(null)
   const historyRestoreCancelledRef = useRef(false)
+  const historyGenerationRef = useRef(0)
   const currentPage = useNoxStore((s) => s.currentPage)
   const connectionStatus = useNoxStore((s) => s.connectionStatus)
   const threadTitle = useNoxStore((s) => s.threadTitle)
   const setThreadTitle = useNoxStore((s) => s.setThreadTitle)
   const newChatTick = useNoxStore((s) => s.newChatTick)
   const openThreadRequest = useNoxStore((s) => s.openThreadRequest)
+  const agentBusy = useNoxStore((s) => s.agentBusy)
+  const setAgentBusy = useNoxStore((s) => s.setAgentBusy)
+  const setActiveThreadId = useNoxStore((s) => s.setActiveThreadId)
 
   useEffect(() => {
     let cancelled = false
@@ -41,56 +45,59 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
     void chrome.storage.local.get('nox_thread_id').then(async (stored) => {
       const threadId = stored['nox_thread_id']
       if (typeof threadId !== 'string' || !threadId) return
-      const [messages, thread] = await Promise.all([historyRepo.getMessages(threadId), historyRepo.getThread(threadId)])
+      const [messages, thread, journal] = await Promise.all([historyRepo.getMessages(threadId), historyRepo.getThread(threadId), writeGate.journal.newestForThread(threadId)])
       if (cancelled || historyRestoreCancelledRef.current) return
+      const restored = restoreTurns(messages, journal).map((turn) => ({
+        ...turn, view: { ...turn.view, activity: attachJournalEntries(turn.view.activity, journal) },
+      }))
       currentThreadIdRef.current = threadId
+      setActiveThreadId(threadId)
       setAgentHistoryThread(threadId)
       writeGate.journal.scopeThread(threadId)
       agentLoop.restoreThread(thread?.codexThreadId ?? null)
-      const journal = await writeGate.journal.newestFirst()
-      const restored = await Promise.all(restoreTurns(messages, journal).map(async (turn) => ({
-        ...turn,
-        view: { ...turn.view, activity: await attachJournalEntries(turn.view.activity) },
-      })))
       if (cancelled || historyRestoreCancelledRef.current) return
       setTurns(restored)
     }).catch(() => undefined)
     return () => { cancelled = true }
-  }, [])
+  }, [setActiveThreadId])
 
   useEffect(() => {
-    if (!openThreadRequest || busyRef.current) return
-    historyRestoreCancelledRef.current = true
+    if (!openThreadRequest || agentBusy) return
+    const generation = ++historyGenerationRef.current
     const { id: threadId } = openThreadRequest
     void (async () => {
-      const [messages, thread] = await Promise.all([historyRepo.getMessages(threadId), historyRepo.getThread(threadId)])
-      if (!thread) return
+      const [messages, thread, journal] = await Promise.all([historyRepo.getMessages(threadId), historyRepo.getThread(threadId), writeGate.journal.newestForThread(threadId)])
+      if (!thread || generation !== historyGenerationRef.current || busyRef.current) return
+      const restored = restoreTurns(messages, journal).map((turn) => ({
+        ...turn, view: { ...turn.view, activity: attachJournalEntries(turn.view.activity, journal) },
+      }))
+      if (generation !== historyGenerationRef.current || busyRef.current) return
       currentThreadIdRef.current = threadId
+      setActiveThreadId(threadId)
       setAgentHistoryThread(threadId)
       writeGate.journal.scopeThread(threadId)
       agentLoop.restoreThread(thread.codexThreadId ?? null)
-      const journal = await writeGate.journal.newestFirst()
-      const restored = await Promise.all(restoreTurns(messages, journal).map(async (turn) => ({
-        ...turn, view: { ...turn.view, activity: await attachJournalEntries(turn.view.activity) },
-      })))
       setTurns(restored)
       setThreadTitle(thread.title)
       await chrome.storage.local.set({ nox_thread_id: threadId, nox_thread_title: thread.title })
     })().catch((error) => logError(`History open failed: ${error instanceof Error ? error.message : String(error)}`))
-  }, [openThreadRequest, setThreadTitle])
+  }, [agentBusy, openThreadRequest, setActiveThreadId, setThreadTitle])
 
   // Header "new chat" button resets the conversation view.
   useEffect(() => {
     if (newChatTick === 0) return
+    if (busyRef.current) return
+    historyGenerationRef.current++
     historyRestoreCancelledRef.current = true
     setTurns([])
     currentThreadIdRef.current = null
+    setActiveThreadId(null)
     setAgentHistoryThread(null)
     writeGate.journal.scopeThread(null)
     agentLoop.newThread()
     setThreadTitle('New chat')
     void chrome.storage.local.remove(['nox_thread_title', 'nox_thread_id'])
-  }, [newChatTick, setThreadTitle])
+  }, [newChatTick, setActiveThreadId, setThreadTitle])
 
   const scrollToEnd = () => requestAnimationFrame(() => scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }))
 
@@ -99,11 +106,13 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
   async function send(text: string) {
     if (busyRef.current || readOnly) return
     historyRestoreCancelledRef.current = true
+    historyGenerationRef.current++
     if (connectionStatus !== 'connected') {
       setTurns((t) => [...t, { id: crypto.randomUUID(), userText: text, view: { activity: [], answer: '', error: 'Connect Notion first — open Settings (top right) to connect.', pending: false } }])
       return
     }
     busyRef.current = true
+    setAgentBusy(true)
     setBusy(true)
     logInfo(`Send: ${text.slice(0, 120)}`)
     const turnId = crypto.randomUUID()
@@ -120,6 +129,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
       try {
         persisted = await startPersistedTurn(historyRepo, currentThreadIdRef.current, text)
         currentThreadIdRef.current = persisted.threadId
+        setActiveThreadId(persisted.threadId)
         setAgentHistoryThread(persisted.threadId)
         void chrome.storage.local.set({ nox_thread_id: persisted.threadId })
       } catch {
@@ -185,7 +195,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
 
       const result = await agentLoop.sendUserMessage(text, { currentPage: pageContext ?? undefined })
 
-      currentActivity = await attachJournalEntries(currentActivity)
+      currentActivity = attachJournalEntries(currentActivity, await writeGate.journal.newestFirst())
       await persisted?.persistAssistant(result.text || streamedAnswer || v_error_placeholder(), lastUsageRef.current ?? undefined, currentActivity).catch(() => undefined)
 
       if (threadTitle === 'New chat') {
@@ -203,6 +213,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
     } finally {
       unsubscribe?.()
       busyRef.current = false
+      setAgentBusy(false)
       setBusy(false)
       scrollToEnd()
     }
@@ -229,7 +240,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
                 <FollowUpActions suggestions={followUpsForActivity(view.activity)} onSelect={(suggestion) => void send(suggestion)} />
               )}
               {view.error && (
-                <p className="rounded-md border border-amber-800/50 bg-amber-950/40 px-2 py-1.5 text-xs text-amber-400" role="alert">
+                <p className="nox-warning rounded-md border border-current/40 px-2 py-1.5 text-xs" role="alert">
                   ⚠ {view.error}
                 </p>
               )}
@@ -252,8 +263,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
 
 const undoingJournalIds = new Set<string>()
 
-async function attachJournalEntries(items: ActivityItem[]): Promise<ActivityItem[]> {
-  const entries = await writeGate.journal.newestFirst()
+function attachJournalEntries(items: ActivityItem[], entries: Awaited<ReturnType<typeof writeGate.journal.newestFirst>>): ActivityItem[] {
   return items.map((item) => {
     if (item.kind !== 'tool') return item
     const entry = entries.find((candidate) => candidate.callId && candidate.callId === item.id)

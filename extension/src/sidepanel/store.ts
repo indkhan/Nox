@@ -44,6 +44,12 @@ interface NoxState {
   openThreadRequest: { id: string; nonce: number } | null
   requestOpenThread: (id: string) => void
 
+  agentBusy: boolean
+  setAgentBusy: (busy: boolean) => void
+
+  activeThreadId: string | null
+  setActiveThreadId: (id: string | null) => void
+
   settingsOpen: boolean
   setSettingsOpen: (open: boolean) => void
 }
@@ -83,6 +89,12 @@ export const useNoxStore = create<NoxState>((set) => ({
 
   openThreadRequest: null,
   requestOpenThread: (id) => set((s) => ({ openThreadRequest: { id, nonce: (s.openThreadRequest?.nonce ?? 0) + 1 } })),
+
+  agentBusy: false,
+  setAgentBusy: (agentBusy) => set({ agentBusy }),
+
+  activeThreadId: null,
+  setActiveThreadId: (activeThreadId) => set({ activeThreadId }),
 
   settingsOpen: false,
   setSettingsOpen: (settingsOpen) => set({ settingsOpen }),

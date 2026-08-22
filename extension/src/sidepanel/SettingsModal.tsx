@@ -158,6 +158,8 @@ function LogsSection() {
 
 function DataSection() {
   const [usage, setUsage] = useState<string | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
 
   useEffect(() => {
     void storageUsageBytes().then((u) => {
@@ -166,16 +168,26 @@ function DataSection() {
   }, [])
 
   return (
-    <section aria-label="Data" className="flex items-center justify-between rounded-md border border-zinc-800 bg-zinc-900/60 p-2.5">
+    <section aria-label="Data" className="rounded-md border border-zinc-800 bg-zinc-900/60 p-2.5">
+      <div className="flex items-center justify-between">
       <span className="text-[11px] text-zinc-600">{usage ?? 'Local browser data'}</span>
       <button
+        disabled={deleting}
         onClick={() => {
-          if (window.confirm('Delete ALL Nox data — threads, journal, tokens?')) void deleteAllData()
+          if (!window.confirm('Delete ALL Nox data — threads, journal, tokens?')) return
+          setDeleting(true)
+          setDeleteError(null)
+          void deleteAllData().then(() => window.location.reload()).catch((error) => {
+            setDeleteError(error instanceof Error ? error.message : String(error))
+            setDeleting(false)
+          })
         }}
-        className="rounded-md px-2 py-1 text-[11px] text-red-400 underline hover:text-red-300"
+        className="nox-danger rounded-md px-2 py-1 text-[11px] underline hover:no-underline disabled:opacity-50"
       >
-        Delete all data
+        {deleting ? 'Deleting…' : 'Delete all data'}
       </button>
+      </div>
+      {deleteError && <p className="nox-danger mt-1 text-[11px]" role="alert">{deleteError}</p>}
     </section>
   )
 }

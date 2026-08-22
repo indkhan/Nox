@@ -99,6 +99,10 @@ export class MutationJournal {
     return (await this.newestFirst()).filter((e) => e.status === 'applied' && e.inverse != null)
   }
 
+  async newestForThread(threadId: string): Promise<JournalEntry[]> {
+    return (await this.store.list()).filter((entry) => entry.threadId === threadId).sort((a, b) => b.ts - a.ts)
+  }
+
   async setStatus(id: string, status: JournalEntry['status']): Promise<void> {
     const entry = (await this.store.list()).find((candidate) => candidate.id === id)
     if (entry) await this.store.append({ ...entry, status })

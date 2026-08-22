@@ -11,6 +11,7 @@
   --nox-active: #a5b4fc;
   --nox-success: #6ee7b7;
   --nox-danger: #fda4af;
+  --nox-warning: #fbbf24;
   color-scheme: dark;
 }
 
@@ -57,6 +58,7 @@ body {
     --nox-active: #4338ca;
     --nox-success: #047857;
     --nox-danger: #be123c;
+    --nox-warning: #92400e;
     color-scheme: light;
   }
 
@@ -86,6 +88,7 @@ body {
   --nox-active: #4338ca;
   --nox-success: #047857;
   --nox-danger: #be123c;
+  --nox-warning: #92400e;
   color-scheme: light;
 }
 
@@ -107,6 +110,7 @@ body {
 .nox-active { color: var(--nox-active); }
 .nox-success { color: var(--nox-success); }
 .nox-danger { color: var(--nox-danger); }
+.nox-warning { color: var(--nox-warning); }
 .nox-active-dot { background-color: var(--nox-active); }
 .nox-change-result { border-color: color-mix(in srgb, var(--nox-success) 35%, transparent); }
 
