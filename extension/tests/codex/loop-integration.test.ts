@@ -196,6 +196,20 @@ describe('AgentLoop integration (scripted codex)', () => {
     expect(typeof result.interrupted).toBe('boolean')
   })
 
+  it('rejects pending approvals when cancelled', () => {
+    let rejected = 0
+    loop = new AgentLoop({
+      bridge: bridge as unknown as NativeBridge,
+      codex,
+      executor,
+      getDynamicTools: async () => [],
+      developerInstructions: buildInstructionsStub(),
+      cancelPending: () => { rejected++ },
+    })
+    loop.cancel()
+    expect(rejected).toBe(1)
+  })
+
   it('titles threads from the exchange', () => {
     expect(titleFromExchange('Summarize Q3 roadmap')).toBe('Summarize Q3 roadmap')
   })

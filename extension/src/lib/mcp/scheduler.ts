@@ -85,6 +85,7 @@ export class Scheduler {
         const cleanup = () => signal?.removeEventListener('abort', aborted)
         this.waiters.push(ready)
         signal?.addEventListener('abort', aborted, { once: true })
+        if (signal?.aborted) aborted()
       })
     }
     for (;;) {

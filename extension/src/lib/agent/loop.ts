@@ -15,6 +15,7 @@ export interface AgentLoopDeps {
   getDynamicTools: () => Promise<unknown[]>
   developerInstructions: string
   beginTurn?: () => void
+  cancelPending?: () => void
 }
 
 export type TurnListener = (event: CodexEvent | { kind: 'bridge-reconnecting' }) => void
@@ -157,6 +158,7 @@ export class AgentLoop {
     if (this.cancelled) return
     this.cancelled = true
     this.turnAbort?.abort()
+    this.deps.cancelPending?.()
     void this.deps.codex.interrupt()
   }
 }
