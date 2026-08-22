@@ -36,6 +36,13 @@ interface NoxState {
 
   threadTitle: string
   setThreadTitle: (title: string) => void
+
+  /** Bumped by the header "new chat" button; ChatPanel watches it to reset the view. */
+  newChatTick: number
+  requestNewChat: () => void
+
+  settingsOpen: boolean
+  setSettingsOpen: (open: boolean) => void
 }
 
 export const useNoxStore = create<NoxState>((set) => ({
@@ -67,6 +74,12 @@ export const useNoxStore = create<NoxState>((set) => ({
 
   threadTitle: 'New chat',
   setThreadTitle: (threadTitle) => set({ threadTitle }),
+
+  newChatTick: 0,
+  requestNewChat: () => set((s) => ({ newChatTick: s.newChatTick + 1 })),
+
+  settingsOpen: false,
+  setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
 }))
 
 chrome.runtime.onMessage.addListener((message) => {
