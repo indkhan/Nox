@@ -113,6 +113,7 @@ export function Composer({
   const editorRef = useRef<HTMLDivElement>(null)
   const [value, setValue] = useState('')
   const [mentions, setMentions] = useState<PickerItem[]>([])
+  const mentionCache = useRef(new Map<string, PickerItem>())
   const [picker, setPicker] = useState<{
     open: boolean
     query: string
@@ -138,30 +139,36 @@ export function Composer({
   }, [value])
 
   const refreshPickerItems = useCallback(async (query: string): Promise<PickerItem[]> => {
-    if (!query.trim()) {
-      try {
-        const response = await chrome.runtime.sendMessage({ type: 'nox/get-recent-pages' })
-        return ((response as { pages?: PickerItem[] })?.pages ?? []).slice(0, 8)
-      } catch {
-        return []
-      }
-    }
-    try {
-      const result = await notion.scheduleCallTool('notion-search', { query })
-      const text = result.content
-        .filter((c) => c.type === 'text')
-        .map((c) => c.text ?? '')
-        .join('\n')
-      const found = new Map<string, PickerItem>()
-      const linkRe = /\[([^\]]*)\]\((https:\/\/[^\s)]+)\)/g
-      for (const [, label, url] of text.matchAll(linkRe)) {
-        const parsed = parseNotionUrl(url)
-        if (parsed && !found.has(parsed.pageId)) found.set(parsed.pageId, { pageId: parsed.pageId, title: label || parsed.title })
-      }
-      return [...found.values()].slice(0, 8)
-    } catch {
-      return []
-    }
+    const trimmed = query.trim()
+    const matchesCache = (item: PickerItem) => !trimmed || (item.title ?? '').toLocaleLowerCase().includes(trimmed.toLocaleLowerCase())
+    const cachedMatches = [...mentionCache.current.values()].filter(matchesCache)
+    const recent = !trimmed
+      ? chrome.runtime.sendMessage({ type: 'nox/get-recent-pages' })
+          .then((response) => (response as { pages?: PickerItem[] })?.pages ?? [])
+          .catch(() => [] as PickerItem[])
+      : Promise.resolve([] as PickerItem[])
+    const remote = (mentionCache.current.size === 0 || (trimmed && cachedMatches.length === 0))
+      ? notion.scheduleCallTool('notion-search', trimmed ? { query: trimmed } : {})
+      .then((result) => {
+        const text = result.content
+          .filter((c) => c.type === 'text')
+          .map((c) => c.text ?? '')
+          .join('\n')
+        const found = new Map<string, PickerItem>()
+        const linkRe = /\[([^\]]*)\]\((https:\/\/[^\s)]+)\)/g
+        for (const [, label, url] of text.matchAll(linkRe)) {
+          const parsed = parseNotionUrl(url)
+          if (parsed && !found.has(parsed.pageId)) found.set(parsed.pageId, { pageId: parsed.pageId, title: label || parsed.title })
+        }
+        return [...found.values()]
+      })
+      .catch(() => [] as PickerItem[])
+      : Promise.resolve([] as PickerItem[])
+    const [remoteItems, recentItems] = await Promise.all([remote, recent])
+    for (const item of [...remoteItems, ...recentItems]) mentionCache.current.set(item.pageId, item)
+    const found = new Map<string, PickerItem>()
+    for (const item of [...remoteItems, ...mentionCache.current.values()].filter(matchesCache)) found.set(item.pageId, item)
+    return [...found.values()].slice(0, 8)
   }, [])
 
   /** Reads the caret, finds an active @token, and syncs the picker. */
@@ -271,12 +278,12 @@ export function Composer({
           <div
             data-testid="mention-picker"
             role="listbox"
-            aria-label="Mention a page"
+            aria-label="Mention a page or database"
             className="absolute bottom-full left-0 z-20 mb-2 max-h-64 w-full overflow-y-auto rounded-xl border border-zinc-700 bg-zinc-900 p-1 shadow-2xl"
           >
             {picker.items.length === 0 && (
               <p className="px-3 py-2 text-xs text-zinc-500">
-                {picker.query ? 'No matching pages' : 'Recently open pages appear here'}
+                {picker.query ? 'No matching pages or databases' : 'No pages or databases found'}
               </p>
             )}
             {picker.items.map((item, index) => (

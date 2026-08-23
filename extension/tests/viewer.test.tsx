@@ -4,7 +4,7 @@ import { vi } from 'vitest'
 vi.hoisted(() => {
   ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
   vi.stubGlobal('chrome', {
-    runtime: { onMessage: { addListener: vi.fn() } },
+    runtime: { onMessage: { addListener: vi.fn() }, sendMessage: vi.fn(async () => ({ pages: [] })) },
     storage: { local: { get: vi.fn(async () => ({})), set: vi.fn(async () => undefined) } },
   })
 })
@@ -25,6 +25,7 @@ import { Composer } from '../src/sidepanel/Composer'
 import { ApprovalCards } from '../src/sidepanel/ApprovalCards'
 import { EmptyState } from '../src/sidepanel/EmptyState'
 import { useNoxStore } from '../src/sidepanel/store'
+import { notion } from '../src/lib/notion/panel'
 
 describe('viewer mode', () => {
   it('disables the composer for read-only windows', () => {
@@ -89,6 +90,64 @@ describe('viewer mode', () => {
 
     await act(async () => root.unmount())
     useNoxStore.setState({ currentPage: null })
+  })
+
+  it('loads MCP pages and databases when bare @ opens the mention picker', async () => {
+    vi.mocked(notion.scheduleCallTool).mockResolvedValueOnce({
+      content: [{
+        type: 'text',
+        text: '[Projects](https://www.notion.so/Projects-a1b2c3d4e5f64789abcdef0123456789)',
+      }],
+    })
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    await act(async () => root.render(<Composer busy={false} onSend={vi.fn()} onCancel={vi.fn()} />))
+
+    const editor = container.querySelector('[data-testid=composer]') as HTMLDivElement
+    editor.textContent = '@'
+    const range = document.createRange()
+    range.selectNodeContents(editor)
+    range.collapse(false)
+    window.getSelection()?.removeAllRanges()
+    window.getSelection()?.addRange(range)
+    await act(async () => editor.dispatchEvent(new InputEvent('input', { bubbles: true })))
+
+    expect(notion.scheduleCallTool).toHaveBeenCalledWith('notion-search', {})
+    expect(container.querySelector('[data-testid=mention-option-0]')?.textContent).toContain('Projects')
+    await act(async () => root.unmount())
+    container.remove()
+  })
+
+  it('reuses cached MCP matches for later mentions', async () => {
+    vi.mocked(notion.scheduleCallTool).mockClear().mockResolvedValueOnce({
+      content: [{
+        type: 'text',
+        text: '[Projects](https://www.notion.so/Projects-a1b2c3d4e5f64789abcdef0123456789)',
+      }],
+    })
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    await act(async () => root.render(<Composer busy={false} onSend={vi.fn()} onCancel={vi.fn()} />))
+
+    const editor = container.querySelector('[data-testid=composer]') as HTMLDivElement
+    const type = async (text: string) => {
+      editor.textContent = text
+      const range = document.createRange()
+      range.selectNodeContents(editor)
+      range.collapse(false)
+      window.getSelection()?.removeAllRanges()
+      window.getSelection()?.addRange(range)
+      await act(async () => editor.dispatchEvent(new InputEvent('input', { bubbles: true })))
+    }
+    await type('@')
+    await type('@Proj')
+
+    expect(notion.scheduleCallTool).toHaveBeenCalledTimes(1)
+    expect(container.querySelector('[data-testid=mention-option-0]')?.textContent).toContain('Projects')
+    await act(async () => root.unmount())
+    container.remove()
   })
 
   it('hides mutation approvals in read-only windows', async () => {
