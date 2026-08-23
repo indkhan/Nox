@@ -41,13 +41,16 @@ describe('viewer mode', () => {
     expect(html.match(/disabled=""/g)).toHaveLength(3)
   })
 
-  it('keeps unfinished attachment and voice controls out of the composer', () => {
+  it('shows model controls inline and keeps unfinished controls out of the composer', () => {
+    useNoxStore.setState({ codexStatus: 'disconnected' })
     const html = renderToStaticMarkup(
       <Composer busy={false} onSend={vi.fn()} onCancel={vi.fn()} />,
     )
     expect(html).not.toContain('Attach images (coming soon)')
     expect(html).not.toContain('Voice input (coming soon)')
-    expect(html).toContain('Model settings')
+    expect(html).not.toContain('Model settings')
+    expect(html).toContain('data-testid="chat-model-controls"')
+    expect(html).toContain('Codex not connected')
   })
 
   it('cancels a busy turn with Escape', async () => {

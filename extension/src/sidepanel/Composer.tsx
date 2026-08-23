@@ -374,14 +374,7 @@ export function Composer({
           >
             <PlusCircleIcon />
           </button>
-          <details className="relative">
-            <summary className="cursor-pointer list-none rounded-md px-1.5 py-1 text-[11px] text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300">
-              Model settings
-            </summary>
-            <div className="absolute bottom-8 left-0 z-10 rounded-lg border border-zinc-700 bg-zinc-900 p-2 shadow-xl">
-              <ModelControls disabled={readOnly} />
-            </div>
-          </details>
+          <ModelControls disabled={readOnly} />
           <span className="flex-1" />
           {busy && (
             <span aria-hidden="true" className="mr-1 text-zinc-500">
@@ -448,6 +441,10 @@ function ModelControls({ disabled }: { disabled: boolean }) {
   const selected = models.find((model) => model.id === settings.model) ?? models.find((model) => model.isDefault) ?? models[0]
   const efforts = selected?.supportedReasoningEfforts?.map((item) => item.reasoningEffort) ?? ['low', 'medium', 'high', 'xhigh']
   const selectClass = 'max-w-28 cursor-pointer appearance-none bg-transparent py-1 pl-1 pr-3 text-[11px] text-zinc-400 outline-none hover:text-zinc-200'
+
+  if (codexStatus !== 'connected') {
+    return <span className="px-1 text-[11px] text-zinc-500" data-testid="chat-model-controls">Codex not connected</span>
+  }
 
   return (
     <div className="flex min-w-0 items-center text-zinc-500" data-testid="chat-model-controls">
