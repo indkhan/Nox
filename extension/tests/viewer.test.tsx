@@ -31,7 +31,8 @@ describe('viewer mode', () => {
     const html = renderToStaticMarkup(
       <Composer busy={false} readOnly onSend={vi.fn()} onCancel={vi.fn()} />,
     )
-    expect(html).toMatch(/<textarea[^>]*disabled=""/)
+    expect(html).toContain('data-testid="composer"')
+    expect(html).toMatch(/<div[^>]*contenteditable="false"/i)
   })
 
   it('disables empty-state actions for read-only windows', () => {
@@ -54,10 +55,40 @@ describe('viewer mode', () => {
     const root = createRoot(container)
     await act(async () => root.render(<Composer busy onSend={vi.fn()} onCancel={onCancel} />))
     await act(async () => {
-      container.querySelector('textarea')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      container.querySelector('[data-testid=composer]')?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     })
     expect(onCancel).toHaveBeenCalledOnce()
     await act(async () => root.unmount())
+  })
+
+  it('attaches the current page as a mention via quick-add and passes it on send', async () => {
+    const onSend = vi.fn()
+    useNoxStore.setState({
+      currentPage: { pageId: 'p1', url: 'https://app.notion.com/p/Second-Brain-p1', title: 'Second Brain', iconEmoji: '🧠' },
+    })
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    await act(async () => root.render(<Composer busy={false} onSend={onSend} onCancel={vi.fn()} />))
+
+    await act(async () => {
+      ;(container.querySelector('[data-testid=add-current-page]') as HTMLButtonElement).click()
+    })
+    // The pill is rendered inline in the editor.
+    const chip = container.querySelector('[data-mention-id="p1"]')
+    expect(chip).not.toBeNull()
+    expect(chip?.textContent).toContain('Second Brain')
+
+    await act(async () => {
+      ;(container.querySelector('[data-testid=send]') as HTMLButtonElement).click()
+    })
+    expect(onSend).toHaveBeenCalledOnce()
+    const [text, mentions] = onSend.mock.calls[0]
+    expect(text).toContain('@Second Brain')
+    expect(mentions).toEqual([{ pageId: 'p1', title: 'Second Brain', iconEmoji: '🧠', iconUrl: undefined }])
+
+    await act(async () => root.unmount())
+    useNoxStore.setState({ currentPage: null })
   })
 
   it('hides mutation approvals in read-only windows', async () => {

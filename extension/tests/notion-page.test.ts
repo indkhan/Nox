@@ -45,6 +45,22 @@ describe('parseNotionUrl', () => {
     expect(page?.pageId).toBe(dashed)
   })
 
+  it('accepts app.notion.com with a /p/ prefix (current logged-in URLs)', () => {
+    const page = parseNotionUrl(`https://app.notion.com/p/Page-Title-${undashed}`)
+    expect(page?.pageId).toBe(dashed)
+    expect(page?.title).toBe('Page Title')
+  })
+
+  it('accepts workspace subdomains of notion.so and notion.site', () => {
+    expect(parseNotionUrl(`https://acme.notion.so/Page-${undashed}`)?.pageId).toBe(dashed)
+    expect(parseNotionUrl(`https://acme.notion.site/Page-${undashed}`)?.pageId).toBe(dashed)
+  })
+
+  it('rejects lookalike hosts', () => {
+    expect(parseNotionUrl(`https://notion.so.evil.com/${undashed}`)).toBeNull()
+    expect(parseNotionUrl(`https://notionsite.com/${undashed}`)).toBeNull()
+  })
+
   it('normalizes uppercase ids', () => {
     const page = parseNotionUrl(`https://www.notion.so/${undashed.toUpperCase()}`)
     expect(page?.pageId).toBe(dashed)

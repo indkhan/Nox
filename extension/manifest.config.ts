@@ -22,12 +22,20 @@ export default defineManifest({
   host_permissions: [
     'https://*.notion.so/*',
     'https://*.notion.com/*',
+    'https://*.notion.site/*',
     'https://mcp.notion.com/*',
   ],
   background: {
     service_worker: 'src/background/index.ts',
     type: 'module',
   },
+  content_scripts: [
+    {
+      matches: ['https://*.notion.so/*', 'https://*.notion.com/*', 'https://*.notion.site/*'],
+      js: ['src/content/index.ts'],
+      run_at: 'document_idle',
+    },
+  ],
   side_panel: {
     default_path: 'src/sidepanel/index.html',
   },

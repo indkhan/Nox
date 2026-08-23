@@ -8,7 +8,7 @@ import { WriteGate } from '../writes/gate'
 import { MutationJournal, idbJournalStore } from '../writes/journal'
 import { openNoxDB } from '../history/schema'
 import type { Mode } from '../writes/approvals'
-import type { CurrentPage } from '../../shared/notion-page'
+import type { MentionRef } from '../../shared/notion-page'
 
 // The store dynamically imports this module, so a static import back is cycle-free.
 import { useNoxStore } from '../../sidepanel/store'
@@ -23,6 +23,13 @@ export function setAgentHistoryThread(threadId: string | null): void {
   historyThreadId = threadId
 }
 
+/** Pages explicitly attached by the user this turn; the gate treats them as allowed reads. */
+const turnContextPages = new Set<string>()
+export function setTurnContextPages(ids: string[]): void {
+  turnContextPages.clear()
+  for (const id of ids) turnContextPages.add(id)
+}
+
 export const writeGate = new WriteGate({
   callTool: (name, args, signal) => notion.scheduleCallTool(name, args, signal),
   fetchPageMarkdown: async (pageId, signal) => {
@@ -32,7 +39,9 @@ export const writeGate = new WriteGate({
   getMode: () => currentMode,
   getContextSet: () => {
     const page = useNoxStore.getState().currentPage
-    return new Set(page ? [page.pageId] : [])
+    const ids = new Set(turnContextPages)
+    if (page) ids.add(page.pageId)
+    return ids
   },
   journal: new MutationJournal(idbJournalStore(openNoxDB)),
   onApproval: (approval) => useNoxStore.getState().addApproval(approval),
@@ -74,12 +83,12 @@ export const agentLoop = new AgentLoop({
   }),
 })
 
-export interface PageWithContext extends CurrentPage {
+export interface PageWithContext extends MentionRef {
   markdown?: string
 }
 
-/** Fetches current-page content for context injection (best effort). */
-export async function fetchCurrentPageContext(page: CurrentPage): Promise<PageWithContext> {
+/** Fetches a mentioned page's content for context injection (best effort). */
+export async function fetchMentionContext(page: MentionRef): Promise<PageWithContext> {
   try {
     const result = await notion.scheduleCallTool('notion-fetch', { id: page.pageId })
     const markdown = result.content

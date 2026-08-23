@@ -72,21 +72,23 @@ describe('truncateResult / context preamble', () => {
     expect(truncateResult('short', 1000)).toBe('short')
   })
 
-  it('embeds the current page with id and content', () => {
+  it('embeds mentioned pages with id and content', () => {
     const text = buildContextPreamble({
-      currentPage: { pageId: 'abc-123', url: '', title: 'Roadmap', markdown: '# Roadmap\nQ3 plans' },
-      mentions: [{ pageId: 'def-456', title: 'Spec' }],
+      mentions: [
+        { pageId: 'abc-123', title: 'Roadmap', markdown: '# Roadmap\nQ3 plans' },
+        { pageId: 'def-456', title: 'Spec' },
+      ],
     })
-    expect(text).toContain('<current_page id="abc-123">')
+    expect(text).toContain('<mentioned_page id="abc-123">')
     expect(text).toContain('# Roadmap')
-    expect(text).toContain('<mentioned_page id="def-456">Spec</mentioned_page>')
+    expect(text).toContain('<mentioned_page id="def-456">')
     expect(text).toContain(`${UNTRUSTED_BEGIN}\n`)
     expect(text).toContain(`\n${UNTRUSTED_END}`)
   })
 
   it('omits the context block when nothing is present', () => {
-    expect(buildContextPreamble({ currentPage: null })).toContain('<context>')
-    expect(buildContextPreamble({ currentPage: null })).not.toContain('<current_page')
+    expect(buildContextPreamble({})).toContain('<context>')
+    expect(buildContextPreamble({})).not.toContain('<mentioned_page')
   })
 })
 

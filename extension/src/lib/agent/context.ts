@@ -1,4 +1,4 @@
-import type { CurrentPage } from '../../shared/notion-page'
+import type { MentionRef } from '../../shared/notion-page'
 import { wrapUntrusted } from './untrusted'
 
 export const TRUNCATION_MARKER = '\n…[truncated by Nox]'
@@ -10,32 +10,28 @@ export function truncateResult(text: string, budgetChars: number): string {
 }
 
 export interface ContextInput {
-  currentPage: (CurrentPage & { markdown?: string }) | null
-  mentions?: Array<{ title?: string; pageId: string }>
+  mentions?: Array<MentionRef & { markdown?: string }>
   extraNotes?: string[]
 }
 
 /**
- * The per-turn context preamble. Pure so it is trivially testable; fetching
- * lives in the loop.
+ * The per-turn context preamble. Only pages the user explicitly @-mentioned
+ * enter context. Pure so it is trivially testable; fetching lives in the loop.
  */
 export function buildContextPreamble(input: ContextInput): string {
   const blocks: string[] = []
-  const { currentPage, mentions = [], extraNotes = [] } = input
+  const { mentions = [], extraNotes = [] } = input
 
   const content: string[] = []
-  if (currentPage) {
+  for (const m of mentions) {
     content.push(
       [
-        `<current_page id="${currentPage.pageId}"${currentPage.viewId ? ` view="${currentPage.viewId}"` : ''}>`,
-        `title: ${currentPage.title ?? 'Untitled'}`,
-        currentPage.markdown ? `content:\n${currentPage.markdown}` : '(content not fetched)',
-        '</current_page>',
+        `<mentioned_page id="${m.pageId}">`,
+        `title: ${m.title ?? 'Untitled'}`,
+        m.markdown ? `content:\n${m.markdown}` : '(content not fetched)',
+        '</mentioned_page>',
       ].join('\n'),
     )
-  }
-  for (const m of mentions) {
-    content.push(`<mentioned_page id="${m.pageId}">${m.title ?? 'Untitled'}</mentioned_page>`)
   }
   for (const note of extraNotes) content.push(`<note>${note}</note>`)
   blocks.push('<context>')

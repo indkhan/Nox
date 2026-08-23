@@ -13,10 +13,18 @@ export interface GetCurrentPageResponse {
   page: CurrentPage | null
 }
 
+export interface GetRecentPagesRequest {
+  type: 'nox/get-recent-pages'
+}
+
+export interface GetRecentPagesResponse {
+  pages: CurrentPage[]
+}
+
 export type NoxMessage = CurrentPageChangedMessage
 
-export type NoxRequest = GetCurrentPageRequest
-export type NoxResponse = GetCurrentPageResponse
+export type NoxRequest = GetCurrentPageRequest | GetRecentPagesRequest
+export type NoxResponse = GetCurrentPageResponse | GetRecentPagesResponse
 
 const PREFIX = 'nox/'
 

@@ -136,15 +136,16 @@ describe('AgentLoop integration (scripted codex)', () => {
 
   it('runs a full turn: context injection → tool round trip → streamed answer', async () => {
     const result = await loop.sendUserMessage('find the Projects database and tell me what is overdue', {
-      currentPage: { pageId: 'page_abc', url: '', title: 'Projects DB', markdown: '# Projects\nrows…' },
+      mentions: [{ pageId: 'page_abc', title: 'Projects DB', markdown: '# Projects\nrows…' }],
     })
     expect(result.interrupted).toBe(false)
     expect(result.text).toBe('You have 3 overdue items.')
 
     // Context preamble rode along with the user text.
     const sent = bridge.turnInputs[0][0].text ?? ''
-    expect(sent).toContain('<current_page id="page_abc"')
+    expect(sent).toContain('<mentioned_page id="page_abc"')
     expect(sent).toContain('Projects DB')
+    expect(sent).toContain('# Projects')
     expect(sent.endsWith('find the Projects database and tell me what is overdue')).toBe(true)
 
     // The executor actually called Notion search and returned wrapped data to Codex.

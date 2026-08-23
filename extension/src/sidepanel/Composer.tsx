@@ -1,12 +1,103 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useNoxStore } from './store'
 import { codex } from '../lib/codex/panel'
 import type { ModelInfo } from '../lib/codex/client'
 import { loadSettings, saveSettings, type NoxSettings } from '../lib/settings'
 import { agentLoop } from '../lib/agent/panel'
-import { ArrowUpIcon, ChevronDownIcon, PageIcon, SignalBarsIcon, StopIcon } from './Icons'
+import { notion } from '../lib/notion/panel'
+import { parseNotionUrl, type MentionRef } from '../shared/notion-page'
+import {
+  ArrowUpIcon,
+  ChevronDownIcon,
+  PageIcon,
+  PlusCircleIcon,
+  SignalBarsIcon,
+  StopIcon,
+} from './Icons'
 
 export type Mode = 'ask' | 'auto'
+
+interface PickerItem {
+  pageId: string
+  title?: string
+  iconEmoji?: string
+  iconUrl?: string
+}
+
+/** Text of the editor with mention pills flattened to `@Title`. */
+function editorText(el: HTMLElement): string {
+  let out = ''
+  el.childNodes.forEach((node) => {
+    if (node.nodeType === Node.TEXT_NODE) out += node.textContent ?? ''
+    else if (node instanceof HTMLBRElement) out += '\n'
+    else if (node instanceof HTMLElement && node.classList.contains('composer-mention')) {
+      out += `@${node.querySelector('.mention-label')?.textContent ?? 'page'} `
+    } else if (node instanceof HTMLElement) out += node.textContent ?? ''
+  })
+  return out
+}
+
+function caretOffset(el: HTMLElement): number {
+  const sel = window.getSelection()
+  if (!sel || sel.rangeCount === 0) return -1
+  const range = sel.getRangeAt(0)
+  if (!el.contains(range.endContainer)) return -1
+  const pre = range.cloneRange()
+  pre.selectNodeContents(el)
+  pre.setEnd(range.endContainer, range.endOffset)
+  return pre.toString().length
+}
+
+function setCaretAtEnd(el: HTMLElement): void {
+  const sel = window.getSelection()
+  if (!sel) return
+  const range = document.createRange()
+  range.selectNodeContents(el)
+  range.collapse(false)
+  sel.removeAllRanges()
+  sel.addRange(range)
+}
+
+/** DOM range covering character offsets [start, end) of the editor's flattened text. */
+function rangeForOffsets(el: HTMLElement, start: number, end: number): Range | null {
+  const range = document.createRange()
+  let walked = 0
+  let startNode: Node | null = null
+  let startOffset = 0
+  let endNode: Node | null = null
+  let endOffset = 0
+  const visit = (node: Node): boolean => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const len = node.textContent?.length ?? 0
+      if (!startNode && walked + len >= start) {
+        startNode = node
+        startOffset = start - walked
+      }
+      if (!endNode && walked + len >= end) {
+        endNode = node
+        endOffset = end - walked
+        return true
+      }
+      walked += len
+    } else if (node instanceof HTMLBRElement) {
+      walked += 1
+    }
+    return false
+  }
+  el.childNodes.forEach((child) => {
+    if (!endNode) visit(child)
+  })
+  if (!startNode || !endNode) return null
+  range.setStart(startNode, startOffset)
+  range.setEnd(endNode, endOffset)
+  return range
+}
+
+function PageChipContent({ item }: { item: PickerItem }) {
+  if (item.iconEmoji) return <span className="leading-none">{item.iconEmoji}</span>
+  if (item.iconUrl) return <img src={item.iconUrl} alt="" className="h-3 w-3 shrink-0 rounded-[2px] object-cover" />
+  return <PageIcon className="h-3 w-3 shrink-0 opacity-70" />
+}
 
 export function Composer({
   busy,
@@ -16,58 +107,244 @@ export function Composer({
 }: {
   busy: boolean
   readOnly?: boolean
-  onSend: (text: string) => void
+  onSend: (text: string, mentions: MentionRef[]) => void
   onCancel: () => void
 }) {
+  const editorRef = useRef<HTMLDivElement>(null)
   const [value, setValue] = useState('')
-  const ref = useRef<HTMLTextAreaElement>(null)
+  const [mentions, setMentions] = useState<PickerItem[]>([])
+  const [picker, setPicker] = useState<{
+    open: boolean
+    query: string
+    items: PickerItem[]
+    active: number
+    tokenStart: number
+    caretEnd: number
+  }>({ open: false, query: '', items: [], active: 0, tokenStart: -1, caretEnd: -1 })
   const currentPage = useNoxStore((s) => s.currentPage)
-  const setCurrentPage = useNoxStore((s) => s.setCurrentPage)
   const mode = useNoxStore((s) => s.mode)
   const setMode = useNoxStore((s) => s.setMode)
 
+  // Mirror of `picker` for imperative code paths (chip insertion).
+  const pickerRef = useRef(picker)
+  pickerRef.current = picker
+
   // Autosize to content up to a max height.
   useEffect(() => {
-    const el = ref.current
+    const el = editorRef.current
     if (!el) return
     el.style.height = 'auto'
     el.style.height = `${Math.min(el.scrollHeight, 128)}px`
   }, [value])
 
+  const refreshPickerItems = useCallback(async (query: string): Promise<PickerItem[]> => {
+    if (!query.trim()) {
+      try {
+        const response = await chrome.runtime.sendMessage({ type: 'nox/get-recent-pages' })
+        return ((response as { pages?: PickerItem[] })?.pages ?? []).slice(0, 8)
+      } catch {
+        return []
+      }
+    }
+    try {
+      const result = await notion.scheduleCallTool('notion-search', { query })
+      const text = result.content
+        .filter((c) => c.type === 'text')
+        .map((c) => c.text ?? '')
+        .join('\n')
+      const found = new Map<string, PickerItem>()
+      const linkRe = /\[([^\]]*)\]\((https:\/\/[^\s)]+)\)/g
+      for (const [, label, url] of text.matchAll(linkRe)) {
+        const parsed = parseNotionUrl(url)
+        if (parsed && !found.has(parsed.pageId)) found.set(parsed.pageId, { pageId: parsed.pageId, title: label || parsed.title })
+      }
+      return [...found.values()].slice(0, 8)
+    } catch {
+      return []
+    }
+  }, [])
+
+  /** Reads the caret, finds an active @token, and syncs the picker. */
+  const syncPicker = useCallback(() => {
+    const el = editorRef.current
+    if (!el || readOnly) return
+    const caret = caretOffset(el)
+    if (caret < 0) {
+      setPicker((p) => (p.open ? { ...p, open: false } : p))
+      return
+    }
+    const before = editorText(el).slice(0, caret)
+    const match = /@([^\s@]{0,100})$/.exec(before)
+    if (!match) {
+      setPicker((p) => (p.open ? { ...p, open: false } : p))
+      return
+    }
+    const query = match[1]
+    const tokenStart = caret - match[0].length
+    setPicker((p) =>
+      p.open && p.tokenStart === tokenStart && p.query === query
+        ? p
+        : { open: true, query, items: [], active: 0, tokenStart, caretEnd: caret },
+    )
+    void refreshPickerItems(query).then((items) =>
+      setPicker((p) => (p.open && p.query === query ? { ...p, items, active: 0 } : p)),
+    )
+  }, [readOnly, refreshPickerItems])
+
+  const insertChip = useCallback((item: PickerItem): void => {
+    const el = editorRef.current
+    if (!el) return
+    const p = pickerRef.current
+
+    // Replace the @token (if the picker was open) with the pill.
+    if (p.open && p.tokenStart >= 0 && p.caretEnd >= 0) {
+      const caret = caretOffset(el)
+      const end = caret < 0 ? p.caretEnd : Math.max(p.tokenStart, Math.min(p.caretEnd, caret))
+      rangeForOffsets(el, p.tokenStart, end)?.deleteContents()
+    }
+    const chip = document.createElement('span')
+    chip.className = 'composer-mention'
+    chip.contentEditable = 'false'
+    chip.dataset.mentionId = item.pageId
+
+    const label = document.createElement('span')
+    label.className = 'mention-label'
+    label.textContent = item.title ?? item.pageId.slice(0, 8)
+    const icon = document.createElement('span')
+    if (item.iconEmoji) {
+      icon.textContent = item.iconEmoji
+    } else {
+      icon.textContent = '📄'
+      icon.className = 'opacity-70'
+    }
+    chip.append(icon)
+
+    const remove = document.createElement('button')
+    remove.type = 'button'
+    remove.textContent = '×'
+    remove.setAttribute('aria-label', `Remove ${label.textContent} from context`)
+    remove.className = 'ml-0.5 cursor-pointer opacity-60 hover:opacity-100'
+    remove.addEventListener('click', () => {
+      chip.remove()
+      setMentions((list) => list.filter((m) => m.pageId !== item.pageId))
+      setValue(editorText(el))
+    })
+    chip.append(remove)
+    chip.append(label)
+
+    // Insert at the caret when possible, otherwise append.
+    const sel = window.getSelection()
+    let inserted = false
+    if (sel && sel.rangeCount > 0 && el.contains(sel.getRangeAt(0).startContainer)) {
+      try {
+        const r = sel.getRangeAt(0)
+        r.collapse(true)
+        r.insertNode(chip)
+        inserted = true
+      } catch {
+        inserted = false
+      }
+    }
+    if (!inserted) el.appendChild(chip)
+    chip.after(document.createTextNode('\u00a0'))
+    setMentions((list) => (list.some((m) => m.pageId === item.pageId) ? list : [...list, item]))
+    setValue(editorText(el))
+    setPicker({ open: false, query: '', items: [], active: 0, tokenStart: -1, caretEnd: -1 })
+    setCaretAtEnd(el)
+  }, [])
+
   function submit() {
-    const text = value.trim()
-    if (!text || busy || readOnly) return
-    onSend(text)
+    const el = editorRef.current
+    if (!el || busy || readOnly) return
+    const text = editorText(el).trim()
+    if (!text) return
+    onSend(text, mentions.map(({ pageId, title, iconEmoji, iconUrl }) => ({ pageId, title, iconEmoji, iconUrl })))
+    el.innerHTML = ''
+    setMentions([])
     setValue('')
   }
 
   return (
     <div className="p-2.5" data-testid="composer-root">
-      <div className="rounded-2xl border border-zinc-700 bg-zinc-900 px-3 pb-2 pt-2.5 transition-colors focus-within:border-sky-500">
-        {currentPage && (
-          <div className="mb-1">
-            <span
-              className="inline-flex max-w-full items-center gap-1.5 rounded-full bg-zinc-800 px-2 py-1 text-xs text-zinc-200"
-              data-testid="context-pill"
-            >
-              <PageIcon className="h-3 w-3 shrink-0 text-zinc-400" />
-              <span className="truncate">{currentPage.title ?? currentPage.pageId}</span>
+      <div className="relative rounded-2xl border border-zinc-700 bg-zinc-900 px-3 pb-2 pt-2.5 transition-colors focus-within:border-sky-500">
+        {picker.open && (
+          <div
+            data-testid="mention-picker"
+            role="listbox"
+            aria-label="Mention a page"
+            className="absolute bottom-full left-0 z-20 mb-2 max-h-64 w-full overflow-y-auto rounded-xl border border-zinc-700 bg-zinc-900 p-1 shadow-2xl"
+          >
+            {picker.items.length === 0 && (
+              <p className="px-3 py-2 text-xs text-zinc-500">
+                {picker.query ? 'No matching pages' : 'Recently open pages appear here'}
+              </p>
+            )}
+            {picker.items.map((item, index) => (
               <button
-                onClick={() => setCurrentPage(null)}
-                aria-label="Remove current page context"
-                className="ml-0.5 text-zinc-500 hover:text-zinc-200"
+                key={item.pageId}
+                role="option"
+                aria-selected={index === picker.active}
+                onMouseDown={(e) => {
+                  e.preventDefault()
+                  insertChip(item)
+                }}
+                onMouseEnter={() => setPicker((p) => ({ ...p, active: index }))}
+                data-testid={`mention-option-${index}`}
+                className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm ${
+                  index === picker.active ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-300'
+                }`}
               >
-                ×
+                <span className="flex h-4 w-4 shrink-0 items-center justify-center">
+                  <PageChipContent item={item} />
+                </span>
+                <span className="truncate">{item.title ?? item.pageId.slice(0, 8)}</span>
               </button>
-            </span>
+            ))}
           </div>
         )}
-        <textarea
-          disabled={readOnly}
-          ref={ref}
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
+        <div
+          ref={editorRef}
+          contentEditable={!readOnly}
+          role="textbox"
+          aria-multiline="true"
+          aria-label="Message Nox"
+          data-testid="composer"
+          data-placeholder="Do anything with AI..."
+          className="min-h-[1.75rem] w-full resize-none overflow-y-auto whitespace-pre-wrap break-words bg-transparent px-0.5 text-sm leading-relaxed outline-none"
+          onInput={() => {
+            const el = editorRef.current
+            if (el && editorText(el) === '') el.innerHTML = ''
+            setValue(el ? editorText(el) : '')
+            syncPicker()
+          }}
+          onKeyUp={(e) => {
+            if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) syncPicker()
+          }}
+          onClick={syncPicker}
           onKeyDown={(e) => {
+            if (picker.open && picker.items.length > 0) {
+              if (e.key === 'ArrowDown') {
+                e.preventDefault()
+                setPicker((p) => ({ ...p, active: (p.active + 1) % p.items.length }))
+                return
+              }
+              if (e.key === 'ArrowUp') {
+                e.preventDefault()
+                setPicker((p) => ({ ...p, active: (p.active - 1 + p.items.length) % p.items.length }))
+                return
+              }
+              if (e.key === 'Enter' || e.key === 'Tab') {
+                e.preventDefault()
+                insertChip(picker.items[picker.active])
+                return
+              }
+              if (e.key === 'Escape') {
+                e.preventDefault()
+                e.stopPropagation()
+                setPicker((p) => ({ ...p, open: false }))
+                return
+              }
+            }
             if (e.key === 'Escape' && busy) {
               e.preventDefault()
               onCancel()
@@ -78,13 +355,18 @@ export function Composer({
               submit()
             }
           }}
-          rows={1}
-          placeholder="Do anything with AI..."
-          aria-label="Message Nox"
-          data-testid="composer"
-          className="w-full resize-none bg-transparent px-0.5 text-sm leading-relaxed outline-none placeholder:text-zinc-600"
         />
         <div className="mt-1 flex items-center gap-0.5">
+          <button
+            onClick={() => currentPage && insertChip(currentPage)}
+            disabled={readOnly || !currentPage || mentions.some((m) => m.pageId === currentPage.pageId)}
+            aria-label="Add current page"
+            title="Add current page"
+            data-testid="add-current-page"
+            className="cursor-pointer rounded-md px-1.5 py-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            <PlusCircleIcon />
+          </button>
           <details className="relative">
             <summary className="cursor-pointer list-none rounded-md px-1.5 py-1 text-[11px] text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300">
               Model settings
@@ -177,7 +459,7 @@ function ModelControls({ disabled }: { disabled: boolean }) {
         </select>
         <ChevronDownIcon className="pointer-events-none absolute right-0 h-2.5 w-2.5" />
       </label>
-      <span aria-hidden="true" className="mx-1 h-3 w-px bg-zinc-700" />
+      <span aria-hidden="true" className="mx-1 h-px w-px bg-zinc-700" />
       <label className="relative flex items-center" title="Reasoning effort">
         <span className="sr-only">Reasoning effort</span>
         <select

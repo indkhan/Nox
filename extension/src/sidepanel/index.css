@@ -133,6 +133,31 @@ textarea {
   font: inherit;
 }
 
+[contenteditable][data-placeholder]:empty::before {
+  content: attr(data-placeholder);
+  color: var(--nox-muted, #71717a);
+  pointer-events: none;
+}
+
+.composer-mention {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  max-width: 14rem;
+  vertical-align: baseline;
+  border-radius: 9999px;
+  background: rgba(63, 63, 70, 0.8);
+  padding: 0.05rem 0.45rem;
+  font-size: 0.75rem;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.composer-mention .mention-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 button:focus-visible,
 select:focus-visible,
 textarea:focus-visible {

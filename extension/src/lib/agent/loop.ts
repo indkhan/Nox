@@ -2,7 +2,6 @@ import type { CodexClient, CodexEvent, ThreadSettings } from '../codex/client'
 import type { NativeBridge } from '../codex/native'
 import { classifyBridgeFailure } from '../codex/health'
 import { ToolExecutor } from './executor'
-import type { CurrentPage } from '../../shared/notion-page'
 import { buildContextPreamble } from './context'
 
 export const DEFAULT_TURN_TIMEOUT_MS = 10 * 60 * 1000
@@ -102,11 +101,11 @@ export class AgentLoop {
 
   /**
    * Sends one user turn. Resolves with final text; streams events to listeners.
-   * `currentPage` is injected as context and does not count as a mention.
+   * Only explicitly @-mentioned pages are injected as context.
    */
   async sendUserMessage(
     text: string,
-    opts: { currentPage?: CurrentPage & { markdown?: string }; timeoutMs?: number } = {},
+    opts: { mentions?: Array<{ pageId: string; title?: string; markdown?: string }>; timeoutMs?: number } = {},
   ): Promise<{ text: string; interrupted: boolean }> {
     if (this.turnRunning) throw new Error('turn already running')
     this.turnRunning = true
@@ -119,17 +118,17 @@ export class AgentLoop {
 
   private async runUserMessage(
     text: string,
-    opts: { currentPage?: CurrentPage & { markdown?: string }; timeoutMs?: number },
+    opts: { mentions?: Array<{ pageId: string; title?: string; markdown?: string }>; timeoutMs?: number },
   ): Promise<{ text: string; interrupted: boolean }> {
     this.cancelled = false
     this.toolUsedThisTurn = false
-    this.untrustedContextThisTurn = opts.currentPage != null
+    this.untrustedContextThisTurn = (opts.mentions?.length ?? 0) > 0
     this.turnAbort = new AbortController()
     this.deps.executor.beginTurn(this.turnAbort.signal)
     await this.ensureThread()
     this.deps.beginTurn?.()
 
-    const preamble = buildContextPreamble({ currentPage: opts.currentPage ?? null })
+    const preamble = buildContextPreamble({ mentions: opts.mentions })
     const message = preamble ? `${preamble}\n\n${text}` : text
 
     const timeoutMs = opts.timeoutMs ?? DEFAULT_TURN_TIMEOUT_MS

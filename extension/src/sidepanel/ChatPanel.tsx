@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
 import { useNoxStore } from './store'
-import { agentLoop, fetchCurrentPageContext, setAgentHistoryThread, writeGate } from '../lib/agent/panel'
+import { agentLoop, fetchMentionContext, setAgentHistoryThread, setTurnContextPages, writeGate } from '../lib/agent/panel'
 import { ActivityTimeline, AssistantMarkdown, FollowUpActions } from './MessageParts'
 import { applyActivityEvent, applyUndoResult, followUpsForActivity, type ActivityItem } from '../lib/agent/activity'
 import { Composer } from './Composer'
@@ -12,6 +12,7 @@ import { startPersistedTurn } from '../lib/history/turn'
 import { logError, logInfo } from '../lib/log'
 import { undoEntry } from '../lib/writes/undo'
 import { restoreTurns } from '../lib/history/restore'
+import type { MentionRef } from '../shared/notion-page'
 
 interface TurnView {
   activity: ActivityItem[]
@@ -29,7 +30,6 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
   const lastUsageRef = useRef<Record<string, number> | null>(null)
   const historyRestoreCancelledRef = useRef(false)
   const historyGenerationRef = useRef(0)
-  const currentPage = useNoxStore((s) => s.currentPage)
   const connectionStatus = useNoxStore((s) => s.connectionStatus)
   const threadTitle = useNoxStore((s) => s.threadTitle)
   const setThreadTitle = useNoxStore((s) => s.setThreadTitle)
@@ -104,7 +104,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
 
   const v_error_placeholder = () => '(no content)'
 
-  async function send(text: string) {
+  async function send(text: string, mentions: MentionRef[] = []) {
     if (busyRef.current || readOnly) return
     historyRestoreCancelledRef.current = true
     historyGenerationRef.current++
@@ -191,10 +191,15 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
         }
       })
 
-      let pageContext = currentPage
-      if (currentPage) pageContext = await fetchCurrentPageContext(currentPage)
+      let mentionContext: Array<MentionRef & { markdown?: string }> = mentions
+      if (mentions.length > 0) {
+        setTurnContextPages(mentions.map((m) => m.pageId))
+        mentionContext = await Promise.all(mentions.map((m) => fetchMentionContext(m)))
+      }
 
-      const result = await agentLoop.sendUserMessage(text, { currentPage: pageContext ?? undefined })
+      const result = await agentLoop.sendUserMessage(text, {
+        mentions: mentionContext.map(({ pageId, title, markdown }) => ({ pageId, title, markdown })),
+      })
 
       currentActivity = attachJournalEntries(currentActivity, await writeGate.journal.newestFirst())
       const finalText = result.text || streamedAnswer || (result.interrupted ? '' : v_error_placeholder())
@@ -232,7 +237,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
   return (
     <section className="flex min-h-0 flex-1 flex-col" data-testid="chat-panel">
       {!hasMessages ? (
-        <EmptyState readOnly={readOnly} onSend={(t) => void send(t)} />
+        <EmptyState readOnly={readOnly} onSend={(t, mentions) => void send(t, mentions)} />
       ) : (
         <div ref={scrollRef} className="min-h-0 flex-1 space-y-5 overflow-y-auto px-3 pb-2 pt-1" data-testid="chat-messages">
           {turns.map(({ id, userText, view }) => (
@@ -264,7 +269,12 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
       {!readOnly && <ApprovalCards />}
       {hasMessages && !readOnly && <UndoBar />}
 
-      <Composer busy={busy} readOnly={readOnly} onSend={(t) => void send(t)} onCancel={() => agentLoop.cancel()} />
+      <Composer
+        busy={busy}
+        readOnly={readOnly}
+        onSend={(t, mentions) => void send(t, mentions)}
+        onCancel={() => agentLoop.cancel()}
+      />
     </section>
   )
 }

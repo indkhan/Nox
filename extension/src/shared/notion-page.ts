@@ -3,6 +3,17 @@ export interface CurrentPage {
   viewId?: string
   url: string
   title?: string
+  /** Page icon as shown in Notion (emoji character or custom image URL). */
+  iconEmoji?: string
+  iconUrl?: string
+}
+
+/** A page the user explicitly attached to a turn via @-mention. */
+export interface MentionRef {
+  pageId: string
+  title?: string
+  iconEmoji?: string
+  iconUrl?: string
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
@@ -19,6 +30,12 @@ export function normalizeId(raw: string): string | null {
   return null
 }
 
+const NOTION_DOMAINS = ['notion.so', 'notion.com', 'notion.site']
+
+function isNotionHost(host: string): boolean {
+  return NOTION_DOMAINS.some((domain) => host === domain || host.endsWith(`.${domain}`))
+}
+
 export function parseNotionUrl(rawUrl: string): CurrentPage | null {
   let url: URL
   try {
@@ -27,13 +44,7 @@ export function parseNotionUrl(rawUrl: string): CurrentPage | null {
     return null
   }
 
-  const host = url.hostname
-  const isNotion =
-    host === 'www.notion.so' ||
-    host === 'notion.so' ||
-    host === 'www.notion.com' ||
-    host === 'notion.com'
-  if (!isNotion || url.protocol !== 'https:') return null
+  if (!isNotionHost(url.hostname) || url.protocol !== 'https:') return null
 
   const segments = url.pathname.split('/').filter(Boolean)
   const last = segments.at(-1)
