@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Dispatch, SetStateAction } from 'react'
 import { useNoxStore } from './store'
-import { agentLoop, fetchMentionContext, setAgentHistoryThread, setTurnContextPages, writeGate } from '../lib/agent/panel'
+import { agentLoop, fetchMentionContext, prepareAgentTurn, setAgentHistoryThread, writeGate } from '../lib/agent/panel'
 import { ActivityTimeline, AssistantMarkdown, FollowUpActions } from './MessageParts'
 import { applyActivityEvent, applyUndoResult, followUpsForActivity, type ActivityItem } from '../lib/agent/activity'
 import { Composer } from './Composer'
@@ -112,6 +112,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
       setTurns((t) => [...t, { id: crypto.randomUUID(), userText: text, view: { activity: [], answer: '', error: 'Connect Notion first — open Settings (top right) to connect.', pending: false } }])
       return
     }
+    prepareAgentTurn(useNoxStore.getState().mode, mentions.map((mention) => mention.pageId))
     busyRef.current = true
     setAgentBusy(true)
     setBusy(true)
@@ -193,7 +194,6 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
 
       let mentionContext: Array<MentionRef & { markdown?: string }> = mentions
       if (mentions.length > 0) {
-        setTurnContextPages(mentions.map((m) => m.pageId))
         mentionContext = await Promise.all(mentions.map((m) => fetchMentionContext(m)))
       }
 

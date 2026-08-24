@@ -9,25 +9,20 @@ import { MutationJournal, idbJournalStore } from '../writes/journal'
 import { openNoxDB } from '../history/schema'
 import type { Mode } from '../writes/approvals'
 import type { MentionRef } from '../../shared/notion-page'
+import { createTurnAccessState } from './turn-access'
 
 // The store dynamically imports this module, so a static import back is cycle-free.
 import { useNoxStore } from '../../sidepanel/store'
 
-let currentMode: Mode = 'ask'
 let historyThreadId: string | null = null
-export function setAgentMode(mode: Mode): void {
-  currentMode = mode
-}
 
 export function setAgentHistoryThread(threadId: string | null): void {
   historyThreadId = threadId
 }
 
-/** Pages explicitly attached by the user this turn; the gate treats them as allowed reads. */
-const turnContextPages = new Set<string>()
-export function setTurnContextPages(ids: string[]): void {
-  turnContextPages.clear()
-  for (const id of ids) turnContextPages.add(id)
+const turnAccess = createTurnAccessState()
+export function prepareAgentTurn(mode: Mode, pageIds: string[]): void {
+  turnAccess.begin(mode, pageIds)
 }
 
 export const writeGate = new WriteGate({
@@ -36,10 +31,10 @@ export const writeGate = new WriteGate({
     const result = await notion.scheduleCallTool('notion-fetch', { id: pageId }, signal)
     return result.content.filter((c) => c.type === 'text').map((c) => c.text ?? '').join('\n')
   },
-  getMode: () => currentMode,
+  getMode: () => turnAccess.mode(),
   getContextSet: () => {
     const page = useNoxStore.getState().currentPage
-    const ids = new Set(turnContextPages)
+    const ids = turnAccess.contextPages()
     if (page) ids.add(page.pageId)
     return ids
   },

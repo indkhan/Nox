@@ -71,11 +71,7 @@ export const useNoxStore = create<NoxState>((set) => ({
   setCodex: (update) => set(update),
 
   mode: 'ask',
-  setMode: (mode) => {
-    set({ mode })
-    // Keep the write gate's escalation mode in sync (E6).
-    void import('../lib/agent/panel').then(({ setAgentMode }) => setAgentMode(mode))
-  },
+  setMode: (mode) => set({ mode }),
 
   pendingApprovals: [],
   addApproval: (a) => set((s) => ({ pendingApprovals: [...s.pendingApprovals, a] })),
