@@ -14,6 +14,7 @@ import { logError, logInfo } from '../lib/log'
 import { undoEntry } from '../lib/writes/undo'
 import { restoreTurns } from '../lib/history/restore'
 import type { MentionRef } from '../shared/notion-page'
+import type { LocalAttachment } from '../shared/attachments'
 
 interface TurnView {
   activity: ActivityItem[]
@@ -105,7 +106,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
 
   const v_error_placeholder = () => '(no content)'
 
-  async function send(text: string, mentions: MentionRef[] = []) {
+  async function send(text: string, mentions: MentionRef[] = [], attachments: LocalAttachment[] = []) {
     if (busyRef.current || readOnly) return
     historyRestoreCancelledRef.current = true
     historyGenerationRef.current++
@@ -113,7 +114,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
       setTurns((t) => [...t, { id: crypto.randomUUID(), userText: text, view: { activity: [], answer: '', error: 'Connect Notion first — open Settings (top right) to connect.', pending: false } }])
       return
     }
-    prepareAgentTurn(useNoxStore.getState().mode, mentions.map((mention) => mention.pageId))
+    prepareAgentTurn(useNoxStore.getState().mode, mentions.map((mention) => mention.pageId), attachments.map((attachment) => attachment.id))
     busyRef.current = true
     setAgentBusy(true)
     setBusy(true)
@@ -201,6 +202,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
       const result = await agentLoop.sendUserMessage(text, {
         currentPage: useNoxStore.getState().currentPage ?? undefined,
         mentions: mentionContext.map(({ pageId, title, markdown }) => ({ pageId, title, markdown })),
+        attachments,
       })
 
       currentActivity = attachJournalEntries(currentActivity, await writeGate.journal.newestFirst())
@@ -275,7 +277,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
       <Composer
         busy={busy}
         readOnly={readOnly}
-        onSend={(t, mentions) => void send(t, mentions)}
+        onSend={(t, mentions, attachments) => void send(t, mentions, attachments)}
         onCancel={() => agentLoop.cancel()}
       />
     </section>

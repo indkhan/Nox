@@ -4,6 +4,7 @@ import { classifyBridgeFailure } from '../codex/health'
 import { ToolExecutor } from './executor'
 import { buildContextPreamble } from './context'
 import type { CurrentPage } from '../../shared/notion-page'
+import type { LocalAttachment } from '../../shared/attachments'
 
 export const DEFAULT_TURN_TIMEOUT_MS = 10 * 60 * 1000
 
@@ -106,7 +107,7 @@ export class AgentLoop {
    */
   async sendUserMessage(
     text: string,
-    opts: { currentPage?: CurrentPage; mentions?: Array<{ pageId: string; title?: string; markdown?: string }>; timeoutMs?: number } = {},
+    opts: { currentPage?: CurrentPage; mentions?: Array<{ pageId: string; title?: string; markdown?: string }>; attachments?: LocalAttachment[]; timeoutMs?: number } = {},
   ): Promise<{ text: string; interrupted: boolean }> {
     if (this.turnRunning) throw new Error('turn already running')
     this.turnRunning = true
@@ -119,7 +120,7 @@ export class AgentLoop {
 
   private async runUserMessage(
     text: string,
-    opts: { currentPage?: CurrentPage; mentions?: Array<{ pageId: string; title?: string; markdown?: string }>; timeoutMs?: number },
+    opts: { currentPage?: CurrentPage; mentions?: Array<{ pageId: string; title?: string; markdown?: string }>; attachments?: LocalAttachment[]; timeoutMs?: number },
   ): Promise<{ text: string; interrupted: boolean }> {
     this.cancelled = false
     this.toolUsedThisTurn = false
@@ -129,7 +130,7 @@ export class AgentLoop {
     await this.ensureThread()
     this.deps.beginTurn?.()
 
-    const preamble = buildContextPreamble({ currentPage: opts.currentPage, mentions: opts.mentions })
+    const preamble = buildContextPreamble({ currentPage: opts.currentPage, mentions: opts.mentions, attachments: opts.attachments })
     const message = preamble ? `${preamble}\n\n${text}` : text
 
     const timeoutMs = opts.timeoutMs ?? DEFAULT_TURN_TIMEOUT_MS

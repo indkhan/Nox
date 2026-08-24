@@ -6,6 +6,9 @@ import { loadSettings, saveSettings, type NoxSettings } from '../lib/settings'
 import { agentLoop } from '../lib/agent/panel'
 import { notion } from '../lib/notion/panel'
 import { parseNotionUrl, type MentionRef } from '../shared/notion-page'
+import type { LocalAttachment } from '../shared/attachments'
+import { attachmentRepository } from '../lib/history/attachments'
+import { openNoxDB } from '../lib/history/schema'
 import {
   ArrowUpIcon,
   ChevronDownIcon,
@@ -107,12 +110,14 @@ export function Composer({
 }: {
   busy: boolean
   readOnly?: boolean
-  onSend: (text: string, mentions: MentionRef[]) => void
+  onSend: (text: string, mentions: MentionRef[], attachments: LocalAttachment[]) => void
   onCancel: () => void
 }) {
   const editorRef = useRef<HTMLDivElement>(null)
   const [value, setValue] = useState('')
   const [mentions, setMentions] = useState<PickerItem[]>([])
+  const [attachments, setAttachments] = useState<LocalAttachment[]>([])
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const mentionCache = useRef(new Map<string, PickerItem>())
   const [picker, setPicker] = useState<{
     open: boolean
@@ -274,16 +279,18 @@ export function Composer({
     const el = editorRef.current
     if (!el || busy || readOnly) return
     const text = editorText(el).trim()
-    if (!text) return
-    onSend(text, mentions.map(({ pageId, title, iconEmoji, iconUrl }) => ({ pageId, title, iconEmoji, iconUrl })))
+    if (!text && attachments.length === 0) return
+    onSend(text || 'Attach these files to the appropriate Notion page.', mentions.map(({ pageId, title, iconEmoji, iconUrl }) => ({ pageId, title, iconEmoji, iconUrl })), attachments)
     el.innerHTML = ''
     setMentions([])
+    setAttachments([])
     setValue('')
   }
 
   return (
     <div className="p-2.5" data-testid="composer-root">
       <div className="relative rounded-2xl border border-zinc-700 bg-zinc-900 px-3 pb-2 pt-2.5 transition-colors focus-within:border-sky-500">
+        {attachments.length > 0 && <div className="mb-2 flex flex-wrap gap-1">{attachments.map((attachment) => <span key={attachment.id} className="rounded-md bg-zinc-800 px-2 py-1 text-[11px] text-zinc-300">{attachment.name}<button aria-label={`Remove ${attachment.name}`} onClick={() => setAttachments((all) => all.filter((item) => item.id !== attachment.id))} className="ml-1 text-zinc-500">×</button></span>)}</div>}
         {picker.open && (
           <div
             data-testid="mention-picker"
@@ -374,6 +381,7 @@ export function Composer({
           }}
         />
         <div className="mt-1 flex items-center gap-0.5">
+          <input ref={fileInputRef} type="file" multiple className="hidden" onChange={(event) => { const files = [...(event.target.files ?? [])].slice(0, 10); void Promise.all(files.filter((file) => file.size <= 20 * 1024 * 1024).map((file) => attachmentRepository(openNoxDB).save(file))).then((added) => setAttachments((all) => [...all, ...added])); event.target.value = '' }} />
           <button
             onClick={() => currentPage && insertChip(currentPage)}
             disabled={readOnly || !currentPage || mentions.some((m) => m.pageId === currentPage.pageId)}
@@ -384,6 +392,7 @@ export function Composer({
           >
             <PlusCircleIcon />
           </button>
+          <button onClick={() => fileInputRef.current?.click()} disabled={readOnly || busy} aria-label="Attach file" title="Attach file" className="rounded-md px-1.5 py-1 text-[11px] text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300 disabled:opacity-40">File</button>
           <ModelControls disabled={readOnly} />
           <span className="flex-1" />
           {busy && (
@@ -414,7 +423,7 @@ export function Composer({
           ) : (
             <button
               onClick={submit}
-              disabled={readOnly || !value.trim()}
+              disabled={readOnly || (!value.trim() && attachments.length === 0)}
               aria-label="Send"
               data-testid="send"
               className="ml-1 flex h-7 w-7 items-center justify-center rounded-full bg-zinc-200 text-zinc-900 hover:bg-white disabled:bg-zinc-800 disabled:text-zinc-600"

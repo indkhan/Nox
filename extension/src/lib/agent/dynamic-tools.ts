@@ -1,6 +1,7 @@
 import type { McpTool } from '../mcp/client'
 import type { CapabilityGate } from '../notion/capabilities'
 import { WORKSPACE_PLAN_TOOL } from '../architect/tool'
+import { UPLOAD_FILE_TOOL } from '../attachments/upload-tool'
 
 /** The shape Codex `thread/start.dynamicTools` expects (verified, spike 0.2). */
 export interface DynamicTool {
@@ -26,5 +27,5 @@ export function toDynamicTools(tools: McpTool[], gate: CapabilityGate): DynamicT
       inputSchema: tool.inputSchema ?? { type: 'object', properties: {} },
     })
   }
-  return [...out, WORKSPACE_PLAN_TOOL]
+  return [...out, WORKSPACE_PLAN_TOOL, UPLOAD_FILE_TOOL]
 }

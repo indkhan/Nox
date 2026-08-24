@@ -1,4 +1,5 @@
 import type { CurrentPage, MentionRef } from '../../shared/notion-page'
+import type { LocalAttachment } from '../../shared/attachments'
 import { wrapUntrusted } from './untrusted'
 
 export const TRUNCATION_MARKER = '\n…[truncated by Nox]'
@@ -12,6 +13,7 @@ export function truncateResult(text: string, budgetChars: number): string {
 export interface ContextInput {
   currentPage?: CurrentPage
   mentions?: Array<MentionRef & { markdown?: string }>
+  attachments?: LocalAttachment[]
   extraNotes?: string[]
 }
 
@@ -21,7 +23,7 @@ export interface ContextInput {
  */
 export function buildContextPreamble(input: ContextInput): string {
   const blocks: string[] = []
-  const { currentPage, mentions = [], extraNotes = [] } = input
+  const { currentPage, mentions = [], attachments = [], extraNotes = [] } = input
 
   const content: string[] = []
   if (currentPage) {
@@ -41,6 +43,9 @@ export function buildContextPreamble(input: ContextInput): string {
         '</mentioned_page>',
       ].join('\n'),
     )
+  }
+  for (const attachment of attachments) {
+    content.push(`<local_attachment id="${escapeXml(attachment.id)}" name="${escapeXml(attachment.name)}" mime="${escapeXml(attachment.mimeType)}" size="${attachment.size}"/>`)
   }
   for (const note of extraNotes) content.push(`<note>${note}</note>`)
   blocks.push('<context>')
