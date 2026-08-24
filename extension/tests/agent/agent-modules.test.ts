@@ -62,6 +62,30 @@ describe('untrusted wrapper', () => {
 })
 
 describe('truncateResult / context preamble', () => {
+  it('includes the current Notion location without fetching page content', () => {
+    const text = buildContextPreamble({
+      currentPage: {
+        pageId: 'abc-123',
+        viewId: 'view-456',
+        title: 'Projects & plans',
+        url: 'https://www.notion.so/Projects-abc123?v=view456',
+      },
+    })
+    expect(text).toContain('<current_notion_location>')
+    expect(text).toContain('id="abc-123"')
+    expect(text).toContain('view_id="view-456"')
+    expect(text).toContain('Projects &amp; plans')
+    expect(text).not.toContain('content:')
+  })
+
+  it('does not repeat the current page as a mention', () => {
+    const text = buildContextPreamble({
+      currentPage: { pageId: 'abc-123', title: 'Projects', url: 'https://notion.so/abc123' },
+      mentions: [{ pageId: 'abc-123', title: 'Projects', markdown: '# Projects' }],
+    })
+    expect(text.match(/<mentioned_page/g)).toBeNull()
+  })
+
   it('truncates with a visible marker', () => {
     const out = truncateResult('a'.repeat(3000), 1000)
     expect(out.length).toBe(1000)

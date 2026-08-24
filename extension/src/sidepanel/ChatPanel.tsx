@@ -198,6 +198,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
       }
 
       const result = await agentLoop.sendUserMessage(text, {
+        currentPage: useNoxStore.getState().currentPage ?? undefined,
         mentions: mentionContext.map(({ pageId, title, markdown }) => ({ pageId, title, markdown })),
       })
 
