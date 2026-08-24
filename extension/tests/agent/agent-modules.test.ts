@@ -17,14 +17,15 @@ describe('toDynamicTools', () => {
 
   it('passes allowed tools through with function shape', () => {
     const out = toDynamicTools(tools, new CapabilityGate())
-    expect(out).toHaveLength(2) // empty name dropped
+    expect(out).toHaveLength(3) // empty name dropped; local plan tool added
     expect(out[0]).toMatchObject({ type: 'function', name: 'notion-search', description: 'Search' })
+    expect(out.at(-1)?.name).toBe('nox-propose-workspace-plan')
   })
 
   it('drops plan-gated tools entirely', () => {
     const gate = new CapabilityGate({ 'query-meeting-notes': 'upgrade_required' })
     const out = toDynamicTools(tools, gate)
-    expect(out.map((t) => t.name)).toEqual(['notion-search'])
+    expect(out.map((t) => t.name)).toEqual(['notion-search', 'nox-propose-workspace-plan'])
   })
 
   it('defaults a missing inputSchema to an object schema', () => {

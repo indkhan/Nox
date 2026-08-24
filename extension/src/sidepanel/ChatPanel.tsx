@@ -7,6 +7,7 @@ import { applyActivityEvent, applyUndoResult, followUpsForActivity, type Activit
 import { Composer } from './Composer'
 import { EmptyState } from './EmptyState'
 import { ApprovalCards, UndoBar } from './ApprovalCards'
+import { PlanCards } from './PlanCards'
 import { historyRepo } from '../lib/history/panel'
 import { startPersistedTurn } from '../lib/history/turn'
 import { logError, logInfo } from '../lib/log'
@@ -267,6 +268,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
         {busy ? 'Nox is working' : ''}
       </div>
 
+      {!readOnly && <PlanCards />}
       {!readOnly && <ApprovalCards />}
       {hasMessages && !readOnly && <UndoBar />}
 

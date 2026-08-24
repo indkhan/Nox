@@ -13,14 +13,17 @@ function makeGate(over: {
   markdown?: () => string
   callTool?: (name: string, args: Record<string, unknown>) => Promise<{ content: Array<{ type: string; text?: string }>; isError?: boolean }>
   contextSet?: Set<string>
+  authorizeStructuralChange?: (name: string, args: Record<string, unknown>) => { allowed: boolean; reason?: string }
 } = {}) {
   let answer: 'approve' | 'reject' | null = null
   let simulatedMarkdown = '# Simple\noriginal text'
+  const calls: Array<{ name: string; args: Record<string, unknown> }> = []
   const journal = new MutationJournal()
   const gate = new WriteGate({
     callTool:
       over.callTool ??
       (async (name, args) => {
+        calls.push({ name, args })
         const command = args.command as { type?: string; content?: string } | undefined
         if (command?.type === 'replace_content' && typeof command.content === 'string') simulatedMarkdown = command.content
         return { content: [{ type: 'text', text: `ran ${name}` }] }
@@ -29,11 +32,23 @@ function makeGate(over: {
     getMode: () => over.mode ?? 'ask',
     getContextSet: () => over.contextSet ?? new Set([PAGE]),
     journal,
+    authorizeStructuralChange: over.authorizeStructuralChange ?? (() => ({ allowed: true })),
   })
-  return { gate, journal, setAnswer: (a: 'approve' | 'reject') => void (answer = a), getAnswer: () => answer }
+  return { gate, journal, calls, setAnswer: (a: 'approve' | 'reject') => void (answer = a), getAnswer: () => answer }
 }
 
 describe('WriteGate', () => {
+  it('blocks structural writes without plan authorization', async () => {
+    const { gate, calls } = makeGate({
+      mode: 'auto',
+      authorizeStructuralChange: () => ({ allowed: false, reason: 'PLAN_REQUIRED: propose a plan first' }),
+    })
+    const result = await gate.handle({ rid: 1, tool: 'notion-create-database', args: { parent: { page_id: PAGE } }, namespace: null }) as { isError?: boolean; content: Array<{ text?: string }> }
+    expect(result.isError).toBe(true)
+    expect(result.content[0].text).toMatch(/PLAN_REQUIRED/)
+    expect(calls).toHaveLength(0)
+  })
+
   it('passes reads straight through without journaling', async () => {
     const { gate, journal } = makeGate()
     const out = (await gate.handle({ rid: 1, tool: 'notion-fetch', args: { id: PAGE }, namespace: null })) as {
