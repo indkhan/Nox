@@ -70,4 +70,16 @@ Second Vite target (plain web app, no crx plugin):
 - [ ] Smoke script mirroring `scripts/live/codex-smoke.mjs` against the web build.
 - [ ] CI: build both targets (extension + web).
 
+## Notion Trash/Restore via REST fallback
+
+- [ ] Keep MCP as the primary Notion integration, but add a minimal public OAuth
+      REST connection for Trash/Restore because the current MCP silently ignores
+      `in_trash` and exposes no delete tool.
+- [ ] Request only the required update-content capability and selected-page access;
+      keep the OAuth client secret and per-user refresh tokens in a secure backend.
+- [ ] Use `PATCH /v1/pages/{page_id}` with `in_trash: true|false`; permanent deletion
+      remains unsupported.
+- [ ] Verify the resulting page state before reporting success, and keep these
+      destructive actions behind explicit approval in both Auto and Ask modes.
+
 **Total estimate: ~5–8 working days.**
