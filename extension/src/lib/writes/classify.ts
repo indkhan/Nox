@@ -18,6 +18,8 @@ export type MutationKind =
 export interface CallClassification {
   mutates: boolean
   kind: MutationKind
+  impact?: 'low' | 'medium' | 'structural'
+  requiresWorkspacePlan?: boolean
 }
 
 const READ_TOOLS = new Set([
@@ -41,27 +43,41 @@ const CREATION_TOOLS: Record<string, MutationKind> = {
 }
 
 export function classifyToolCall(name: string, args: Record<string, unknown> = {}): CallClassification {
-  if (READ_TOOLS.has(name)) return { mutates: false, kind: 'read' }
-  if (CREATION_TOOLS[name]) return { mutates: true, kind: CREATION_TOOLS[name] }
-  if (name === 'notion-move-pages') return { mutates: true, kind: 'move' }
+  if (READ_TOOLS.has(name)) return classified(false, 'read', 'low')
+  if (CREATION_TOOLS[name]) {
+    const kind = CREATION_TOOLS[name]
+    return classified(true, kind, kind === 'create-database' ? 'structural' : 'medium')
+  }
+  if (name === 'notion-move-pages') return classified(true, 'move', 'structural')
 
   if (name === 'notion-update-page') {
     const command = (args.command ?? args) as Record<string, unknown>
     const type = typeof command.type === 'string' ? command.type : ''
     if (/replace_content/i.test(type) || 'replace_content' in args || 'content' in args && type === '') {
-      return { mutates: true, kind: 'content-replace' }
+      return classified(true, 'content-replace', 'medium')
     }
-    if (/properties/i.test(type)) return { mutates: true, kind: 'properties' }
-    if (/update_content/i.test(type)) return { mutates: true, kind: 'content-update' }
+    if (/properties/i.test(type)) return classified(true, 'properties', 'low')
+    if (/update_content/i.test(type)) return classified(true, 'content-update', 'low')
     // Unknown update shape: treat as the most destructive plausible case.
-    return { mutates: true, kind: 'content-replace' }
+    return classified(true, 'content-replace', 'medium')
   }
 
-  if (name === 'notion-update-data-source') return { mutates: true, kind: 'schema' }
-  if (name === 'notion-update-view') return { mutates: true, kind: 'view' }
-  if (name === 'notion-create-view') return { mutates: true, kind: 'view' }
+  if (name === 'notion-update-data-source') return classified(true, 'schema', 'structural')
+  if (name === 'notion-update-view') return classified(true, 'view', 'structural')
+  if (name === 'notion-create-view') return classified(true, 'view', 'structural')
 
-  return { mutates: true, kind: 'unknown' }
+  return classified(true, 'unknown', 'structural')
+}
+
+function classified(mutates: boolean, kind: MutationKind, impact: CallClassification['impact']): CallClassification {
+  return { mutates, kind, impact, requiresWorkspacePlan: impact === 'structural' }
+}
+
+export function requiresWorkspacePlan(call: CallClassification, args: Record<string, unknown> = {}): boolean {
+  if (call.requiresWorkspacePlan) return true
+  if (call.kind !== 'create-page') return false
+  const pages = args.pages ?? args.data
+  return Array.isArray(pages) && pages.length > 5
 }
 
 /** Property types whose previous values can be faithfully restored (MVP §6.5). */
