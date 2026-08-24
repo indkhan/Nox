@@ -96,6 +96,12 @@ describe('truncateResult / context preamble', () => {
     expect(instructions).toMatch(/ask only.*materially change/i)
   })
 
+  it('names the local planning and upload tools for structural work and files', () => {
+    const instructions = buildDeveloperInstructions()
+    expect(instructions).toContain('nox-propose-workspace-plan')
+    expect(instructions).toContain('nox-upload-local-file')
+  })
+
   it('does not repeat the current page as a mention', () => {
     const text = buildContextPreamble({
       currentPage: { pageId: 'abc-123', title: 'Projects', url: 'https://notion.so/abc123' },

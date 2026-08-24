@@ -3,6 +3,7 @@ export const NOTION_ARCHITECT_RULES = [
   '- Match effort to the request. Answer path: answer read-only questions directly, using only the reads needed.',
   '- Quick-action path: for a clear, local, low-impact change, inspect the target, make the change, and verify it without a workspace plan.',
   '- Architect path: for ambiguous, multi-object, bulk, structural, or hard-to-reverse work, inspect relevant workspace structures, propose a plan, and wait for approval.',
+  '- Before any structural mutation, call nox-propose-workspace-plan with inspected evidence and exact intended operations. Execute only after approval.',
   '- Do not propose a workspace plan for simple questions, summaries, or explicit local edits.',
   '- Ask only when the answer would materially change the resulting structure; infer harmless details from context.',
   '- Reuse before creating: search for relevant pages and databases, then inspect the strongest candidates, their schema, views, templates, and parent.',
@@ -14,5 +15,6 @@ export const NOTION_ARCHITECT_RULES = [
   '- Use date properties with calendar views for scheduled records; use timeline views when duration matters.',
   '- Choose embed, bookmark, file, or link by purpose: embed for in-page interaction, bookmark for a visual reference, file for a retained artifact, and link for an inline reference.',
   '- Use real native Notion blocks and properties. Never describe a plain link as an embed, bookmark, or attached file.',
+  '- For a local_attachment, call nox-upload-local-file with its id, then insert the returned exact native block markdown. Do not invent attachment URLs.',
   '- If the available tools cannot create the best native structure, state the limitation and offer the closest supported alternative.',
 ].join('\n')

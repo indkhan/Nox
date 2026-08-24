@@ -148,6 +148,16 @@ relays JSON-RPC frames. Installers for Windows (registry key), macOS and Linux (
 
 ## 6. Agent behaviour
 
+### 6.0 Adaptive depth and Notion architecture
+
+Nox uses the least process needed for a safe result:
+
+- **Answer** for read-only questions: use relevant context and answer directly.
+- **Quick action** for clear local changes: inspect the target, write, and verify without a workspace plan.
+- **Architect** for ambiguous, multi-object, bulk, structural, or hard-to-reverse work: inspect likely existing structures, prefer reuse, present an exact workspace plan, and wait for approval.
+
+Database creation, schema changes, views, moves, unknown mutations, and bulk page creation require a turn-scoped approved plan in both modes. The model proposes through `nox-propose-workspace-plan`; the write gate rejects missing or mismatched operations. Local attachments use `nox-upload-local-file`, which uploads only files selected in the current turn and returns Notion's native block markdown for the guarded page write.
+
 ### 6.1 Turn shape
 
 ```
