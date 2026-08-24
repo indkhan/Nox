@@ -78,6 +78,23 @@ describe('truncateResult / context preamble', () => {
     expect(text).not.toContain('content:')
   })
 
+  it('uses adaptive depth and native Notion structures', () => {
+    const instructions = buildDeveloperInstructions()
+    expect(instructions).toContain('Answer path')
+    expect(instructions).toContain('Quick-action path')
+    expect(instructions).toContain('Architect path')
+    expect(instructions).toMatch(/reuse.*before.*creat/i)
+    expect(instructions).toMatch(/page checkboxes.*one-off/i)
+    expect(instructions).toMatch(/database.*repeated records/i)
+    expect(instructions).toMatch(/embed.*bookmark.*file.*link/i)
+  })
+
+  it('does not require architecture ceremony for simple work', () => {
+    const instructions = buildDeveloperInstructions()
+    expect(instructions).toMatch(/Do not propose a workspace plan.*simple/i)
+    expect(instructions).toMatch(/ask only.*materially change/i)
+  })
+
   it('does not repeat the current page as a mention', () => {
     const text = buildContextPreamble({
       currentPage: { pageId: 'abc-123', title: 'Projects', url: 'https://notion.so/abc123' },

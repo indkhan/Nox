@@ -1,4 +1,5 @@
 import { INJECTION_RULES } from './untrusted'
+import { NOTION_ARCHITECT_RULES } from './notion-architect'
 
 export interface InstructionContext {
   userName?: string
@@ -52,6 +53,7 @@ export function buildDeveloperInstructions(ctx: InstructionContext = {}): string
     greeting,
     MARKDOWN_RULES,
     PAGE_ID_RULES,
+    NOTION_ARCHITECT_RULES,
     CITATION_RULES,
     ASK_VS_ACT_RULES,
     INJECTION_RULES,
