@@ -138,16 +138,22 @@ export class McpClient {
     if (sid) this.sessionId = sid
     if (res.status === 401) throw new McpUnauthenticatedError()
     if (!res.ok) {
-      const retryAfterRaw = res.headers.get('retry-after')
-      const retryAfterSeconds = retryAfterRaw == null ? null : Number(retryAfterRaw)
       throw new McpHttpError(
         res.status,
         (await res.text().catch(() => '')).slice(0, 400),
-        Number.isFinite(retryAfterSeconds) ? retryAfterSeconds : null,
+        parseRetryAfter(res.headers.get('retry-after')),
       )
     }
     return res
   }
+}
+
+function parseRetryAfter(value: string | null): number | null {
+  if (value == null) return null
+  const seconds = Number(value)
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds
+  const date = Date.parse(value)
+  return Number.isFinite(date) ? Math.max(0, (date - Date.now()) / 1000) : null
 }
 
 export class McpHttpError extends Error {

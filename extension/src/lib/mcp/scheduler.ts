@@ -121,7 +121,7 @@ export class Scheduler {
       try {
         return await fn()
       } catch (e) {
-        delay = retryDelayFor(e, attempt, this.now)
+        delay = retryDelayFor(e, attempt)
         if (delay == null || attempt++ >= this.maxRetries) throw e
       } finally {
         this.release()
@@ -149,7 +149,6 @@ function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
 export function retryDelayFor(
   error: unknown,
   attempt: number,
-  now: () => number = Date.now,
 ): number | null {
   let status: number | null = null
   let rpcCode: number | null = null
@@ -168,15 +167,15 @@ export function retryDelayFor(
   if (!retryable) return null
 
   if (retryAfterSeconds != null && Number.isFinite(retryAfterSeconds)) {
-    return clampBackoff(retryAfterSeconds * 1000 + jitter(now))
+    return clampBackoff(retryAfterSeconds * 1000 + jitter())
   }
   const exponential = Math.min(MAX_BACKOFF_MS, INITIAL_BACKOFF_MS * 2 ** attempt)
-  return clampBackoff(exponential + jitter(now))
+  return clampBackoff(exponential + jitter())
 }
 
-function jitter(_now: () => number): number {
-  // ±20% jitter avoids synchronized thundering herds across bulk runs.
-  return (Math.random() - 0.5) * 0.4 * 1000
+function jitter(): number {
+  // Positive jitter avoids synchronized retries without violating Retry-After.
+  return 100 + Math.random() * 400
 }
 
 function clampBackoff(ms: number): number {

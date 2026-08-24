@@ -166,6 +166,15 @@ describe('McpClient', () => {
     }
   })
 
+  it('supports an HTTP-date Retry-After value', async () => {
+    vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-08-24T12:00:00Z'))
+    const client = makeClient(() => new Response('busy', {
+      status: 503,
+      headers: { 'retry-after': 'Mon, 24 Aug 2026 12:00:05 GMT' },
+    }))
+    await expect(client.listTools()).rejects.toMatchObject({ retryAfterSeconds: 5 })
+  })
+
   it('refuses to send without an access token', async () => {
     const client = new McpClient({ fetchImpl: vi.fn(), getAccessToken: async () => null })
     await expect(client.listTools()).rejects.toBeInstanceOf(McpUnauthenticatedError)

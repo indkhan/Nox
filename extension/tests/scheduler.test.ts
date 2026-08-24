@@ -193,12 +193,12 @@ describe('Scheduler', () => {
 
 describe('retryDelayFor', () => {
   it('uses Retry-After seconds when provided', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0)
     const d = retryDelayFor(new McpHttpError(429, '', 5), 0)
-    expect(d).toBeGreaterThanOrEqual(4500)
-    expect(d).toBeLessThanOrEqual(5500)
+    expect(d).toBe(5100)
   })
 
-  it('grows exponentially with ±jitter for missing Retry-After', () => {
+  it('grows exponentially with positive jitter for missing Retry-After', () => {
     const d0 = retryDelayFor(new McpHttpError(500, ''), 0)!
     const d3 = retryDelayFor(new McpHttpError(500, ''), 3)!
     expect(d0).toBeGreaterThanOrEqual(400)
