@@ -24,6 +24,9 @@ export function validateWorkspacePlan(value: unknown): WorkspacePlan {
   const plan = value as Partial<WorkspacePlan>
   if (!text(plan.goal)) throw new Error('workspace plan goal is required')
   if (!text(plan.recommendation)) throw new Error('workspace plan recommendation is required')
+  if (!Array.isArray(plan.evidence) || plan.evidence.length === 0 || plan.evidence.length > 20) {
+    throw new Error('workspace plan requires 1-20 evidence items from workspace inspection')
+  }
   if (!Array.isArray(plan.operations) || plan.operations.length === 0 || plan.operations.length > 20) {
     throw new Error('workspace plan requires 1-20 operations')
   }
@@ -33,7 +36,7 @@ export function validateWorkspacePlan(value: unknown): WorkspacePlan {
   return {
     goal: plan.goal!,
     recommendation: plan.recommendation!,
-    evidence: Array.isArray(plan.evidence) ? plan.evidence : [],
+    evidence: plan.evidence,
     operations: plan.operations,
     consequences: Array.isArray(plan.consequences) ? plan.consequences.filter(text) : [],
   }

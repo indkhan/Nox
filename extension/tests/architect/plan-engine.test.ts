@@ -14,6 +14,7 @@ describe('validateWorkspacePlan', () => {
   it('accepts a compact plan and rejects empty operations', () => {
     expect(validateWorkspacePlan(plan).operations).toHaveLength(1)
     expect(() => validateWorkspacePlan({ ...plan, operations: [] })).toThrow(/operation/i)
+    expect(() => validateWorkspacePlan({ ...plan, evidence: [] })).toThrow(/evidence/i)
   })
 })
 
