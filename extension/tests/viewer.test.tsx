@@ -95,11 +95,16 @@ describe('viewer mode', () => {
     useNoxStore.setState({ currentPage: null })
   })
 
-  it('loads MCP pages and databases when bare @ opens the mention picker', async () => {
-    vi.mocked(notion.scheduleCallTool).mockResolvedValueOnce({
+  it('loads MCP JSON results after typing a mention query', async () => {
+    vi.mocked(notion.scheduleCallTool).mockClear().mockResolvedValueOnce({
       content: [{
         type: 'text',
-        text: '[Projects](https://www.notion.so/Projects-a1b2c3d4e5f64789abcdef0123456789)',
+        text: JSON.stringify({ results: [{
+          id: 'a1b2c3d4-e5f6-4789-abcd-ef0123456789',
+          title: 'Projects',
+          url: 'https://www.notion.so/Projects-a1b2c3d4e5f64789abcdef0123456789',
+          type: 'page',
+        }] }),
       }],
     })
     const container = document.createElement('div')
@@ -108,7 +113,7 @@ describe('viewer mode', () => {
     await act(async () => root.render(<Composer busy={false} onSend={vi.fn()} onCancel={vi.fn()} />))
 
     const editor = container.querySelector('[data-testid=composer]') as HTMLDivElement
-    editor.textContent = '@'
+    editor.textContent = '@Proj'
     const range = document.createRange()
     range.selectNodeContents(editor)
     range.collapse(false)
@@ -116,7 +121,7 @@ describe('viewer mode', () => {
     window.getSelection()?.addRange(range)
     await act(async () => editor.dispatchEvent(new InputEvent('input', { bubbles: true })))
 
-    expect(notion.scheduleCallTool).toHaveBeenCalledWith('notion-search', {})
+    expect(notion.scheduleCallTool).toHaveBeenCalledWith('notion-search', { query: 'Proj' })
     expect(container.querySelector('[data-testid=mention-option-0]')?.textContent).toContain('Projects')
     await act(async () => root.unmount())
     container.remove()
@@ -126,7 +131,12 @@ describe('viewer mode', () => {
     vi.mocked(notion.scheduleCallTool).mockClear().mockResolvedValueOnce({
       content: [{
         type: 'text',
-        text: '[Projects](https://www.notion.so/Projects-a1b2c3d4e5f64789abcdef0123456789)',
+        text: JSON.stringify({ results: [{
+          id: 'a1b2c3d4-e5f6-4789-abcd-ef0123456789',
+          title: 'Projects',
+          url: 'https://www.notion.so/Projects-a1b2c3d4e5f64789abcdef0123456789',
+          type: 'page',
+        }] }),
       }],
     })
     const container = document.createElement('div')
@@ -144,8 +154,8 @@ describe('viewer mode', () => {
       window.getSelection()?.addRange(range)
       await act(async () => editor.dispatchEvent(new InputEvent('input', { bubbles: true })))
     }
-    await type('@')
     await type('@Proj')
+    await type('@Projects')
 
     expect(notion.scheduleCallTool).toHaveBeenCalledTimes(1)
     expect(container.querySelector('[data-testid=mention-option-0]')?.textContent).toContain('Projects')

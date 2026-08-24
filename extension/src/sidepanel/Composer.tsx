@@ -147,14 +147,24 @@ export function Composer({
           .then((response) => (response as { pages?: PickerItem[] })?.pages ?? [])
           .catch(() => [] as PickerItem[])
       : Promise.resolve([] as PickerItem[])
-    const remote = (mentionCache.current.size === 0 || (trimmed && cachedMatches.length === 0))
-      ? notion.scheduleCallTool('notion-search', trimmed ? { query: trimmed } : {})
+    const remote = trimmed && cachedMatches.length === 0
+      ? notion.scheduleCallTool('notion-search', { query: trimmed })
       .then((result) => {
         const text = result.content
           .filter((c) => c.type === 'text')
           .map((c) => c.text ?? '')
           .join('\n')
         const found = new Map<string, PickerItem>()
+        try {
+          const parsed = JSON.parse(text) as { results?: Array<{ title?: string; url?: string }> }
+          for (const row of parsed.results ?? []) {
+            if (typeof row.url !== 'string') continue
+            const page = parseNotionUrl(row.url)
+            if (page) found.set(page.pageId, { pageId: page.pageId, title: row.title ?? page.title })
+          }
+        } catch {
+          // Older MCP responses used Markdown links; keep accepting them.
+        }
         const linkRe = /\[([^\]]*)\]\((https:\/\/[^\s)]+)\)/g
         for (const [, label, url] of text.matchAll(linkRe)) {
           const parsed = parseNotionUrl(url)
