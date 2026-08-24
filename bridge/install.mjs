@@ -1,7 +1,7 @@
 // Install the Nox native messaging host for Chrome.
 // Windows: manifest file + HKCU registry key. macOS/Linux: manifest in Chrome's config dir.
 // Run: node bridge/install.mjs
-import { writeFileSync, mkdirSync, existsSync, readFileSync } from 'node:fs';
+import { writeFileSync, mkdirSync, readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { homedir, platform } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -11,12 +11,7 @@ const HOST = 'com.nox.bridge';
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, '..');
 
-const keyFile = join(ROOT, 'extension-key.json');
-if (!existsSync(keyFile)) {
-  console.error('✖ extension-key.json missing — run: node spikes/gen-key.mjs');
-  process.exit(1);
-}
-const { id } = JSON.parse(readFileSync(keyFile, 'utf8'));
+const { id } = JSON.parse(readFileSync(join(ROOT, 'extension-id.json'), 'utf8'));
 
 const isWin = platform() === 'win32';
 const script = join(HERE, 'nox-bridge.mjs');

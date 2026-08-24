@@ -17,9 +17,8 @@ pnpm build          # production bundle into dist/
 node bridge/test-bridge.mjs     # deterministic integration vs fixtures/fake-codex
 ```
 
-Load the built extension: `chrome://extensions` → Developer mode → **Load
-unpacked** → select `extension/dist`. Then run `node bridge/install.mjs` once and
-restart Chrome.
+For a complete local install, run `node install.mjs` from the repository root,
+then follow its **Load unpacked** prompt and restart Chrome.
 
 ## Ground rules
 

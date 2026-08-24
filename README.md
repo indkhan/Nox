@@ -13,6 +13,17 @@ official hosted MCP server, and drives **your local Codex install** through Open
 - **The `codex` CLI installed and logged in** (`codex login`) with an active ChatGPT Plus/Pro plan
 - The Nox bridge installed — one script, Windows / macOS / Linux
 
+## Install from GitHub
+
+After cloning the repository, run this once from its root:
+
+```bash
+node install.mjs
+```
+
+The installer downloads dependencies, builds Nox, and registers its local bridge. It
+then prints the `extension/dist` folder to select in Chrome's **Load unpacked** dialog.
+
 > **Status: v0.1.0-alpha — all epics E0–E9 implemented.** Architecture research,
 > spikes, and the full epic plan are complete on `develop`; automated suite green
 > (unit + integration + opt-in live smokes). Manual smoke checklist and Web Store
