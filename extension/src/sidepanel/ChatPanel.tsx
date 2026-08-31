@@ -250,7 +250,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
                 <span className="max-w-[85%] whitespace-pre-wrap rounded-2xl bg-zinc-800 px-3.5 py-2 text-sm leading-relaxed">{userText}</span>
               </div>
               {(view.activity.length > 0 || view.pending) && (
-                <ActivityTimeline items={view.activity} active={view.pending} onUndo={(id) => void undoActivity(id, setTurns)} />
+                <ActivityTimeline items={view.activity} active={view.pending} answerStarted={view.answer.length > 0} onUndo={(id) => void undoActivity(id, setTurns)} />
               )}
               {view.answer && <div aria-live={view.pending ? 'polite' : undefined} aria-atomic="false"><AssistantMarkdown markdown={view.answer} /></div>}
               {!readOnly && !view.pending && view.answer && (

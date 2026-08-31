@@ -1,24 +1,24 @@
 import { useMemo, useState } from 'react'
 import { renderMarkdown } from '../lib/markdown'
-import { ChevronDownIcon } from './Icons'
-import { failedToolActivityLabel, toolActivityLabel, toolResultCategory, type ActivityItem } from '../lib/agent/activity'
+import { ChevronDownIcon, NoxMark } from './Icons'
+import { deriveActivitySummary, failedToolActivityLabel, toolActivityLabel, toolResultCategory, type ActivityItem } from '../lib/agent/activity'
 import { toResultTable } from '../lib/db/query'
 import { ResultsTable } from './ResultsTable'
 
-export function ActivityTimeline({ items, active, onUndo }: { items: ActivityItem[]; active?: boolean; onUndo?: (journalId: string) => void }) {
-  const [open, setOpen] = useState(active === true)
+export function ActivityTimeline({ items, active = false, answerStarted = false, initiallyExpanded = false, onUndo }: { items: ActivityItem[]; active?: boolean; answerStarted?: boolean; initiallyExpanded?: boolean; onUndo?: (journalId: string) => void }) {
+  const [open, setOpen] = useState(initiallyExpanded)
   if (items.length === 0 && !active) return null
-  const tools = items.filter((item) => item.kind === 'tool')
-  const running = [...items].reverse().find((item) => item.kind === 'tool' && item.status === 'running')
-  const summary = running?.kind === 'tool'
-    ? toolActivityLabel(running.tool, running.args)
-    : active ? 'Thinking…' : `${tools.length} action${tools.length === 1 ? '' : 's'}`
+  const summary = deriveActivitySummary(items, { active, answerStarted })
+  const meta = !active && summary.actionCount > 0
+    ? `${summary.actionCount} action${summary.actionCount === 1 ? '' : 's'}${summary.durationMs ? ` · ${formatDuration(summary.durationMs)}` : ''}`
+    : null
 
   return (
-    <div className="rounded-xl border border-zinc-800/80 bg-zinc-900/45 px-2.5 py-1.5" data-testid="activity-timeline">
-      <button onClick={() => setOpen(!open)} aria-expanded={open} className="flex w-full items-center gap-2 py-1 text-left text-xs text-zinc-400 hover:text-zinc-200">
-        <span className={`h-2 w-2 shrink-0 rounded-full ${active ? 'nox-active-dot animate-pulse motion-reduce:animate-none' : 'bg-zinc-600'}`} />
-        <span className="min-w-0 flex-1 truncate">{summary}</span>
+    <div className="px-1 py-1" data-testid="activity-timeline">
+      <button onClick={() => setOpen(!open)} aria-expanded={open} className="flex w-full items-center gap-2 rounded-lg py-1.5 text-left text-xs text-zinc-400 hover:text-zinc-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--nox-accent)]">
+        <NoxMark className={`h-4 w-4 shrink-0 ${summary.status === 'failed' ? 'nox-danger' : active ? 'nox-active' : 'nox-success'}`} />
+        <span className="min-w-0 flex-1 truncate">{summary.label}</span>
+        {meta && <span className="shrink-0 tabular-nums text-zinc-600">{meta}</span>}
         <ChevronDownIcon className={`h-3 w-3 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
       {open && items.length > 0 && (
