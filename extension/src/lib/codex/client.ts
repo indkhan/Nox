@@ -8,11 +8,13 @@ export interface ModelInfo {
   isDefault?: boolean
   inputModalities?: string[]
   supportedReasoningEfforts?: Array<{ reasoningEffort: string }>
+  serviceTiers?: Array<{ id: string; name: string; description: string }>
 }
 
 export interface ThreadSettings {
   model?: string
   effort?: string
+  serviceTier?: string
   dynamicTools?: unknown[]
   developerInstructions?: string
   /** Persistent threads keep prompt caching alive (RESEARCH §3.6). */

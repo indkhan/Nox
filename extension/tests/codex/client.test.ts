@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { CodexClient, type CodexEvent } from '../../src/lib/codex/client'
+import { CodexClient, type CodexEvent, type ThreadSettings } from '../../src/lib/codex/client'
 import type { NativeBridge } from '../../src/lib/codex/native'
 
 function fakeBridge() {
@@ -46,12 +46,12 @@ describe('CodexClient', () => {
     client.emit = (e) => events.push(e)
   })
 
-  async function startThreadFixture() {
+  async function startThreadFixture(settings: ThreadSettings = { dynamicTools: [], developerInstructions: 'be nice' }) {
     const initP = client.initialize()
     h.rpcHandlers.find((r) => r.method === 'initialize')!.resolve({ userAgent: 'codex/0.149.0' })
     await initP
     void h.rpcHandlers.splice(0)
-    const modelsP = client.startThread({ dynamicTools: [], developerInstructions: 'be nice' })
+    const modelsP = client.startThread(settings)
     h.rpcHandlers.find((r) => r.method === 'model/list')!.resolve({
       data: [
         { id: 'gpt-x', isDefault: true },
@@ -79,6 +79,12 @@ describe('CodexClient', () => {
     expect(params.effort).toBe('low')
     expect(params.personality).toBe('pragmatic')
     await expect(client.listModels()).resolves.toHaveLength(2)
+  })
+
+  it('passes the selected service tier to thread/start', async () => {
+    await startThreadFixture({ dynamicTools: [], developerInstructions: 'be nice', serviceTier: 'fast' })
+    const call = h.bridge.rpc.mock.calls.find((c) => c[0] === 'thread/start')
+    expect(call![1]).toMatchObject({ serviceTier: 'fast' })
   })
 
   it('streams deltas and resolves with final text + usage', async () => {

@@ -1,6 +1,7 @@
 export interface NoxSettings {
   model?: string
   effort?: string
+  serviceTier?: string
   theme?: ThemePreference
 }
 

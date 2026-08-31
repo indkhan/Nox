@@ -453,12 +453,13 @@ function ModelControls({ disabled }: { disabled: boolean }) {
 
   function apply(next: NoxSettings) {
     setSettings(next)
-    agentLoop.setOverrides({ model: next.model, effort: next.effort })
+    agentLoop.setOverrides({ model: next.model, effort: next.effort, serviceTier: next.serviceTier })
     void saveSettings(next)
   }
 
   const selected = models.find((model) => model.id === settings.model) ?? models.find((model) => model.isDefault) ?? models[0]
   const efforts = selected?.supportedReasoningEfforts?.map((item) => item.reasoningEffort) ?? ['low', 'medium', 'high', 'xhigh']
+  const serviceTiers = selected?.serviceTiers ?? []
   const selectClass = 'max-w-28 cursor-pointer appearance-none bg-transparent py-1 pl-1 pr-3 text-[11px] text-zinc-400 outline-none hover:text-zinc-200'
 
   if (codexStatus !== 'connected') {
@@ -471,7 +472,7 @@ function ModelControls({ disabled }: { disabled: boolean }) {
         <span className="sr-only">Model</span>
         <select
           value={selected?.id ?? ''}
-          onChange={(event) => apply({ ...settings, model: event.target.value })}
+          onChange={(event) => apply({ ...settings, model: event.target.value, serviceTier: undefined })}
           disabled={disabled || models.length === 0}
           aria-label="Model"
           data-testid="model-select"
@@ -494,6 +495,22 @@ function ModelControls({ disabled }: { disabled: boolean }) {
           className={selectClass}
         >
           {efforts.map((effort) => <option key={effort} value={effort}>{effort}</option>)}
+        </select>
+        <ChevronDownIcon className="pointer-events-none absolute right-0 h-2.5 w-2.5" />
+      </label>
+      <span aria-hidden="true" className="mx-1 h-px w-px bg-zinc-700" />
+      <label className="relative flex items-center" title="Speed">
+        <span className="sr-only">Speed</span>
+        <select
+          disabled={disabled}
+          value={serviceTiers.some((tier) => tier.id === settings.serviceTier) ? settings.serviceTier : ''}
+          onChange={(event) => apply({ ...settings, serviceTier: event.target.value || undefined })}
+          aria-label="Speed"
+          data-testid="speed-select"
+          className={selectClass}
+        >
+          <option value="">Standard</option>
+          {serviceTiers.map((tier) => <option key={tier.id} value={tier.id}>{tier.name}</option>)}
         </select>
         <ChevronDownIcon className="pointer-events-none absolute right-0 h-2.5 w-2.5" />
       </label>

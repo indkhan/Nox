@@ -10,10 +10,20 @@ vi.hoisted(() => {
 })
 
 vi.mock('../src/lib/agent/panel', () => ({
+  agentLoop: { setOverrides: vi.fn() },
   writeGate: {
     approvals: { answer: vi.fn() },
     journal: { undoable: vi.fn(async () => []) },
   },
+}))
+vi.mock('../src/lib/codex/panel', () => ({
+  codex: { listModels: vi.fn(async () => [{
+    id: 'gpt-fast',
+    displayName: 'GPT Fast',
+    isDefault: true,
+    supportedReasoningEfforts: [{ reasoningEffort: 'low' }],
+    serviceTiers: [{ id: 'fast', name: 'Fast', description: 'Faster responses' }],
+  }]) },
 }))
 vi.mock('../src/lib/notion/panel', () => ({ notion: { scheduleCallTool: vi.fn() } }))
 
@@ -51,6 +61,17 @@ describe('viewer mode', () => {
     expect(html).not.toContain('Model settings')
     expect(html).toContain('data-testid="chat-model-controls"')
     expect(html).toContain('Codex not connected')
+  })
+
+  it('shows speed tiers offered by the selected model', async () => {
+    useNoxStore.setState({ codexStatus: 'connected' })
+    const container = document.createElement('div')
+    const root = createRoot(container)
+    await act(async () => root.render(<Composer busy={false} onSend={vi.fn()} onCancel={vi.fn()} />))
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+    const speed = container.querySelector('[data-testid=speed-select]') as HTMLSelectElement
+    expect([...speed.options].map((option) => option.text)).toEqual(['Standard', 'Fast'])
+    await act(async () => root.unmount())
   })
 
   it('cancels a busy turn with Escape', async () => {
