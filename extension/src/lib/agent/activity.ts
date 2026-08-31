@@ -25,6 +25,13 @@ export type ActivityEvent =
 
 export type ToolResultCategory = 'context' | 'table' | 'change' | 'generic'
 
+export interface ActivitySummary {
+  label: string
+  actionCount: number
+  durationMs: number
+  status: 'active' | 'completed' | 'failed'
+}
+
 interface ToolPresentation {
   running: string
   completed: string
@@ -90,6 +97,21 @@ export function toolActivityLabel(tool: string, args: Record<string, unknown>, c
 
 export function failedToolActivityLabel(tool: string): string {
   return `Failed to ${toolPresentation(tool).failed}`
+}
+
+export function deriveActivitySummary(items: ActivityItem[], state: { active: boolean; answerStarted: boolean }): ActivitySummary {
+  const actions = items.filter((item): item is Extract<ActivityItem, { kind: 'search' | 'tool' }> => item.kind !== 'reasoning')
+  const tools = actions.filter((item): item is Extract<ActivityItem, { kind: 'tool' }> => item.kind === 'tool')
+  const durationMs = tools.reduce((total, item) => total + (item.durationMs ?? 0), 0)
+  const failed = [...tools].reverse().find((item) => item.status === 'failed')
+  const running = [...actions].reverse().find((item) => item.status === 'running')
+
+  if (failed) return { label: failedToolActivityLabel(failed.tool), actionCount: actions.length, durationMs, status: 'failed' }
+  if (!state.active) return { label: 'Answer ready', actionCount: actions.length, durationMs, status: 'completed' }
+  if (state.answerStarted) return { label: 'Writing the answer…', actionCount: actions.length, durationMs, status: 'active' }
+  if (running?.kind === 'search') return { label: 'Searching the web…', actionCount: actions.length, durationMs, status: 'active' }
+  if (running?.kind === 'tool') return { label: `${toolActivityLabel(running.tool, running.args)}…`, actionCount: actions.length, durationMs, status: 'active' }
+  return { label: 'Understanding your request…', actionCount: actions.length, durationMs, status: 'active' }
 }
 
 export function toolResultCategory(tool: string): ToolResultCategory {

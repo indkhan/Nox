@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyActivityEvent, applyUndoResult, followUpsForActivity, toolActivityLabel, type ActivityItem } from '../src/lib/agent/activity'
+import { applyActivityEvent, applyUndoResult, deriveActivitySummary, followUpsForActivity, toolActivityLabel, type ActivityItem } from '../src/lib/agent/activity'
 
 describe('agent activity', () => {
   it('correlates a completed tool with its running activity', () => {
@@ -42,6 +42,25 @@ describe('tool activity labels', () => {
 
   it('turns unknown tool names into readable labels', () => {
     expect(toolActivityLabel('custom_sync_records', {})).toBe('Custom sync records')
+  })
+})
+
+describe('activity summary', () => {
+  it('describes each turn phase from structured activity', () => {
+    expect(deriveActivitySummary([], { active: true, answerStarted: false }).label).toBe('Understanding your request…')
+    expect(deriveActivitySummary([{ kind: 'search', id: 's', status: 'running' }], { active: true, answerStarted: false }).label).toBe('Searching the web…')
+    expect(deriveActivitySummary([{ kind: 'tool', id: 't', tool: 'notion-fetch', args: { title: 'Launch plan' }, status: 'running' }], { active: true, answerStarted: false }).label).toBe('Reading “Launch plan”…')
+    expect(deriveActivitySummary([], { active: true, answerStarted: true }).label).toBe('Writing the answer…')
+  })
+
+  it('summarizes completion and prioritizes failures', () => {
+    const completed: ActivityItem[] = [
+      { kind: 'reasoning', id: 'r', text: 'private draft' },
+      { kind: 'tool', id: 'a', tool: 'notion-fetch', args: {}, status: 'completed', durationMs: 800 },
+      { kind: 'tool', id: 'b', tool: 'notion-search', args: {}, status: 'completed', durationMs: 400 },
+    ]
+    expect(deriveActivitySummary(completed, { active: false, answerStarted: true })).toMatchObject({ label: 'Answer ready', actionCount: 2, durationMs: 1200 })
+    expect(deriveActivitySummary([...completed, { kind: 'tool', id: 'c', tool: 'notion-update-page', args: {}, status: 'failed' }], { active: false, answerStarted: false }).label).toBe('Failed to update a page')
   })
 })
 
