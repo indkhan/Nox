@@ -21,17 +21,19 @@ export function ActivityTimeline({ items, active = false, answerStarted = false,
         {meta && <span className="shrink-0 tabular-nums text-zinc-600">{meta}</span>}
         <ChevronDownIcon className={`h-3 w-3 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
-      {open && items.length > 0 && (
-        <ol className="ml-1 border-l border-zinc-800 py-1 pl-3">
-          {items.map((item) => <ActivityRow key={item.id} item={item} onUndo={onUndo} />)}
-        </ol>
+      {open && items.some((item) => item.kind !== 'reasoning') && (
+        <div className="ml-2 mt-1 border-l border-zinc-800 pb-1 pl-3">
+          <p className="pb-1 text-[10px] font-medium uppercase tracking-wider text-zinc-600">What Nox did</p>
+          <ol>
+            {items.filter((item) => item.kind !== 'reasoning').map((item) => <ActivityRow key={item.id} item={item} onUndo={onUndo} />)}
+          </ol>
+        </div>
       )}
     </div>
   )
 }
 
-function ActivityRow({ item, onUndo }: { item: ActivityItem; onUndo?: (journalId: string) => void }) {
-  if (item.kind === 'reasoning') return <li className="py-1 text-xs text-zinc-500">{item.text}</li>
+function ActivityRow({ item, onUndo }: { item: Exclude<ActivityItem, { kind: 'reasoning' }>; onUndo?: (journalId: string) => void }) {
   if (item.kind === 'search') return <li className="nox-info py-1 text-xs">{item.status === 'completed' ? 'Searched the web' : 'Searching the web…'}</li>
   const completed = item.status === 'completed'
   const base = toolActivityLabel(item.tool, item.args, completed)

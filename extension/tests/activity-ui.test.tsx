@@ -3,6 +3,18 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { ActivityTimeline, FollowUpActions } from '../src/sidepanel/MessageParts'
 
 describe('ActivityTimeline', () => {
+  it('keeps reasoning private and presents an ordered readable work log', () => {
+    const html = renderToStaticMarkup(<ActivityTimeline active initiallyExpanded items={[
+      { kind: 'reasoning', id: 'r', text: 'Maybe inspect private implementation details' },
+      { kind: 'search', id: 's', status: 'completed' },
+      { kind: 'tool', id: 't', tool: 'notion-fetch', args: { title: 'Brief' }, status: 'running' },
+    ]} />)
+    expect(html).toContain('What Nox did')
+    expect(html).not.toContain('Maybe inspect private implementation details')
+    const log = html.slice(html.indexOf('What Nox did'))
+    expect(log.indexOf('Searched the web')).toBeLessThan(log.indexOf('Reading “Brief”'))
+  })
+
   it('starts with a compact human-readable status', () => {
     const initial = renderToStaticMarkup(<ActivityTimeline active items={[]} />)
     expect(initial).toContain('Understanding your request…')
