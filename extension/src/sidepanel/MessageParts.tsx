@@ -50,7 +50,7 @@ function ActivityRow({ item, onUndo }: { item: Exclude<ActivityItem, { kind: 're
         <details className="mt-1 text-[10px] text-zinc-600">
           <summary className="cursor-pointer">Technical details</summary>
           <div className="mt-1 font-mono">{item.tool}</div>
-          <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap">{JSON.stringify(item.args)}</pre>
+          <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap">{safeStringify(item.args)}</pre>
         </details>
         {(item.undoable || item.undone || item.undoError) && item.journalId && onUndo && (
           <button disabled={!item.undoable} onClick={() => onUndo(item.journalId!)} className="nox-active mt-1 text-[11px] underline-offset-2 hover:underline disabled:no-underline">
@@ -93,6 +93,17 @@ function ActivityResult({ item }: { item: Extract<ActivityItem, { kind: 'tool' }
 function compactValue(value: unknown): string {
   if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value)
   return JSON.stringify(value).slice(0, 80)
+}
+
+function safeStringify(value: unknown): string {
+  const seen = new WeakSet<object>()
+  return JSON.stringify(value, (_key, nested) => {
+    if (nested && typeof nested === 'object') {
+      if (seen.has(nested)) return '[Circular]'
+      seen.add(nested)
+    }
+    return nested
+  }) ?? String(value)
 }
 
 export function FollowUpActions({ suggestions, onSelect }: { suggestions: string[]; onSelect: (suggestion: string) => void }) {

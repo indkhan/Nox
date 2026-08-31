@@ -85,4 +85,16 @@ describe('ActivityTimeline', () => {
     expect(html).toContain('notion-fetch')
     expect(html).toContain('&quot;id&quot;:&quot;p1&quot;')
   })
+
+  it('safely formats unusual technical arguments', () => {
+    const circular: Record<string, unknown> = { query: '<script>alert(1)</script>' }
+    circular.self = circular
+    const html = renderToStaticMarkup(<ActivityTimeline active initiallyExpanded items={[
+      { kind: 'tool', id: 't', tool: 'custom-tool', args: circular, status: 'running' },
+    ]} />)
+    expect(html).toContain('custom-tool')
+    expect(html).toContain('&lt;script&gt;alert(1)&lt;/script&gt;')
+    expect(html).toContain('[Circular]')
+    expect(html).not.toContain('<script>')
+  })
 })
