@@ -10,6 +10,10 @@ import { openNoxDB } from '../history/schema'
 import type { Mode } from '../writes/approvals'
 import type { MentionRef } from '../../shared/notion-page'
 import { createTurnAccessState } from './turn-access'
+import { PlanEngine } from '../architect/plan-engine'
+import { WORKSPACE_PLAN_TOOL_NAME } from '../architect/tool'
+import { UPLOAD_FILE_TOOL_NAME, uploadLocalAttachment } from '../attachments/upload-tool'
+import { attachmentRepository } from '../history/attachments'
 
 // The store dynamically imports this module, so a static import back is cycle-free.
 import { useNoxStore } from '../../sidepanel/store'
@@ -21,8 +25,10 @@ export function setAgentHistoryThread(threadId: string | null): void {
 }
 
 const turnAccess = createTurnAccessState()
-export function prepareAgentTurn(mode: Mode, pageIds: string[]): void {
-  turnAccess.begin(mode, pageIds)
+export const planEngine = new PlanEngine((plan) => useNoxStore.getState().addPlan(plan))
+const attachments = attachmentRepository(openNoxDB)
+export function prepareAgentTurn(mode: Mode, pageIds: string[], attachmentIds: string[] = []): void {
+  turnAccess.begin(mode, pageIds, attachmentIds)
 }
 
 export const writeGate = new WriteGate({
@@ -40,6 +46,7 @@ export const writeGate = new WriteGate({
   },
   journal: new MutationJournal(idbJournalStore(openNoxDB)),
   onApproval: (approval) => useNoxStore.getState().addApproval(approval),
+  authorizeStructuralChange: (name, args) => planEngine.authorize(name, args),
 })
 
 /** Production assembly: real Notion facade + real Codex client behind the gate. */
@@ -48,6 +55,22 @@ export const agentLoop = new AgentLoop({
   codex,
   executor: new ToolExecutor({
     callTool: async (name, args, signal, provenance) => {
+      if (name === WORKSPACE_PLAN_TOOL_NAME) {
+        const decision = await planEngine.request(args)
+        return { content: [{ type: 'text', text: decision === 'approved' ? 'PLAN_APPROVED: execute only the listed operations.' : 'PLAN_REJECTED: no changes were authorized.' }] }
+      }
+      if (name === UPLOAD_FILE_TOOL_NAME) {
+        const id = typeof args.attachment_id === 'string' ? args.attachment_id : ''
+        if (!turnAccess.attachments().has(id)) throw new Error('ATTACHMENT_UNAVAILABLE: select this file in the current turn first.')
+        const attachment = await attachments.get(id)
+        if (!attachment) throw new Error('ATTACHMENT_UNAVAILABLE: local file was not found.')
+        const markdown = await uploadLocalAttachment(attachment, {
+          createTicket: () => notion.scheduleCallTool('notion-create-file-upload', { filename: attachment.name, content_type: attachment.mimeType }, signal),
+          fetchImpl: fetch,
+          signal,
+        })
+        return { content: [{ type: 'text', text: `UPLOAD_COMPLETE: insert this exact native block markdown into the requested page:\n${markdown}` }] }
+      }
       const result = (await writeGate.handle({ rid: 0, tool: name, args, namespace: null, signal, provenance })) as {
         content?: Array<{ type: string; text?: string }>
         isError?: boolean
@@ -66,9 +89,11 @@ export const agentLoop = new AgentLoop({
   beginTurn: () => {
     writeGate.journal.setThread(historyThreadId ?? 'unscoped')
     writeGate.beginTurn()
+    planEngine.beginTurn(crypto.randomUUID())
   },
   cancelPending: () => {
     writeGate.approvals.rejectAllPending()
+    planEngine.rejectPending()
     for (const approval of useNoxStore.getState().pendingApprovals) useNoxStore.getState().removeApproval(approval.id)
   },
   getDynamicTools: async () => toDynamicTools(await notion.listTools(), notion.capabilities),

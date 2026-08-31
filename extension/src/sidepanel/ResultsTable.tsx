@@ -4,30 +4,37 @@ import type { QueryResultTable } from '../../src/lib/db/query'
 export function ResultsTable({ table, groupByColumn }: { table: QueryResultTable; groupByColumn?: string }) {
   const groups = groupByColumn ? computeGroups(table, groupByColumn) : null
   return (
-    <div className="overflow-x-auto rounded-md border border-zinc-800" data-testid="results-table">
-      <table className="w-full text-left text-xs">
-        <thead>
-          <tr className="border-b border-zinc-800 bg-zinc-950/60">
-            {table.columns.map((c) => (
-              <th key={c} className="px-2 py-1.5 font-medium text-zinc-400">{c}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {table.rows.slice(0, 100).map((row, i) => (
-            <tr key={i} className="border-b border-zinc-900 last:border-0">
-              {row.map((cell, j) => (
-                <td key={j} className="max-w-40 truncate px-2 py-1 text-zinc-300">{String(cell)}</td>
+    <div className="overflow-hidden rounded-card bg-surface shadow-card" data-testid="results-table">
+      <div className="overflow-x-auto">
+        <table className="w-full text-left text-[12px]">
+          <thead>
+            <tr className="border-b border-line bg-inset">
+              {table.columns.map((c) => (
+                <th key={c} className="px-2.5 py-1.5 text-[11px] font-semibold tracking-wide text-ink-3">
+                  {c}
+                </th>
               ))}
             </tr>
-          ))}
-        </tbody>
-      </table>
-      <div className="flex items-center justify-between border-t border-zinc-800 px-2 py-1 text-[10px] text-zinc-500">
-        <span>{table.totalRows} row{table.totalRows === 1 ? '' : 's'}{table.totalRows > 100 ? ' (showing 100)' : ''}</span>
-        {groups && (
-          <span>{Object.entries(groups).map(([k, n]) => `${k}: ${n}`).join(' · ')}</span>
-        )}
+          </thead>
+          <tbody>
+            {table.rows.slice(0, 100).map((row, i) => (
+              <tr key={i} className="border-b border-line last:border-0 transition-colors duration-100 hover:bg-hover">
+                {row.map((cell, j) => (
+                  <td key={j} className="max-w-40 truncate px-2.5 py-1.5 text-ink-2">
+                    {String(cell)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className="flex items-center justify-between border-t border-line px-2.5 py-1 text-[10.5px] text-ink-3">
+        <span>
+          {table.totalRows} row{table.totalRows === 1 ? '' : 's'}
+          {table.totalRows > 100 ? ' (showing 100)' : ''}
+        </span>
+        {groups && <span className="truncate">{Object.entries(groups).map(([k, n]) => `${k}: ${n}`).join(' · ')}</span>}
       </div>
     </div>
   )

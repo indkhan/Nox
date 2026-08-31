@@ -17,14 +17,15 @@ describe('toDynamicTools', () => {
 
   it('passes allowed tools through with function shape', () => {
     const out = toDynamicTools(tools, new CapabilityGate())
-    expect(out).toHaveLength(2) // empty name dropped
+    expect(out).toHaveLength(4) // empty name dropped; local tools added
     expect(out[0]).toMatchObject({ type: 'function', name: 'notion-search', description: 'Search' })
+    expect(out.slice(-2).map((tool) => tool.name)).toEqual(['nox-propose-workspace-plan', 'nox-upload-local-file'])
   })
 
   it('drops plan-gated tools entirely', () => {
     const gate = new CapabilityGate({ 'query-meeting-notes': 'upgrade_required' })
     const out = toDynamicTools(tools, gate)
-    expect(out.map((t) => t.name)).toEqual(['notion-search'])
+    expect(out.map((t) => t.name)).toEqual(['notion-search', 'nox-propose-workspace-plan', 'nox-upload-local-file'])
   })
 
   it('defaults a missing inputSchema to an object schema', () => {
@@ -62,6 +63,53 @@ describe('untrusted wrapper', () => {
 })
 
 describe('truncateResult / context preamble', () => {
+  it('includes the current Notion location without fetching page content', () => {
+    const text = buildContextPreamble({
+      currentPage: {
+        pageId: 'abc-123',
+        viewId: 'view-456',
+        title: 'Projects & plans',
+        url: 'https://www.notion.so/Projects-abc123?v=view456',
+      },
+    })
+    expect(text).toContain('<current_notion_location>')
+    expect(text).toContain('id="abc-123"')
+    expect(text).toContain('view_id="view-456"')
+    expect(text).toContain('Projects &amp; plans')
+    expect(text).not.toContain('content:')
+  })
+
+  it('uses adaptive depth and native Notion structures', () => {
+    const instructions = buildDeveloperInstructions()
+    expect(instructions).toContain('Answer path')
+    expect(instructions).toContain('Quick-action path')
+    expect(instructions).toContain('Architect path')
+    expect(instructions).toMatch(/reuse.*before.*creat/i)
+    expect(instructions).toMatch(/page checkboxes.*one-off/i)
+    expect(instructions).toMatch(/database.*repeated records/i)
+    expect(instructions).toMatch(/embed.*bookmark.*file.*link/i)
+  })
+
+  it('does not require architecture ceremony for simple work', () => {
+    const instructions = buildDeveloperInstructions()
+    expect(instructions).toMatch(/Do not propose a workspace plan.*simple/i)
+    expect(instructions).toMatch(/ask only.*materially change/i)
+  })
+
+  it('names the local planning and upload tools for structural work and files', () => {
+    const instructions = buildDeveloperInstructions()
+    expect(instructions).toContain('nox-propose-workspace-plan')
+    expect(instructions).toContain('nox-upload-local-file')
+  })
+
+  it('does not repeat the current page as a mention', () => {
+    const text = buildContextPreamble({
+      currentPage: { pageId: 'abc-123', title: 'Projects', url: 'https://notion.so/abc123' },
+      mentions: [{ pageId: 'abc-123', title: 'Projects', markdown: '# Projects' }],
+    })
+    expect(text.match(/<mentioned_page/g)).toBeNull()
+  })
+
   it('truncates with a visible marker', () => {
     const out = truncateResult('a'.repeat(3000), 1000)
     expect(out.length).toBe(1000)

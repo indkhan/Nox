@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import type { CurrentPage } from '../shared/notion-page'
 import { isNoxMessage } from '../shared/messages'
 import type { Mode } from './Composer'
+import type { PendingWorkspacePlan } from '../lib/architect/plan-engine'
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error'
 
@@ -33,6 +34,10 @@ interface NoxState {
   pendingApprovals: Array<{ id: number; tool: string; summary: string; payloadJson: string; reasons: string[]; targetUrl?: string; reversibility: string }>
   addApproval: (a: { id: number; tool: string; summary: string; payloadJson: string; reasons: string[]; targetUrl?: string; reversibility: string }) => void
   removeApproval: (id: number) => void
+
+  pendingPlans: PendingWorkspacePlan[]
+  addPlan: (plan: PendingWorkspacePlan) => void
+  removePlan: (id: string) => void
 
   threadTitle: string
   setThreadTitle: (title: string) => void
@@ -76,6 +81,10 @@ export const useNoxStore = create<NoxState>((set) => ({
   pendingApprovals: [],
   addApproval: (a) => set((s) => ({ pendingApprovals: [...s.pendingApprovals, a] })),
   removeApproval: (id) => set((s) => ({ pendingApprovals: s.pendingApprovals.filter((p) => p.id !== id) })),
+
+  pendingPlans: [],
+  addPlan: (plan) => set((s) => ({ pendingPlans: [...s.pendingPlans, plan] })),
+  removePlan: (id) => set((s) => ({ pendingPlans: s.pendingPlans.filter((plan) => plan.id !== id) })),
 
   threadTitle: 'New chat',
   setThreadTitle: (threadTitle) => set({ threadTitle }),

@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { classifyToolCall, detectRichPage, isSafePropertyType } from '../../src/lib/writes/classify'
+import { classifyToolCall, detectRichPage, isSafePropertyType, requiresWorkspacePlan } from '../../src/lib/writes/classify'
 
 describe('classifyToolCall', () => {
   it('treats the known read tools as reads', () => {
     for (const name of ['notion-search', 'notion-fetch', 'notion-query-data-sources', 'notion-get-users']) {
-      expect(classifyToolCall(name)).toEqual({ mutates: false, kind: 'read' })
+      expect(classifyToolCall(name)).toMatchObject({ mutates: false, kind: 'read', impact: 'low', requiresWorkspacePlan: false })
     }
   })
 
@@ -32,7 +32,20 @@ describe('classifyToolCall', () => {
   })
 
   it('fails closed for unknown tools', () => {
-    expect(classifyToolCall('notion-something-new')).toEqual({ mutates: true, kind: 'unknown' })
+    expect(classifyToolCall('notion-something-new')).toMatchObject({ mutates: true, kind: 'unknown', impact: 'structural', requiresWorkspacePlan: true })
+  })
+
+  it('requires plans only for structural workspace changes', () => {
+    expect(classifyToolCall('notion-create-database')).toMatchObject({ impact: 'structural', requiresWorkspacePlan: true })
+    expect(classifyToolCall('notion-update-data-source')).toMatchObject({ impact: 'structural', requiresWorkspacePlan: true })
+    expect(classifyToolCall('notion-create-view')).toMatchObject({ impact: 'structural', requiresWorkspacePlan: true })
+    expect(classifyToolCall('notion-move-pages')).toMatchObject({ impact: 'structural', requiresWorkspacePlan: true })
+    expect(classifyToolCall('notion-update-page', { command: { type: 'update_properties' } })).toMatchObject({ impact: 'low', requiresWorkspacePlan: false })
+  })
+
+  it('escalates bulk page creation without penalizing a small explicit create', () => {
+    expect(requiresWorkspacePlan(classifyToolCall('notion-create-pages'), { pages: [{}, {}] })).toBe(false)
+    expect(requiresWorkspacePlan(classifyToolCall('notion-create-pages'), { pages: Array.from({ length: 6 }, () => ({})) })).toBe(true)
   })
 })
 

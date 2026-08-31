@@ -39,9 +39,12 @@ then prints the `extension/dist` folder to select in Chrome's **Load unpacked** 
 - **Global chat with `@` mentions** for pages and databases
 - **Searches your whole workspace** (and connected apps, if your Notion plan includes them)
 - **Reads, creates, edits, moves and organizes pages**
+- **Adapts to the task** — answers simple questions directly, handles small edits quickly, and inspects + previews structural workspace changes
+- **Uses native Notion structures intentionally** — pages, databases, properties, relations, views, checkboxes and real file blocks instead of flattening everything to text
 - **Full database work** — query, edit rows, create databases, edit schemas, create and update views
 - **Bulk / AI autofill** with progress pinned to the top and one-click undo
 - **Auto mode and Ask-before-changes mode**
+- **Workspace plan approval** for database, schema, view, move and bulk changes, even in Auto mode
 - **Shows every action it takes, and undoes what can be undone**
 - **Web search** and **image input**, both through Codex
 - **Chat history in your browser** with search and export

@@ -1,5 +1,5 @@
 import type { ToolCallRequest } from '../codex/client'
-import { classifyToolCall, detectRichPage } from './classify'
+import { classifyToolCall, detectRichPage, requiresWorkspacePlan } from './classify'
 import { buildInverse, type PreImage } from './inverse'
 import { capturePageSnapshot, assertUnchanged, GuardViolation, type PageSnapshot } from './guard'
 import { ApprovalEngine, evaluateApproval, type Mode } from './approvals'
@@ -14,6 +14,7 @@ export interface WriteGateDeps {
   getContextSet: () => Set<string>
   journal?: MutationJournal
   onApproval?: ApprovalEngine['notify']
+  authorizeStructuralChange?: (name: string, args: Record<string, unknown>) => { allowed: boolean; reason?: string }
 }
 
 const CONTENT_WRITE_KINDS = new Set(['content-replace', 'content-update'])
@@ -60,6 +61,13 @@ export class WriteGate {
         await this.rememberPageRead(pageId, markdown)
       }
       return result
+    }
+
+    if (requiresWorkspacePlan(classification, req.args)) {
+      const authorization = this.deps.authorizeStructuralChange?.(req.tool, req.args)
+      if (!authorization?.allowed) {
+        return textResult(authorization?.reason ?? 'PLAN_REQUIRED: structural workspace changes require an approved plan.')
+      }
     }
 
     const verdict = evaluateApproval({ ...classification, name: req.tool, args: req.args, provenance: req.provenance }, {
