@@ -1,8 +1,18 @@
 import { describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { readFileSync } from 'node:fs'
 import { ActivityTimeline, FollowUpActions } from '../src/sidepanel/MessageParts'
 
 describe('ActivityTimeline', () => {
+  it('provides polished activity motion with an accessible fallback', () => {
+    const html = renderToStaticMarkup(<ActivityTimeline active items={[]} />)
+    expect(html).toContain('nox-activity-mark')
+    expect(html).toContain('data-active="true"')
+    const css = readFileSync(new URL('../src/sidepanel/index.css', import.meta.url), 'utf8')
+    expect(css).toContain('@keyframes nox-activity-breathe')
+    expect(css).toMatch(/prefers-reduced-motion[\s\S]*nox-activity-mark/)
+  })
+
   it('keeps reasoning private and presents an ordered readable work log', () => {
     const html = renderToStaticMarkup(<ActivityTimeline active initiallyExpanded items={[
       { kind: 'reasoning', id: 'r', text: 'Maybe inspect private implementation details' },

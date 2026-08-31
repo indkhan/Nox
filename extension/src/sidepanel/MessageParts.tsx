@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { renderMarkdown } from '../lib/markdown'
 import { ChevronDownIcon, NoxMark } from './Icons'
 import { deriveActivitySummary, failedToolActivityLabel, toolActivityLabel, toolResultCategory, type ActivityItem } from '../lib/agent/activity'
@@ -7,6 +7,9 @@ import { ResultsTable } from './ResultsTable'
 
 export function ActivityTimeline({ items, active = false, answerStarted = false, initiallyExpanded = false, onUndo }: { items: ActivityItem[]; active?: boolean; answerStarted?: boolean; initiallyExpanded?: boolean; onUndo?: (journalId: string) => void }) {
   const [open, setOpen] = useState(initiallyExpanded)
+  useEffect(() => {
+    if (answerStarted) setOpen(false)
+  }, [answerStarted])
   if (items.length === 0 && !active) return null
   const summary = deriveActivitySummary(items, { active, answerStarted })
   const meta = !active && summary.actionCount > 0
@@ -16,7 +19,7 @@ export function ActivityTimeline({ items, active = false, answerStarted = false,
   return (
     <div className="px-1 py-1" data-testid="activity-timeline">
       <button onClick={() => setOpen(!open)} aria-expanded={open} className="flex w-full items-center gap-2 rounded-lg py-1.5 text-left text-xs text-zinc-400 hover:text-zinc-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--nox-accent)]">
-        <NoxMark className={`h-4 w-4 shrink-0 ${summary.status === 'failed' ? 'nox-danger' : active ? 'nox-active' : 'nox-success'}`} />
+        <NoxMark data-active={active} className={`nox-activity-mark h-4 w-4 shrink-0 ${summary.status === 'failed' ? 'nox-danger' : active ? 'nox-active' : 'nox-success'}`} />
         <span className="min-w-0 flex-1 truncate">{summary.label}</span>
         {meta && <span className="shrink-0 tabular-nums text-zinc-600">{meta}</span>}
         <ChevronDownIcon className={`h-3 w-3 transition-transform ${open ? 'rotate-180' : ''}`} />

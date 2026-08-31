@@ -143,6 +143,26 @@
     0 0 0 1px oklch(1 0 0 / 0.15), 0 8px 28px oklch(0 0 0 / 0.34);
 }
 
+/* The activity mark is the single ambient motion in the conversation UI. */
+.nox-activity-mark[data-active="true"] {
+  animation: nox-activity-breathe 1.8s ease-in-out infinite;
+  filter: drop-shadow(0 0 5px color-mix(in oklch, var(--accent) 42%, transparent));
+  transform-origin: center;
+}
+
+@keyframes nox-activity-breathe {
+  0%, 100% { opacity: 0.65; transform: scale(0.94); }
+  50% { opacity: 1; transform: scale(1.04); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nox-activity-mark[data-active="true"] {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+}
+
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]):not([data-theme="dark"]) {
     --page: oklch(0.209 0.004 264.477);
