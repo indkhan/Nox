@@ -26,7 +26,7 @@ then prints the `extension/dist` folder to select in Chrome's **Load unpacked** 
 
 > **Status: v0.1.0-alpha — all epics E0–E9 implemented.** Automated suite green
 > (unit + integration + opt-in live smokes). Manual smoke checklist and Web Store
-> submission remain. Start with [application.md](application.md).
+> submission remain. Start with [application.md](docs/application.md).
 
 ---
 
@@ -62,13 +62,13 @@ Two halves, both yours:
 
 **Notion** is fully browser-native. Notion's hosted MCP server supports OAuth with Dynamic Client
 Registration as a **public client**, so Nox ships **no client secret** and needs **no backend** —
-verified against the live endpoints ([application.md](application.md) Appendix).
+verified against the live endpoints ([application.md](docs/application.md)).
 
 **Codex** runs on your machine. A small bridge starts `codex app-server` — OpenAI's own binary,
 with your own login — and Nox registers the Notion tools with it using Codex's `dynamicTools` API.
 Codex decides what to do; **Nox performs every Notion call itself**, which is what makes approval
 cards, the action stream and undo possible. No OpenAI credential ever exists inside the extension
-([application.md](application.md) Appendix).
+([application.md](docs/application.md)).
 
 ## Known limitations
 
@@ -101,7 +101,10 @@ cards, the action stream and undo possible. No OpenAI credential ever exists ins
 
 | Doc | What's in it |
 |---|---|
-| [application.md](application.md) | Single architectural reference — architecture, protocols, security, plus archived research/spec/plan appendices (git history retains originals) |
+| [application.md](docs/application.md) | Architecture, protocols, and security boundaries |
+| [Privacy policy](PRIVACY.md) | Data processing, storage, sharing, and deletion |
+| [Support](SUPPORT.md) | Troubleshooting and getting help |
+| [Security](SECURITY.md) | Private vulnerability reporting |
 | [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md) | Assets, threats (prompt injection first), and mitigations |
 | [docs/PERMISSIONS.md](docs/PERMISSIONS.md) | Why every manifest permission exists — review-ready |
 | [docs/smoke.md](docs/smoke.md) | Manual per-release smoke checklist |

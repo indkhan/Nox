@@ -43,5 +43,5 @@ then follow its **Load unpacked** prompt and restart Chrome.
 
 ## Docs
 
-Architecture decisions live in `docs/plans/E<n>.md`; verified facts in
-`RESEARCH.md`. Update both when you change what was decided or learned.
+Architecture and verified implementation details live in `docs/application.md`.
+Update it briefly whenever an architecture change makes it inaccurate.

@@ -10,11 +10,11 @@ in the release commit; the zip artifact and release tag follow it.
 GitHub ships before (and regardless of) Chrome Web Store review:
 
 1. `pnpm --dir extension build`
-2. Zip `extension/dist/` **as the archive root** (Chrome requires manifest.json
-   at the top level of the unpacked folder):
-   `cd extension/dist && zip -r ../../nox-v<version>.zip .`
-3. Draft a GitHub release from `docs/RELEASE-NOTES-template.md`, attach the zip.
-4. Users: download → unzip → Load unpacked. Bridge install stays one script.
+2. Run `node scripts/package-release.mjs` to create the extension-only Web Store
+   ZIP and the self-contained GitHub ZIP.
+3. Draft a GitHub release from `docs/RELEASE-NOTES-template.md`; attach both ZIPs.
+4. Users extract the GitHub ZIP, run `node install.mjs`, restart Chrome, and
+   load its `extension/dist` directory.
 
 ## Chrome Web Store
 

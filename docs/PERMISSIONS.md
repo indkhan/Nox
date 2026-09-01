@@ -16,6 +16,7 @@ Chrome Web Store review copy — why each entry exists. Nox requests nothing els
 
 ## What Nox deliberately does NOT do
 
-- No `<all_urls>`, no broad host permissions, no content scripts at all.
+- No `<all_urls>` and no broad host permissions. The narrow Notion-only content
+  script reads the visible page title and icon; it never reads page content.
 - No remote code: everything ships in the bundle.
 - No analytics, no telemetry, no outbound host other than `mcp.notion.com` and the local bridge.
