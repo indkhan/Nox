@@ -1,36 +1,58 @@
 # Nox
 
-Open-source AI sidebar for Notion, powered by the Codex subscription you already pay for.
+Nox is an open-source AI side panel for Notion, powered by the Codex subscription you
+already have. It can search, read, create, and organize Notion content while keeping
+approvals and your data on your computer.
 
-Nox is a Chrome/Chromium extension. It connects to **your** Notion workspace through Notion's
-official hosted MCP server, and drives **your local Codex install** through OpenAI's own
-`app-server`. There is no Nox server, no account, and no telemetry.
+It runs as a Chrome/Chromium extension, connects to Notion's official hosted MCP server,
+and uses your local Codex installation. There is no Nox server, Nox account, or telemetry.
 
-## Prerequisites
+> **Status: v0.1.0-alpha.** Nox is fully buildable, but Chrome Web Store submission and
+> final manual release checks remain.
 
-- Chrome or a Chromium browser, and Notion Web
-- A Notion account (some database features are gated by Notion's own plan limits)
-- **The `codex` CLI installed and logged in** (`codex login`) with an active ChatGPT Plus/Pro plan
-- The Nox bridge installed — one script, Windows / macOS / Linux
+## Quick start
 
-## Install from GitHub
+### Before you start
 
-After cloning the repository, run this once from its root:
+- Install [Node.js 22 or newer](https://nodejs.org/) and [pnpm 10 or newer](https://pnpm.io/installation).
+- Install the [Codex CLI](https://github.com/openai/codex), then sign in with `codex login`.
+- Have Chrome (or another Chromium browser), a Notion account, and Notion Web ready.
+
+### Option 1: Download Nox
+
+1. On the [Nox GitHub page](https://github.com/indkhan/Nox), select **Code → Download ZIP**.
+2. Extract the ZIP.
+3. Open the extracted folder in a terminal and run:
 
 ```bash
 node install.mjs
 ```
 
-The installer downloads dependencies, builds Nox, and registers its local bridge. It
-then prints the `extension/dist` folder to select in Chrome's **Load unpacked** dialog.
+### Option 2: Clone Nox
 
-> **Status: v0.1.0-alpha — all epics E0–E9 implemented.** Automated suite green
-> (unit + integration + opt-in live smokes). Manual smoke checklist and Web Store
-> submission remain. Start with [application.md](docs/application.md).
+Run:
 
----
+```bash
+git clone https://github.com/indkhan/Nox.git
+cd Nox
+node install.mjs
+```
 
-## What it does (V1)
+### Finish in Chrome
+
+The installer installs dependencies, builds Nox, registers the local bridge, and prints
+the extension folder you need next.
+
+1. Restart Chrome.
+2. Open `chrome://extensions`.
+3. Turn on **Developer mode**.
+4. Select **Load unpacked** and choose the printed `extension/dist` folder.
+5. Open Notion, select the Nox extension, then open **Settings**.
+6. Select **Connect Codex** and **Connect Notion**.
+
+Nox is now ready to use from the Chrome side panel.
+
+## What Nox can do
 
 - **Notion-AI-style side panel** — the only surface, no separate popup
 - **Knows the page you're on** — used as context automatically
