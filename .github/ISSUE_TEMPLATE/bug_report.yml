@@ -1,0 +1,33 @@
+name: Bug report
+description: Report a reproducible Nox problem
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not include OAuth tokens or private Notion content.
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: Nox, Chrome, OS, Node, and Codex versions
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and sanitized logs
+    validations:
+      required: true
