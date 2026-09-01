@@ -1,5 +1,3 @@
-import { createHash } from './hash'
-
 export interface PageSnapshot {
   pageId: string
   hash: string
@@ -45,4 +43,10 @@ export async function assertUnchanged(
 export async function hashMarkdown(markdown: string): Promise<string> {
   // Normalize line endings so CRLF/LTF differences don't false-positive.
   return createHash(markdown.replace(/\r\n/g, '\n'))
+}
+
+/** WebCrypto-backed hex digest; works in extension pages and tests. */
+export async function createHash(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
