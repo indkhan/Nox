@@ -1,5 +1,14 @@
 # Manual smoke checklist (per release)
 
+Run `node scripts/release-smoke.mjs` first. It must pass typecheck, unit and
+integration tests, the production build, bridge protocol checks, and release
+archive creation. The checklist below remains mandatory because it exercises
+real Chrome, Codex quota, OAuth, and a scratch Notion workspace.
+
+Record the release tag, tester, OS/Chrome version, Notion plan, and date in the
+GitHub release notes. Never mark an account-dependent item complete from unit
+test results alone.
+
 ## Adaptive workspace architecture
 
 - [ ] Ask a simple question about the current page: Nox answers without a workspace-plan card.
