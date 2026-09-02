@@ -118,12 +118,9 @@ export function SignalBarsIcon({ className = 'h-4 w-4' }: IconProps) {
   )
 }
 
-/** Nox mark: hexagon flower used as avatar/logo across the panel. */
+/** Nox logo used across the panel and extension chrome. */
 export function NoxMark({ className = 'h-5 w-5', ...props }: IconProps) {
   return (
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className={className} aria-hidden="true" {...props}>
-      <path d="M12 3l7.8 4.5v9L12 21l-7.8-4.5v-9L12 3z" strokeLinejoin="round" />
-      <circle cx="12" cy="12" r="2.4" />
-    </svg>
+    <img src="/icons/icon-128.png" alt="" draggable={false} className={className} aria-hidden="true" {...props} />
   )
 }

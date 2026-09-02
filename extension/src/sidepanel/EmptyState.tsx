@@ -72,9 +72,7 @@ export function EmptyState({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col justify-center px-4 pb-4 pt-2" data-testid="empty-state">
-      <div className="flex h-11 w-11 items-center justify-center rounded-full bg-zinc-800 text-zinc-300">
-        <NoxMark className="h-6 w-6" />
-      </div>
+      <NoxMark className="h-11 w-11 rounded-xl" />
       <p className="mt-3 text-lg font-bold tracking-tight" data-testid="greeting">
         Good {timeOfDay}{name ? `, ${name}` : ''}
       </p>
