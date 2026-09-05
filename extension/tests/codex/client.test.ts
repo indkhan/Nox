@@ -1,3 +1,4 @@
+import wireFixtures from './fixtures/turns.json'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { CodexClient, type CodexEvent, type ThreadSettings } from '../../src/lib/codex/client'
 import type { NativeBridge } from '../../src/lib/codex/native'
@@ -221,4 +222,44 @@ describe('CodexClient', () => {
     emit(h.bridge, 'turn/completed', {})
     await first
   })
+  // Expected failures establish the baseline before lifecycle implementation.
+  it.fails('wire: completed final text replaces longer deltas and commentary', async () => {
+    await startThreadFixture()
+    const pending = client.runTurn([])
+    for (const e of wireFixtures.messages) emit(h.bridge, e.method, e.params)
+    expect((await pending).finalText).toBe('42.')
+  })
+
+  it.fails('wire: failed status cannot be concealed by partial output', async () => {
+    await startThreadFixture()
+    const pending = client.runTurn([])
+    const assertion = expect(pending).rejects.toThrow('quota exhausted')
+    for (const e of wireFixtures.failed) emit(h.bridge, e.method, e.params)
+    await assertion
+  })
+
+  it.fails('wire: interrupted status preserves partial text', async () => {
+    await startThreadFixture()
+    const pending = client.runTurn([])
+    for (const e of wireFixtures.interrupted) emit(h.bridge, e.method, e.params)
+    expect(await pending).toMatchObject({ interrupted: true, finalText: 'Partial answer' })
+  })
+
+  it.fails('wire: documented summary event supplies progress', async () => {
+    await startThreadFixture()
+    const pending = client.runTurn([])
+    for (const e of wireFixtures.summary) emit(h.bridge, e.method, e.params)
+    emit(h.bridge, 'turn/completed', wireFixtures.messages.at(-1)!.params)
+    await pending
+    expect(events).toContainEqual({ kind: 'reasoning-delta', text: 'Checking evidence.' })
+  })
+
+  it.fails('wire: explicit effort is sent on turn/start', async () => {
+    await startThreadFixture({ effort: 'high' })
+    const pending = client.runTurn([])
+    emit(h.bridge, 'turn/completed', wireFixtures.messages.at(-1)!.params)
+    await pending
+    expect(h.bridge.rpc.mock.calls.find(c => c[0] === 'turn/start')![1]).toMatchObject({ effort: 'high' })
+  })
+
 })

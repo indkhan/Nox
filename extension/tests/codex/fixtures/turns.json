@@ -1,0 +1,162 @@
+{
+  "messages": [
+    {
+      "method": "turn/started",
+      "params": {
+        "threadId": "thr_9",
+        "turnId": "turn_1",
+        "turn": {
+          "id": "turn_1",
+          "status": "inProgress",
+          "items": [],
+          "error": null
+        }
+      }
+    },
+    {
+      "method": "item/started",
+      "params": {
+        "threadId": "thr_9",
+        "turnId": "turn_1",
+        "item": {
+          "type": "agentMessage",
+          "id": "a1",
+          "phase": "commentary",
+          "text": ""
+        }
+      }
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "thr_9",
+        "turnId": "turn_1",
+        "itemId": "a1",
+        "delta": "Checking the sources."
+      }
+    },
+    {
+      "method": "item/completed",
+      "params": {
+        "threadId": "thr_9",
+        "turnId": "turn_1",
+        "item": {
+          "type": "agentMessage",
+          "id": "a1",
+          "phase": "commentary",
+          "text": "Checking the sources."
+        }
+      }
+    },
+    {
+      "method": "item/started",
+      "params": {
+        "threadId": "thr_9",
+        "turnId": "turn_1",
+        "item": {
+          "type": "agentMessage",
+          "id": "a2",
+          "phase": "final_answer",
+          "text": ""
+        }
+      }
+    },
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "thr_9",
+        "turnId": "turn_1",
+        "itemId": "a2",
+        "delta": "The answer is incorrect."
+      }
+    },
+    {
+      "method": "item/completed",
+      "params": {
+        "threadId": "thr_9",
+        "turnId": "turn_1",
+        "item": {
+          "type": "agentMessage",
+          "id": "a2",
+          "phase": "final_answer",
+          "text": "42."
+        }
+      }
+    },
+    {
+      "method": "turn/completed",
+      "params": {
+        "threadId": "thr_9",
+        "turnId": "turn_1",
+        "turn": {
+          "id": "turn_1",
+          "status": "completed",
+          "error": null,
+          "items": []
+        }
+      }
+    }
+  ],
+  "summary": [
+    {
+      "method": "item/reasoning/summaryTextDelta",
+      "params": {
+        "threadId": "thr_9",
+        "turnId": "turn_1",
+        "itemId": "r1",
+        "summaryIndex": 0,
+        "delta": "Checking evidence."
+      }
+    }
+  ],
+  "failed": [
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "thr_9",
+        "turnId": "turn_1",
+        "itemId": "a1",
+        "delta": "Partial answer"
+      }
+    },
+    {
+      "method": "turn/completed",
+      "params": {
+        "threadId": "thr_9",
+        "turnId": "turn_1",
+        "turn": {
+          "id": "turn_1",
+          "status": "failed",
+          "error": {
+            "message": "quota exhausted"
+          },
+          "items": []
+        }
+      }
+    }
+  ],
+  "interrupted": [
+    {
+      "method": "item/agentMessage/delta",
+      "params": {
+        "threadId": "thr_9",
+        "turnId": "turn_1",
+        "itemId": "a1",
+        "delta": "Partial answer"
+      }
+    },
+    {
+      "method": "turn/completed",
+      "params": {
+        "threadId": "thr_9",
+        "turnId": "turn_1",
+        "turn": {
+          "id": "turn_1",
+          "status": "interrupted",
+          "error": null,
+          "items": []
+        }
+      }
+    }
+  ]
+}
