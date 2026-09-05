@@ -1,3 +1,4 @@
+import { RESTRICTED_FEATURES } from '../../src/lib/codex/research'
 import wireFixtures from './fixtures/turns.json'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { CodexClient, type CodexEvent, type ThreadSettings } from '../../src/lib/codex/client'
@@ -10,6 +11,10 @@ function fakeBridge() {
   const responses: Array<{ rid: number; result: unknown }> = []
   const bridge = {
     rpc: vi.fn((method: string, _params?: unknown) => {
+      if (method === 'config/read') return Promise.resolve({ config: {} })
+      if (method === 'configRequirements/read') return Promise.resolve({ requirements: null })
+      if (method === 'experimentalFeature/list') return Promise.resolve({ data: RESTRICTED_FEATURES.map(name => ({ name, enabled: false })) })
+      if (method === 'mcpServerStatus/list') return Promise.resolve({ data: [] })
       if (method === 'turn/start') {
         // turn/start resolves when the server acks; the promise we care about
         // is the client's completion promise.
@@ -286,6 +291,23 @@ describe('CodexClient', () => {
     await Promise.resolve()
     h.bridge.onBridgeDisconnected?.()
     await assertion
+  })
+
+  it('deduplicates native searches and interrupts at the observable research budget', async () => {
+    await startThreadFixture()
+    const pending = client.runTurn([])
+    await Promise.resolve()
+    for (let i = 0; i < 12; i++) {
+      const params = { item: { type: 'webSearch', id: `s${i}`, query: 'public question', action: { type: 'search', query: 'public question' } } }
+      emit(h.bridge, 'item/started', params)
+      emit(h.bridge, 'item/started', params)
+    }
+    await vi.waitFor(() => expect(h.rpcHandlers.some(r => r.method === 'turn/interrupt')).toBe(true))
+    h.rpcHandlers.find(r => r.method === 'turn/interrupt')!.resolve({})
+    emit(h.bridge, 'turn/completed', { interrupted: true })
+    await pending
+    expect(events.filter(e => e.kind === 'web-search')).toHaveLength(12)
+    expect(events.find(e => e.kind === 'web-search')).toMatchObject({ id: 's0', query: 'public question' })
   })
 
 })

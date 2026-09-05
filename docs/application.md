@@ -132,6 +132,28 @@ account, and starts or resumes a persistent thread with:
 `approvalPolicy: "never"` applies to Codex's own computer actions. Notion changes still
 pass through Nox's separate write gate.
 
+### Web research
+
+The Web research preference requests live Codex search, or disables it, through
+thread-scoped configuration. It never changes global Codex settings. Managed search
+restrictions are inspected before thread setup and reported as limitations. Freshness
+is established by actual source retrieval, not by the preference alone.
+
+Before each turn, Nox verifies thread-scoped feature flags and MCP inventory. It
+turns off inherited MCP servers, plugins/connectors, shell access, browser/computer
+use, image tools, hooks, memory, and multi-agent features, and caps agent threads at
+one. Codex 0.153.4 can force the unified-exec backend flag from model metadata;
+`shell_tool` is the verified shell availability gate. Built-in orchestration surfaces
+can still vary by model: complete model-specific isolation remains a live release
+check, not a guarantee derived from a read-only sandbox. Configuration inspection is
+allowlisted by the native bridge so provider credentials and MCP headers never enter
+Chrome.
+
+Native research runs inside Codex, outside ToolExecutor. Nox deduplicates search
+activity by item ID and interrupts at 12 observed research items, separately from the
+12 dynamic-call ceiling and ten-minute deadline. The protocol cannot gate native
+search before execution, so in-flight work may exceed the observed boundary.
+
 ### Agent and tool execution
 
 `extension/src/lib/agent/` owns the thread and turn lifecycle. The current page is sent as

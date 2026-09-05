@@ -64,3 +64,10 @@ the joined string as one JSON envelope. Ids increase monotonically per host proc
 
 Not needed for V1: dynamicTools schemas stay well under 64 MiB. The bridge rejects
 single inbound frames above 32 MiB defensively.
+
+## Configuration inspection
+
+For `config/read` responses, the host returns only `config.web_search` and MCP server
+names/enabled states. Raw layers, provider configuration, environment variables,
+headers, and hooks are deliberately omitted. This prevents credentials crossing into
+Chrome during Nox tool-isolation checks. Other RPC envelopes retain their wire shape.

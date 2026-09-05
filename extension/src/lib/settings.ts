@@ -1,4 +1,5 @@
 export interface NoxSettings {
+  webSearchEnabled?: boolean
   model?: string
   effort?: string
   serviceTier?: string

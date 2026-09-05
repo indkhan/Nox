@@ -81,6 +81,12 @@ assert(initResp.result?.userAgent?.includes('codex-fixture'), `unexpected userAg
 send({ t: 'notify', method: 'initialized', params: {} });
 console.log(`✔ initialize relayed → ${initResp.result.userAgent}`);
 
+send({ t: 'rpc', cid: 'safe-config', method: 'config/read', params: {} });
+const safeConfig = await waitFor(m => m.t === 'resp' && m.cid === 'safe-config', 'safe config');
+assert(!JSON.stringify(safeConfig).includes('SECRET_SENTINEL'), 'credentials must never cross into Chrome');
+assert.deepEqual(safeConfig.result.config.mcp_servers, { private: { enabled: true } });
+console.log('Config inspection keeps credentials inside the native bridge');
+
 // ── 3. model/list ────────────────────────────────────────────────────────────
 send({ t: 'rpc', cid: 'c2', method: 'model/list', params: {} });
 const models = await waitFor((m) => m.t === 'resp' && m.cid === 'c2', 'model list');

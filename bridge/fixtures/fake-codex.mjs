@@ -30,6 +30,8 @@ rl.on('line', (line) => {
       return process.exit(23);
     case 'initialize':
       return send({ id: m.id, result: { userAgent: 'codex-fixture/0.0.1 (fake)' } });
+    case 'config/read':
+      return send({ id: m.id, result: { config: { web_search: 'cached', mcp_servers: { private: { enabled: true, env: { TOKEN: 'SECRET_SENTINEL' } } }, model_providers: { x: { api_key: 'SECRET_SENTINEL' } } }, layers: [{ secret: 'SECRET_SENTINEL' }] } });
     case 'model/list':
       return send({
         id: m.id,

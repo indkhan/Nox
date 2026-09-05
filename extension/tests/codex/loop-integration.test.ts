@@ -1,3 +1,4 @@
+import { RESTRICTED_FEATURES } from '../../src/lib/codex/research'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { AgentLoop } from '../../src/lib/agent/loop'
 import { ToolExecutor } from '../../src/lib/agent/executor'
@@ -26,6 +27,10 @@ class ScriptedBridge {
 
   async rpc(method: string, params: Record<string, unknown>): Promise<unknown> {
     switch (method) {
+      case 'config/read': return { config: {} }
+      case 'configRequirements/read': return { requirements: null }
+      case 'experimentalFeature/list': return { data: RESTRICTED_FEATURES.map(name => ({ name, enabled: false })) }
+      case 'mcpServerStatus/list': return { data: [] }
       case 'initialize':
         return { userAgent: 'scripted-codex/2.0.0' }
       case 'model/list':

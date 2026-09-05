@@ -66,6 +66,7 @@ export function SettingsModal() {
           </div>
         </section>
 
+        <ResearchSection />
         <ThemeSection />
 
         <LogsSection />
@@ -74,6 +75,25 @@ export function SettingsModal() {
       </div>
     </div>
   )
+}
+
+function ResearchSection() {
+  const [enabled, setEnabled] = useState(true)
+  const busy = useNoxStore(s => s.agentBusy)
+  useEffect(() => { void loadSettings().then(s => setEnabled(s.webSearchEnabled !== false)) }, [])
+  async function change(next: boolean) {
+    setEnabled(next)
+    await saveSettings({ ...await loadSettings(), webSearchEnabled: next })
+    const { agentLoop } = await import('../lib/agent/panel')
+    agentLoop.setOverrides({ webSearchEnabled: next })
+  }
+  return <section aria-label="Web research">
+    <label className="flex items-center justify-between text-xs">
+      Web research
+      <input type="checkbox" checked={enabled} disabled={busy} onChange={e => void change(e.target.checked)} />
+    </label>
+    <p className="mt-1 text-xs text-zinc-500">Use live web sources when useful. Availability depends on Codex restrictions. Answers must identify anything they could not verify.</p>
+  </section>
 }
 
 function ThemeSection() {

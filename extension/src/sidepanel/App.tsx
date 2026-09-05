@@ -30,7 +30,7 @@ export function App() {
       const settings = await loadSettings()
       applyTheme(settings.theme)
       if (settings.model || settings.effort || settings.serviceTier) {
-        agentLoop.setOverrides({ model: settings.model, effort: settings.effort, serviceTier: settings.serviceTier })
+        agentLoop.setOverrides({ webSearchEnabled: settings.webSearchEnabled, model: settings.model, effort: settings.effort, serviceTier: settings.serviceTier })
       }
       const stored = await chrome.storage.local.get('nox_thread_title')
       const title = stored['nox_thread_title']

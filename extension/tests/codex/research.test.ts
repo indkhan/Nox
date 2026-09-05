@@ -1,0 +1,31 @@
+import { describe, expect, it, vi } from 'vitest'
+import { researchConfig, verifyResearchTools, RESTRICTED_FEATURES } from '../../src/lib/codex/research'
+import type { NativeBridge } from '../../src/lib/codex/native'
+
+function bridge(restricted = false, unsafe = false) {
+  return { rpc: vi.fn(async (method: string) => {
+    if (method === 'config/read') return { config: { mcp_servers: { external: { enabled: true } } } }
+    if (method === 'configRequirements/read') return { requirements: restricted ? { allowedWebSearchModes: ['disabled'] } : null }
+    if (method === 'experimentalFeature/list') return { data: RESTRICTED_FEATURES.map(name => ({ name, enabled: unsafe && name === 'shell_tool' })), nextCursor: null }
+    return { data: [], nextCursor: null }
+  }) } as unknown as NativeBridge
+}
+
+describe('Nox research configuration', () => {
+  it('requests live search and disables inherited tools without changing global settings', async () => {
+    const b = bridge()
+    const result = await researchConfig(b, true)
+    expect(result.config).toMatchObject({ web_search: 'live', 'features.shell_tool': false, 'features.plugins': false, 'mcp_servers.external.enabled': false })
+    expect(b.rpc).not.toHaveBeenCalledWith('config/value/write', expect.anything())
+  })
+  it('keeps search disabled and reports a managed live-search restriction', async () => {
+    expect((await researchConfig(bridge(), false)).config.web_search).toBe('disabled')
+    const result = await researchConfig(bridge(true), true)
+    expect(result.config.web_search).toBe('disabled')
+    expect(result.limitation).toMatch(/unavailable/i)
+  })
+  it('refuses to run when effective native tools are broader than intended', async () => {
+    await expect(verifyResearchTools(bridge(false, true), 't')).rejects.toThrow(/shell_tool/)
+    await expect(verifyResearchTools(bridge(), 't')).resolves.toBeUndefined()
+  })
+})

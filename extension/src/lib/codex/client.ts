@@ -1,3 +1,4 @@
+import { researchConfig, verifyResearchTools } from './research'
 import type { NativeBridge } from './native'
 
 /** `model/list` entry — everything the UI needs to render a picker (MVP §10b). */
@@ -14,6 +15,7 @@ export interface ModelInfo {
 
 export interface ThreadSettings {
   model?: string
+  webSearchEnabled?: boolean
   effort?: string
   serviceTier?: string
   dynamicTools?: unknown[]
@@ -41,8 +43,8 @@ export type CodexEvent =
   | { kind: 'text-delta'; text: string }
   | { kind: 'text-replaced'; text: string }
   | { kind: 'commentary'; id: string; text: string }
-  | { kind: 'web-search' }
-  | { kind: 'web-search-completed' }
+  | { kind: 'web-search'; id?: string; query?: string; action?: Record<string, unknown> }
+  | { kind: 'web-search-completed'; id?: string; query?: string; action?: Record<string, unknown> }
   | { kind: 'tool-call'; tool: string; args: Record<string, unknown>; callId?: string }
   | { kind: 'tool-completed'; tool?: string; callId?: string; success?: boolean; error?: string; durationMs?: number; resultText?: string }
   | { kind: 'usage'; usage: TurnUsage | null }
@@ -64,7 +66,7 @@ interface ItemParams extends Record<string, unknown> {
   threadId?: string
   turnId?: string
   itemId?: string
-  item?: { type?: string; id?: string; text?: string; phase?: string | null; tool?: string; status?: string }
+  item?: { type?: string; id?: string; text?: string; phase?: string | null; query?: string; action?: Record<string, unknown>; tool?: string; status?: string }
   delta?: string
   error?: { message?: string }
   turn?: { id?: string; status?: string; error?: { message?: string } | null; usage?: TurnUsage }
@@ -79,6 +81,7 @@ interface ItemParams extends Record<string, unknown> {
  */
 export class CodexClient {
   userAgent: string | null = null
+  researchLimitation: string | null = null
   private models: ModelInfo[] | null = null
   private wired = false
 
@@ -93,6 +96,8 @@ export class CodexClient {
   private effort: string | undefined
   private pendingEvents: Array<() => void> = []
   private messages = new Map<string, { text: string; phase?: string | null; completed: boolean }>()
+  private searches = new Set<string>()
+  private searchCompletions = new Set<string>()
   private cancelled = false
   private interruptPending: Promise<void> | null = null
 
@@ -146,8 +151,11 @@ export class CodexClient {
     this.wire()
     const models = await this.listModels()
     this.selectEffort(settings, models)
+    const research = await researchConfig(this.bridge, settings.webSearchEnabled !== false)
+    this.researchLimitation = research.limitation
     const params = {
       ...this.threadParams(settings),
+      config: research.config,
       // Pin the chosen model explicitly so a stale binary fails loudly instead
       // of silently defaulting (RESEARCH §3.4).
       model: settings.model ?? this.defaultModel(models),
@@ -162,6 +170,7 @@ export class CodexClient {
     }
     const threadId = result.thread?.id ?? result.id
     if (!threadId) throw new Error('thread/start returned no thread id')
+    await verifyResearchTools(this.bridge, threadId)
     this.activeThread = threadId
     return threadId
   }
@@ -169,20 +178,24 @@ export class CodexClient {
   async resumeThread(threadId: string, settings: ThreadSettings): Promise<string> {
     this.wire()
     this.selectEffort(settings, await this.listModels())
+    const research = await researchConfig(this.bridge, settings.webSearchEnabled !== false)
+    this.researchLimitation = research.limitation
     const { dynamicTools: _tools, ephemeral: _ephemeral, ...params } = this.threadParams(settings)
     const result = (await this.bridge.rpc<Record<string, unknown>>('thread/resume', {
       threadId,
       ...params,
+      config: research.config,
       sandbox: 'read-only',
       approvalPolicy: 'never',
     })) as { thread?: { id?: string }; id?: string }
     const resumed = (result.thread?.id ?? result.id) ?? threadId
+    await verifyResearchTools(this.bridge, resumed)
     this.activeThread = resumed
     return resumed
   }
 
   private threadParams(settings: ThreadSettings) {
-    const { effort: _effort, ...params } = settings
+    const { effort: _effort, webSearchEnabled: _webSearchEnabled, ...params } = settings
     return params
   }
 
@@ -205,6 +218,8 @@ export class CodexClient {
     this.interruptPending = null
     this.pendingEvents = []
     this.messages.clear()
+    this.searches.clear()
+    this.searchCompletions.clear()
     this.turnFinalText = ''
     this.sawError = null
     const completion = new Promise<{ interrupted: boolean; finalText: string }>((resolve, reject) => {
@@ -319,6 +334,19 @@ export class CodexClient {
     this.bridge.respondTool(req.rid, { decision: 'decline' })
   }
 
+  private searchEvent(item: NonNullable<ItemParams['item']>, completed: boolean): void {
+    const id = item.id ?? 'unknown-search'
+    const seen = completed ? this.searchCompletions : this.searches
+    if (seen.has(id)) return
+    seen.add(id)
+    if (!this.searches.has(id)) this.searches.add(id)
+    this.emit({ kind: completed ? 'web-search-completed' : 'web-search', id, query: item.query, action: item.action })
+    if (this.searches.size >= 12 && !this.cancelled) {
+      this.emit({ kind: 'commentary', id: 'research-limit', text: 'Research limit reached. This response may be incomplete; remaining sources were not verified.' })
+      void this.interrupt().catch(() => undefined)
+    }
+  }
+
   private handleNotification(method: string, p: ItemParams): void {
     if (!this.turnDone || p.threadId !== this.activeThread) return
     if (!this.activeTurn) {
@@ -346,7 +374,7 @@ export class CodexClient {
           this.messages.set(p.item.id, { text: p.item.text ?? '', phase: p.item.phase, completed: false })
           if (p.item.phase === 'final_answer') this.emit({ kind: 'text-started' })
         }
-        if (p.item?.type === 'webSearch') this.emit({ kind: 'web-search' })
+        if (p.item?.type === 'webSearch') this.searchEvent(p.item, false)
         return
       case 'item/completed':
         if (p.item?.type === 'agentMessage' && p.item.id) {
@@ -354,7 +382,7 @@ export class CodexClient {
           if (p.item.phase === 'commentary') this.emit({ kind: 'commentary', id: p.item.id, text: p.item.text ?? '' })
           if (p.item.phase === 'final_answer') this.emit({ kind: 'text-replaced', text: p.item.text ?? '' })
         }
-        if (p.item?.type === 'webSearch') this.emit({ kind: 'web-search-completed' })
+        if (p.item?.type === 'webSearch') this.searchEvent(p.item, true)
         return
       case 'error':
         this.sawError = p.error?.message ?? 'Codex error'

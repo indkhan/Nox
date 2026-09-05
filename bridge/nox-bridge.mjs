@@ -158,7 +158,7 @@ function handleCodexLine(line) {
     sendToExtension(
       m.error
         ? { t: 'resp', cid: pending.cid, error: m.error }
-        : { t: 'resp', cid: pending.cid, result: m.result },
+        : { t: 'resp', cid: pending.cid, result: pending.method === 'config/read' ? publicConfig(m.result) : m.result },
     );
     return;
   }
@@ -171,6 +171,17 @@ function handleCodexLine(line) {
   }
 
   if (m.method) sendToExtension({ t: 'notif', method: m.method, params: m.params ?? {} });
+}
+
+// Config inspection is deliberately an allowlist: provider credentials, MCP env,
+// headers, hooks, and raw layers must never cross native messaging into Chrome.
+function publicConfig(result) {
+  if (!result?.config || typeof result.config !== 'object') return {};
+  const config = result.config;
+  return { config: {
+    web_search: config.web_search ?? null,
+    mcp_servers: Object.fromEntries(Object.entries(config.mcp_servers ?? {}).map(([name, value]) => [name, { enabled: value?.enabled !== false }])),
+  } };
 }
 
 function toStdin(obj) {
@@ -236,7 +247,7 @@ function handle(msg) {
           error: { code: -32097, message: `bridge timeout waiting for ${msg.method}` },
         });
       }, msg.timeoutMs ?? 600_000);
-      pendingOut.set(outId, { cid: msg.cid, timer });
+      pendingOut.set(outId, { cid: msg.cid, timer, method: msg.method });
       toStdin({ id: outId, method: msg.method, params: msg.params ?? {} });
       return;
     }
@@ -283,4 +294,5 @@ process.stdin.on('data', (chunk) => {
   }
 });
 
-process.stdin.on('end', () => process.exit(0));
+process.stdin.on('end', () => { state.proc?.kill(); process.exit(0); });
+process.on('exit', () => state.proc?.kill());

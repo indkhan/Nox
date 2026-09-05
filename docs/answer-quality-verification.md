@@ -32,3 +32,22 @@ workspace. Do not commit private outputs. `report <file.json>` fails closed on m
 reviews or safety judgments. Empty ledgers are **not** evaluated baselines.
 
 Live baseline, candidate evaluation, and side-panel visual checks: pending.
+
+## Implementation checks so far
+
+- Lifecycle commit `7f0d985`: 331 extension tests passed; typecheck/build and
+  bridge integration passed.
+- Context commit `5c61a1f`: 334 extension tests passed; typecheck/build passed.
+- Real 0.153.4 thread-scoped feature inspection and MCP inventory were exercised.
+  Inherited `node_repl` exposed zero tools under the Nox overrides. The model can
+  force `unified_exec` on; `shell_tool` remains false. Model-described orchestration
+  utilities are not an authoritative inventory. Model-specific native tool isolation
+  is still a release check; Nox additionally limits `agents.max_threads` to one.
+- Public smoke observed simple `OK` and follow-up context on gpt-5.4-mini.
+  A search request on a previously disabled loaded thread returned an unavailable
+  response. Unload/resume testing did not finish within the smoke deadline.
+- A later gpt-6-astra/low attempt returned `OK`, then failed with the account usage
+  limit. Search/open, interruption, and the complete before/after live evaluation
+  remain **unverified**. No production workspace mutation was attempted.
+
+Local diagnostic reports are under ignored `.release/`; they are not release approval.
