@@ -19,6 +19,8 @@ export interface WorkspacePlan {
   consequences: string[]
 }
 
+export const NOTION_TOOL_NAME_PATTERN = '^notion-[a-z0-9]+(?:-[a-z0-9]+)*$'
+
 export function validateWorkspacePlan(value: unknown): WorkspacePlan {
   if (!value || typeof value !== 'object') throw new Error('workspace plan must be an object')
   const plan = value as Partial<WorkspacePlan>
@@ -31,7 +33,9 @@ export function validateWorkspacePlan(value: unknown): WorkspacePlan {
     throw new Error('workspace plan requires 1-20 operations')
   }
   for (const operation of plan.operations) {
-    if (!operation || !text(operation.tool) || !text(operation.summary)) throw new Error('every plan operation needs a tool and summary')
+    if (!operation || !text(operation.tool) || !new RegExp(NOTION_TOOL_NAME_PATTERN).test(operation.tool) || !text(operation.summary)) {
+      throw new Error('every plan operation needs a canonical notion-* tool name and summary')
+    }
   }
   return {
     goal: plan.goal!,

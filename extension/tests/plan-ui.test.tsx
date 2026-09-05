@@ -11,7 +11,7 @@ vi.hoisted(() => {
 })
 
 describe('PlanCards', () => {
-  it('shows recommendation, evidence, operations, and resolves approval', async () => {
+  it('presents a focused plan review and resolves approval', async () => {
     let decision: string | null = null
     useNoxStore.setState({ pendingPlans: [{
       id: 'plan-1',
@@ -26,9 +26,14 @@ describe('PlanCards', () => {
     const host = document.createElement('div')
     const root = createRoot(host)
     await act(async () => root.render(<PlanCards />))
+    expect(host.querySelector('[data-testid="plan-review"]')).not.toBeNull()
+    expect(host.textContent).toContain('Plan ready')
     expect(host.textContent).toContain('Reuse Daily Log')
-    expect(host.textContent).toContain('Daily Log')
     expect(host.textContent).toContain('Add Completed checkbox')
+    expect(host.textContent).toContain('One database changes')
+    expect(host.querySelector('details')?.open).toBe(false)
+    expect(host.querySelector('details')?.textContent).toContain('Daily Log')
+    expect(host.querySelector('[data-testid="approve-plan-1"]')?.textContent).toBe('Approve and continue')
     await act(async () => (host.querySelector('[data-testid="approve-plan-1"]') as HTMLButtonElement).click())
     expect(decision).toBe('approved')
     expect(useNoxStore.getState().pendingPlans).toHaveLength(0)

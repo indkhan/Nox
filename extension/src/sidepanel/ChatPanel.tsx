@@ -38,6 +38,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
   const newChatTick = useNoxStore((s) => s.newChatTick)
   const openThreadRequest = useNoxStore((s) => s.openThreadRequest)
   const agentBusy = useNoxStore((s) => s.agentBusy)
+  const reviewingPlan = useNoxStore((s) => s.pendingPlans.length > 0)
   const setAgentBusy = useNoxStore((s) => s.setAgentBusy)
   const setActiveThreadId = useNoxStore((s) => s.setActiveThreadId)
 
@@ -240,6 +241,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
 
   return (
     <section className="flex min-h-0 flex-1 flex-col" data-testid="chat-panel">
+      {reviewingPlan && !readOnly ? <PlanCards /> : <>
       {!hasMessages ? (
         <EmptyState readOnly={readOnly} onSend={(t, mentions) => void send(t, mentions)} />
       ) : (
@@ -270,7 +272,6 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
         {busy ? 'Nox is working' : ''}
       </div>
 
-      {!readOnly && <PlanCards />}
       {!readOnly && <ApprovalCards />}
       {hasMessages && !readOnly && <UndoBar />}
 
@@ -280,6 +281,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
         onSend={(t, mentions, attachments) => void send(t, mentions, attachments)}
         onCancel={() => agentLoop.cancel()}
       />
+      </>}
     </section>
   )
 }

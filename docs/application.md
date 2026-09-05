@@ -148,7 +148,11 @@ Every tool request passes through `ToolExecutor`, which:
 - truncates oversized results and records activity timing.
 
 Structural work—database/schema/view changes, moves, and large page creation—first needs
-an approved workspace plan.
+a validated workspace plan. Ask mode displays that plan for approval; Auto mode approves
+the validated plan internally and executes its matching structural operations without a
+second approval card. The plan still limits execution to its listed operations. Operation
+names must use the exact `notion-*` tool name, and target matching accepts any relevant ID
+carried by the call (for example, either the database or data-source ID of a view).
 
 ## Change safety
 

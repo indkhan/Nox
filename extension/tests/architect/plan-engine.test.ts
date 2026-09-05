@@ -16,6 +16,13 @@ describe('validateWorkspacePlan', () => {
     expect(() => validateWorkspacePlan({ ...plan, operations: [] })).toThrow(/operation/i)
     expect(() => validateWorkspacePlan({ ...plan, evidence: [] })).toThrow(/evidence/i)
   })
+
+  it('rejects non-canonical operation tool names', () => {
+    expect(() => validateWorkspacePlan({
+      ...plan,
+      operations: [{ tool: 'create database', summary: 'Create tracker' }],
+    })).toThrow(/tool/i)
+  })
 })
 
 describe('PlanEngine', () => {
@@ -37,6 +44,30 @@ describe('PlanEngine', () => {
     expect(engine.authorize('notion-update-data-source', { data_source_id: 'db-1' }).allowed).toBe(false)
   })
 
+  it('authorizes create-view when the approved target is its database', async () => {
+    const engine = new PlanEngine((pending) => pending.resolve('approved'))
+    engine.beginTurn('turn-1')
+    await engine.request({
+      ...plan,
+      operations: [{ tool: 'notion-create-view', targetId: 'database-1', summary: 'Add calendar view' }],
+    })
+    expect(engine.authorize('notion-create-view', {
+      database_id: 'database-1',
+      data_source_id: 'source-1',
+      name: 'Calendar',
+    }).allowed).toBe(true)
+  })
+
+  it('authorizes update-view when the approved target is the view', async () => {
+    const engine = new PlanEngine((pending) => pending.resolve('approved'))
+    engine.beginTurn('turn-1')
+    await engine.request({
+      ...plan,
+      operations: [{ tool: 'notion-update-view', targetId: 'view-1', summary: 'Rename view' }],
+    })
+    expect(engine.authorize('notion-update-view', { view_id: 'view-1', name: 'History' }).allowed).toBe(true)
+  })
+
   it('rejects pending plans on cancellation', async () => {
     let notified = false
     const engine = new PlanEngine(() => { notified = true })
@@ -45,5 +76,24 @@ describe('PlanEngine', () => {
     expect(notified).toBe(true)
     engine.rejectPending()
     await expect(pending).resolves.toBe('rejected')
+  })
+
+  it('dismisses the card when a pending plan expires', async () => {
+    const dismiss = vi.fn()
+    const engine = new PlanEngine(vi.fn(), dismiss)
+    engine.beginTurn('turn-1')
+    const pending = engine.request(plan)
+    engine.beginTurn('turn-2')
+    await expect(pending).resolves.toBe('rejected')
+    expect(dismiss).toHaveBeenCalledOnce()
+  })
+
+  it('approves a valid plan without showing a card in Auto mode', async () => {
+    const notify = vi.fn()
+    const engine = new PlanEngine(notify)
+    engine.beginTurn('turn-1')
+    await expect(engine.request(plan, true)).resolves.toBe('approved')
+    expect(notify).not.toHaveBeenCalled()
+    expect(engine.authorize('notion-update-data-source', { data_source_id: 'db-1' }).allowed).toBe(true)
   })
 })

@@ -117,6 +117,7 @@ describe('viewer mode', () => {
   })
 
   it('loads MCP JSON results after typing a mention query', async () => {
+    vi.useFakeTimers()
     vi.mocked(notion.scheduleCallTool).mockClear().mockResolvedValueOnce({
       content: [{
         type: 'text',
@@ -141,14 +142,46 @@ describe('viewer mode', () => {
     window.getSelection()?.removeAllRanges()
     window.getSelection()?.addRange(range)
     await act(async () => editor.dispatchEvent(new InputEvent('input', { bubbles: true })))
+    await act(async () => vi.advanceTimersByTimeAsync(200))
 
     expect(notion.scheduleCallTool).toHaveBeenCalledWith('notion-search', { query: 'Proj' })
     expect(container.querySelector('[data-testid=mention-option-0]')?.textContent).toContain('Projects')
     await act(async () => root.unmount())
     container.remove()
+    vi.useRealTimers()
+  })
+
+  it('waits for mention typing to settle before searching the workspace', async () => {
+    vi.useFakeTimers()
+    vi.mocked(notion.scheduleCallTool).mockClear().mockResolvedValue({ content: [] })
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    await act(async () => root.render(<Composer busy={false} onSend={vi.fn()} onCancel={vi.fn()} />))
+
+    const editor = container.querySelector('[data-testid=composer]') as HTMLDivElement
+    for (const text of ['@P', '@Pr', '@Pro', '@Proj']) {
+      editor.textContent = text
+      const range = document.createRange()
+      range.selectNodeContents(editor)
+      range.collapse(false)
+      window.getSelection()?.removeAllRanges()
+      window.getSelection()?.addRange(range)
+      await act(async () => editor.dispatchEvent(new InputEvent('input', { bubbles: true })))
+    }
+
+    expect(notion.scheduleCallTool).not.toHaveBeenCalled()
+    await act(async () => vi.advanceTimersByTimeAsync(200))
+    expect(notion.scheduleCallTool).toHaveBeenCalledOnce()
+    expect(notion.scheduleCallTool).toHaveBeenCalledWith('notion-search', { query: 'Proj' })
+
+    await act(async () => root.unmount())
+    container.remove()
+    vi.useRealTimers()
   })
 
   it('reuses cached MCP matches for later mentions', async () => {
+    vi.useFakeTimers()
     vi.mocked(notion.scheduleCallTool).mockClear().mockResolvedValueOnce({
       content: [{
         type: 'text',
@@ -176,12 +209,14 @@ describe('viewer mode', () => {
       await act(async () => editor.dispatchEvent(new InputEvent('input', { bubbles: true })))
     }
     await type('@Proj')
+    await act(async () => vi.advanceTimersByTimeAsync(200))
     await type('@Projects')
 
     expect(notion.scheduleCallTool).toHaveBeenCalledTimes(1)
     expect(container.querySelector('[data-testid=mention-option-0]')?.textContent).toContain('Projects')
     await act(async () => root.unmount())
     container.remove()
+    vi.useRealTimers()
   })
 
   it('hides mutation approvals in read-only windows', async () => {

@@ -7,6 +7,7 @@ import { ToolExecutor, DEFAULT_STEP_LIMIT } from '../../src/lib/agent/executor'
 import { titleFromExchange } from '../../src/lib/agent/loop'
 import type { McpTool } from '../../src/lib/mcp/client'
 import { CapabilityGate } from '../../src/lib/notion/capabilities'
+import { WORKSPACE_PLAN_TOOL } from '../../src/lib/architect/tool'
 
 describe('toDynamicTools', () => {
   const tools: McpTool[] = [
@@ -100,6 +101,30 @@ describe('truncateResult / context preamble', () => {
     const instructions = buildDeveloperInstructions()
     expect(instructions).toContain('nox-propose-workspace-plan')
     expect(instructions).toContain('nox-upload-local-file')
+  })
+
+  it('requires the plan tool instead of asking for typed approval', () => {
+    const instructions = buildDeveloperInstructions()
+    expect(instructions).toMatch(/never ask.*type.*approv/i)
+    expect(instructions).toMatch(/do not claim.*card.*if.*fail/i)
+    expect(instructions).toMatch(/Auto mode.*without.*click/i)
+    expect(instructions).not.toContain('propose a plan, and wait for approval')
+  })
+
+  it('requires complete evidence and operations in plan tool calls', () => {
+    const schema = WORKSPACE_PLAN_TOOL.inputSchema as {
+      properties: Record<string, { minItems?: number; maxItems?: number; items?: { required?: string[] } }>
+    }
+    expect(schema.properties.evidence).toMatchObject({ minItems: 1, maxItems: 20 })
+    expect(schema.properties.evidence.items?.required).toEqual(['id', 'title', 'kind', 'reason'])
+    expect(schema.properties.operations.items?.required).toEqual(['tool', 'summary'])
+  })
+
+  it('constrains plan operations to canonical Notion tool names', () => {
+    const schema = WORKSPACE_PLAN_TOOL.inputSchema as {
+      properties: { operations: { items: { properties: { tool: { pattern?: string } } } } }
+    }
+    expect(schema.properties.operations.items.properties.tool.pattern).toBe('^notion-[a-z0-9]+(?:-[a-z0-9]+)*$')
   })
 
   it('does not repeat the current page as a mention', () => {

@@ -63,17 +63,21 @@ export class WriteGate {
       return result
     }
 
-    if (requiresWorkspacePlan(classification, req.args)) {
+    const needsWorkspacePlan = requiresWorkspacePlan(classification, req.args)
+    if (needsWorkspacePlan) {
       const authorization = this.deps.authorizeStructuralChange?.(req.tool, req.args)
       if (!authorization?.allowed) {
         return textResult(authorization?.reason ?? 'PLAN_REQUIRED: structural workspace changes require an approved plan.')
       }
     }
 
-    const verdict = evaluateApproval({ ...classification, name: req.tool, args: req.args, provenance: req.provenance }, {
-      mode: this.deps.getMode(),
-      contextSet: this.deps.getContextSet(),
-    })
+    const mode = this.deps.getMode()
+    const verdict = needsWorkspacePlan && mode === 'auto'
+      ? { action: 'allow' as const }
+      : evaluateApproval({ ...classification, name: req.tool, args: req.args, provenance: req.provenance }, {
+          mode,
+          contextSet: this.deps.getContextSet(),
+        })
     if (verdict.action === 'refuse') {
       return textResult(`REFUSED: ${verdict.reasons.join('; ')}. No changes were made.`)
     }

@@ -25,7 +25,10 @@ export function setAgentHistoryThread(threadId: string | null): void {
 }
 
 const turnAccess = createTurnAccessState()
-export const planEngine = new PlanEngine((plan) => useNoxStore.getState().addPlan(plan))
+export const planEngine = new PlanEngine(
+  (plan) => useNoxStore.getState().addPlan(plan),
+  (id) => useNoxStore.getState().removePlan(id),
+)
 const attachments = attachmentRepository(openNoxDB)
 export function prepareAgentTurn(mode: Mode, pageIds: string[], attachmentIds: string[] = []): void {
   turnAccess.begin(mode, pageIds, attachmentIds)
@@ -56,7 +59,7 @@ export const agentLoop = new AgentLoop({
   executor: new ToolExecutor({
     callTool: async (name, args, signal, provenance) => {
       if (name === WORKSPACE_PLAN_TOOL_NAME) {
-        const decision = await planEngine.request(args)
+        const decision = await planEngine.request(args, turnAccess.mode() === 'auto')
         return { content: [{ type: 'text', text: decision === 'approved' ? 'PLAN_APPROVED: execute only the listed operations.' : 'PLAN_REJECTED: no changes were authorized.' }] }
       }
       if (name === UPLOAD_FILE_TOOL_NAME) {

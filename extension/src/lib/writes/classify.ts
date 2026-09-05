@@ -31,6 +31,7 @@ const READ_TOOLS = new Set([
   'notion-get-comments',
   'notion-get-async-task',
   'notion-download-attachment',
+  'notion-check-mcp-next-steps',
 ])
 
 /** Tools whose result is a brand-new object — never undoable (no delete). */

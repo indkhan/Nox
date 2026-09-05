@@ -119,6 +119,7 @@ export function Composer({
   const [attachments, setAttachments] = useState<LocalAttachment[]>([])
   const fileInputRef = useRef<HTMLInputElement>(null)
   const mentionCache = useRef(new Map<string, PickerItem>())
+  const mentionSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [picker, setPicker] = useState<{
     open: boolean
     query: string
@@ -142,6 +143,10 @@ export function Composer({
     el.style.height = 'auto'
     el.style.height = `${Math.min(el.scrollHeight, 128)}px`
   }, [value])
+
+  useEffect(() => () => {
+    if (mentionSearchTimer.current) clearTimeout(mentionSearchTimer.current)
+  }, [])
 
   const refreshPickerItems = useCallback(async (query: string): Promise<PickerItem[]> => {
     const trimmed = query.trim()
@@ -190,6 +195,7 @@ export function Composer({
   const syncPicker = useCallback(() => {
     const el = editorRef.current
     if (!el || readOnly) return
+    if (mentionSearchTimer.current) clearTimeout(mentionSearchTimer.current)
     const caret = caretOffset(el)
     if (caret < 0) {
       setPicker((p) => (p.open ? { ...p, open: false } : p))
@@ -208,9 +214,17 @@ export function Composer({
         ? p
         : { open: true, query, items: [], active: 0, tokenStart, caretEnd: caret },
     )
-    void refreshPickerItems(query).then((items) =>
-      setPicker((p) => (p.open && p.query === query ? { ...p, items, active: 0 } : p)),
-    )
+    const refresh = () => {
+      mentionSearchTimer.current = null
+      void refreshPickerItems(query).then((items) =>
+        setPicker((p) => (p.open && p.query === query ? { ...p, items, active: 0 } : p)),
+      )
+    }
+    const normalized = query.trim().toLocaleLowerCase()
+    const cached = normalized && [...mentionCache.current.values()]
+      .some((item) => (item.title ?? '').toLocaleLowerCase().includes(normalized))
+    if (normalized && !cached) mentionSearchTimer.current = setTimeout(refresh, 200)
+    else refresh()
   }, [readOnly, refreshPickerItems])
 
   const insertChip = useCallback((item: PickerItem): void => {

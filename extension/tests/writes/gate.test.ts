@@ -49,6 +49,24 @@ describe('WriteGate', () => {
     expect(calls).toHaveLength(0)
   })
 
+  it('does not ask again for a plan-authorized structural write in Auto mode', async () => {
+    const { gate, calls } = makeGate({ mode: 'auto' })
+    const write = gate.handle({
+      rid: 2,
+      tool: 'notion-create-database',
+      args: { parent: { page_id: PAGE } },
+      namespace: null,
+      provenance: 'untrusted-context',
+    })
+    const outcome = await Promise.race([
+      write.then(() => 'executed'),
+      new Promise<'blocked'>((resolve) => setTimeout(() => resolve('blocked'), 10)),
+    ])
+    if (outcome === 'blocked') gate.approvals.rejectAllPending()
+    expect(outcome).toBe('executed')
+    expect(calls).toHaveLength(1)
+  })
+
   it('passes reads straight through without journaling', async () => {
     const { gate, journal } = makeGate()
     const out = (await gate.handle({ rid: 1, tool: 'notion-fetch', args: { id: PAGE }, namespace: null })) as {

@@ -1,4 +1,5 @@
 import type { DynamicTool } from '../agent/dynamic-tools'
+import { NOTION_TOOL_NAME_PATTERN } from './plan'
 
 export const WORKSPACE_PLAN_TOOL_NAME = 'nox-propose-workspace-plan'
 
@@ -12,8 +13,28 @@ export const WORKSPACE_PLAN_TOOL: DynamicTool = {
     properties: {
       goal: { type: 'string' },
       recommendation: { type: 'string' },
-      evidence: { type: 'array', items: { type: 'object' } },
-      operations: { type: 'array', minItems: 1, maxItems: 20, items: { type: 'object' } },
+      evidence: {
+        type: 'array', minItems: 1, maxItems: 20,
+        items: {
+          type: 'object', required: ['id', 'title', 'kind', 'reason'],
+          properties: {
+            id: { type: 'string' }, title: { type: 'string' },
+            kind: { type: 'string', enum: ['page', 'database', 'data-source', 'view'] },
+            reason: { type: 'string' },
+          },
+        },
+      },
+      operations: {
+        type: 'array', minItems: 1, maxItems: 20,
+        items: {
+          type: 'object', required: ['tool', 'summary'],
+          properties: {
+            tool: { type: 'string', pattern: NOTION_TOOL_NAME_PATTERN, description: 'Exact notion-* tool name to execute.' },
+            targetId: { type: 'string' },
+            summary: { type: 'string' },
+          },
+        },
+      },
       consequences: { type: 'array', items: { type: 'string' } },
     },
   },
