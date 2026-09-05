@@ -17,15 +17,15 @@ describe('toDynamicTools', () => {
 
   it('passes allowed tools through with function shape', () => {
     const out = toDynamicTools(tools, new CapabilityGate())
-    expect(out).toHaveLength(4) // empty name dropped; local tools added
+    expect(out).toHaveLength(5) // empty name dropped; local tools added
     expect(out[0]).toMatchObject({ type: 'function', name: 'notion-search', description: 'Search' })
-    expect(out.slice(-2).map((tool) => tool.name)).toEqual(['nox-propose-workspace-plan', 'nox-upload-local-file'])
+    expect(out.slice(-3).map((tool) => tool.name)).toEqual(['nox-propose-workspace-plan', 'nox-upload-local-file', 'nox-read-continuation'])
   })
 
   it('drops plan-gated tools entirely', () => {
     const gate = new CapabilityGate({ 'query-meeting-notes': 'upgrade_required' })
     const out = toDynamicTools(tools, gate)
-    expect(out.map((t) => t.name)).toEqual(['notion-search', 'nox-propose-workspace-plan', 'nox-upload-local-file'])
+    expect(out.map((t) => t.name)).toEqual(['notion-search', 'nox-propose-workspace-plan', 'nox-upload-local-file', 'nox-read-continuation'])
   })
 
   it('defaults a missing inputSchema to an object schema', () => {
@@ -131,7 +131,8 @@ describe('truncateResult / context preamble', () => {
       currentPage: { pageId: 'abc-123', title: 'Projects', url: 'https://notion.so/abc123' },
       mentions: [{ pageId: 'abc-123', title: 'Projects', markdown: '# Projects' }],
     })
-    expect(text.match(/<mentioned_page/g)).toBeNull()
+    expect(text).toContain('# Projects')
+    expect(text.match(/id="abc-123"/g)).toHaveLength(1)
   })
 
   it('truncates with a visible marker', () => {
@@ -244,3 +245,27 @@ describe('ToolExecutor', () => {
   })
 })
 
+
+it('labels fetched empty, unavailable and partial context explicitly', () => {
+  const text = buildContextPreamble({ mentions: [
+    { pageId: 'empty', markdown: '' }, { pageId: 'bad', error: 'Denied' },
+    { pageId: 'long', markdown: 'x'.repeat(9000) },
+  ] })
+  expect(text).toContain('status="fetched"')
+  expect(text).toContain('status="unavailable"')
+  expect(text).toContain('status="partial"')
+  expect(text).toContain('total_chars="9000"')
+})
+it('can retrieve an omitted decisive fact and expires handles between turns', async () => {
+  const executor = new ToolExecutor({ callTool: async () => ({ content: [{ type: 'text', text: 'x'.repeat(25000) + 'DECISION: ship' }] }), assertToolAllowed: () => {} })
+  executor.beginTurn()
+  const result = await executor.execute({ tool: 'notion-fetch', args: {}, rid: 1, namespace: null })
+  const handle = /handle="([^"]+)"/.exec(result.contentItems[0].text)![1]
+  const request = { tool: 'nox-read-continuation', args: { handle, offset: 24000 }, rid: 2, namespace: null }
+  const next = await executor.execute(request)
+  expect(next.contentItems[0].text).toContain('DECISION: ship')
+  expect(next.contentItems[0].text).toContain('END_OF_RESULT')
+  expect(next.contentItems[0].text).toContain('UNTRUSTED_CONTENT')
+  executor.beginTurn()
+  expect((await executor.execute(request)).success).toBe(false)
+})

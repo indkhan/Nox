@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { AgentLoop } from '../../src/lib/agent/loop'
 import { ToolExecutor } from '../../src/lib/agent/executor'
 import { CodexClient, type CodexEvent } from '../../src/lib/codex/client'
@@ -246,6 +246,18 @@ describe('AgentLoop integration (scripted codex)', () => {
     release()
     expect((await pending).interrupted).toBe(true)
     expect(bridge.turnInputs).toHaveLength(0)
+  })
+
+  it('preserves the original thread when resume fails', async () => {
+    loop.restoreThread('missing-thread')
+    const original = bridge.rpc.bind(bridge)
+    const rpc = vi.spyOn(bridge, 'rpc').mockImplementation(async (method, params) => {
+      if (method === 'thread/resume') throw new Error('thread not found')
+      return original(method, params)
+    })
+    await expect(loop.sendUserMessage('continue')).rejects.toThrow(/resume/i)
+    expect(loop.currentThreadId).toBe('missing-thread')
+    expect(rpc.mock.calls.some(([method]) => method === 'thread/start')).toBe(false)
   })
 
 })

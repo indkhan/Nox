@@ -135,7 +135,18 @@ pass through Nox's separate write gate.
 ### Agent and tool execution
 
 `extension/src/lib/agent/` owns the thread and turn lifecycle. The current page is sent as
-a reference; page contents are included only for explicit `@` mentions. Codex events are
+a reference; page contents are included only for explicit `@` mentions. Current-page metadata is
+captured at Send and merged with mentions by normalized page ID. Retrieval metadata
+labels reference-only, fetched, partial, and unavailable pages. Mention excerpts are
+limited to 8,000 characters per page and 24,000 combined. Local truncation includes
+opaque continuation handles; `nox-read-continuation` reads already-fetched text under
+the same 12-call limit and source capability check. Its memory is ephemeral, capped at
+one million characters per turn, and cleared on completion. Remote Notion truncation
+requires fetching the returned omitted subtree IDs or using supported targeted tools.
+Attachments remain upload inputs; their metadata does not provide PDF/image contents.
+
+Failed resume never starts a replacement thread. Only a recoverable connection failure
+is retried once against the same thread, before any turn is sent. Codex events are
 matched to the acknowledged thread and turn, including events received before the
 start response. Assistant messages are assembled by ID: completed text replaces
 streamed text, commentary stays in activity, and final answers stay separate. When

@@ -119,7 +119,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
     sendAbortRef.current = sendAbort
     const deadline = setTimeout(() => { sendAbort.abort(); agentLoop.cancel() }, 10 * 60 * 1000)
     lastUsageRef.current = null
-    prepareAgentTurn(useNoxStore.getState().mode, mentions.map((mention) => mention.pageId), attachments.map((attachment) => attachment.id))
+    prepareAgentTurn(useNoxStore.getState().mode, [...mentions.map((mention) => mention.pageId), ...(currentPage ? [currentPage.pageId] : [])], attachments.map((attachment) => attachment.id))
     busyRef.current = true
     setAgentBusy(true)
     setBusy(true)

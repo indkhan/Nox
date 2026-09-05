@@ -41,12 +41,7 @@ export const writeGate = new WriteGate({
     return result.content.filter((c) => c.type === 'text').map((c) => c.text ?? '').join('\n')
   },
   getMode: () => turnAccess.mode(),
-  getContextSet: () => {
-    const page = useNoxStore.getState().currentPage
-    const ids = turnAccess.contextPages()
-    if (page) ids.add(page.pageId)
-    return ids
-  },
+  getContextSet: () => turnAccess.contextPages(),
   journal: new MutationJournal(idbJournalStore(openNoxDB)),
   onApproval: (approval) => useNoxStore.getState().addApproval(approval),
   authorizeStructuralChange: (name, args) => planEngine.authorize(name, args),
@@ -108,12 +103,15 @@ export const agentLoop = new AgentLoop({
 
 export interface PageWithContext extends MentionRef {
   markdown?: string
+  error?: string
 }
 
 /** Fetches a mentioned page's content for context injection (best effort). */
 export async function fetchMentionContext(page: MentionRef, signal?: AbortSignal): Promise<PageWithContext> {
   try {
     const result = await notion.scheduleCallTool('notion-fetch', { id: page.pageId }, signal)
+    if (result.isError) throw new Error(result.content.map(c => c.text ?? '').join('\n'))
+    signal?.throwIfAborted()
     const markdown = result.content
       .filter((c) => c.type === 'text')
       .map((c) => c.text)
@@ -121,10 +119,11 @@ export async function fetchMentionContext(page: MentionRef, signal?: AbortSignal
     await writeGate.rememberPageRead(page.pageId, markdown)
     return {
       ...page,
-      markdown: markdown.slice(0, 8000),
+      markdown,
     }
-  } catch {
-    return page // content is optional context; never block the turn on it
+  } catch (error) {
+    signal?.throwIfAborted()
+    return { ...page, error: error instanceof Error ? error.message : String(error) } // content is optional context; never block the turn on it
   }
 }
 

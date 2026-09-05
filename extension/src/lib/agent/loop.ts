@@ -1,7 +1,7 @@
 import type { CodexClient, CodexEvent, ThreadSettings } from '../codex/client'
 import type { NativeBridge } from '../codex/native'
 import { ToolExecutor } from './executor'
-import { buildContextPreamble } from './context'
+import { buildContextPreamble, type PageContext } from './context'
 import type { CurrentPage } from '../../shared/notion-page'
 import type { LocalAttachment } from '../../shared/attachments'
 
@@ -84,16 +84,23 @@ export class AgentLoop {
       ...settings,
     }
     if (this.threadId) {
-      try {
-        // Re-assert settings on resume so tool-schema updates take effect.
-        const resumed = await this.deps.codex.resumeThread(this.threadId, full)
-        signal?.throwIfAborted()
-        this.threadId = resumed
-        return this.threadId
-      } catch (error) {
-        if (signal?.aborted) throw error
-        // Fall through to a fresh thread; the old one died with the process.
-        this.threadId = null
+      const original = this.threadId
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const resumed = await this.deps.codex.resumeThread(original, full)
+          signal?.throwIfAborted()
+          if (resumed !== original) throw new Error('Server returned a different thread')
+          return resumed
+        } catch (error) {
+          signal?.throwIfAborted()
+          const message = error instanceof Error ? error.message : String(error)
+          if (attempt === 0 && /port disconnected|bridge timeout|codex exited|codex not running/i.test(message)) {
+            this.deps.bridge.disconnect()
+            await this.deps.codex.initialize()
+            continue
+          }
+          throw new Error(`Could not resume this conversation: ${message}. Reconnect and retry, or explicitly start a new chat. Your visible history is preserved.`)
+        }
       }
     }
     const started = await this.deps.codex.startThread(full)
@@ -108,7 +115,7 @@ export class AgentLoop {
    */
   async sendUserMessage(
     text: string,
-    opts: { currentPage?: CurrentPage; mentions?: Array<{ pageId: string; title?: string; markdown?: string }>; attachments?: LocalAttachment[]; signal?: AbortSignal; prepareContext?: (signal: AbortSignal) => Promise<Array<{ pageId: string; title?: string; markdown?: string }>>; timeoutMs?: number } = {},
+    opts: { currentPage?: CurrentPage; mentions?: PageContext[]; attachments?: LocalAttachment[]; signal?: AbortSignal; prepareContext?: (signal: AbortSignal) => Promise<PageContext[]>; timeoutMs?: number } = {},
   ): Promise<{ text: string; interrupted: boolean }> {
     if (this.turnRunning) throw new Error('turn already running')
     this.turnRunning = true
@@ -121,7 +128,7 @@ export class AgentLoop {
 
   private async runUserMessage(
     text: string,
-    opts: { currentPage?: CurrentPage; mentions?: Array<{ pageId: string; title?: string; markdown?: string }>; attachments?: LocalAttachment[]; signal?: AbortSignal; prepareContext?: (signal: AbortSignal) => Promise<Array<{ pageId: string; title?: string; markdown?: string }>>; timeoutMs?: number },
+    opts: { currentPage?: CurrentPage; mentions?: PageContext[]; attachments?: LocalAttachment[]; signal?: AbortSignal; prepareContext?: (signal: AbortSignal) => Promise<PageContext[]>; timeoutMs?: number },
   ): Promise<{ text: string; interrupted: boolean }> {
     this.cancelled = false
     this.untrustedContextThisTurn = (opts.mentions?.length ?? 0) > 0 || !!opts.prepareContext
@@ -139,7 +146,7 @@ export class AgentLoop {
       const mentions = opts.prepareContext ? await abortable(opts.prepareContext(abort.signal), abort.signal) : opts.mentions
       await abortable(this.ensureThread(undefined, abort.signal), abort.signal)
       abort.signal.throwIfAborted()
-      const preamble = buildContextPreamble({ currentPage: opts.currentPage, mentions, attachments: opts.attachments })
+      const preamble = buildContextPreamble({ currentPage: opts.currentPage, mentions, attachments: opts.attachments }, (text, budget) => this.deps.executor.excerpt(text, budget))
       const message = preamble ? `${preamble}\n\n${text}` : text
       started = true
       const result = await this.deps.codex.runTurn([{ type: 'text', text: message }])
@@ -151,6 +158,7 @@ export class AgentLoop {
       clearTimeout(timer)
       opts.signal?.removeEventListener('abort', cancel)
       abort.abort()
+      this.deps.executor.endTurn()
       this.deps.cancelPending?.()
       this.turnAbort = null
     }

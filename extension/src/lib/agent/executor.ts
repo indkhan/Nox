@@ -24,6 +24,8 @@ export interface ToolOutcome {
  * Errors become model-readable results — a failing tool never crashes the turn.
  */
 export class ToolExecutor {
+  private continuations = new Map<string, { text: string; source: string }>()
+  private storedChars = 0
   private stepsUsed = 0
   private signal: AbortSignal | undefined
 
@@ -33,8 +35,37 @@ export class ToolExecutor {
   ) {}
 
   beginTurn(signal?: AbortSignal): void {
+    this.continuations.clear()
+    this.storedChars = 0
     this.stepsUsed = 0
     this.signal = signal
+  }
+
+  endTurn(): void {
+    this.continuations.clear()
+    this.storedChars = 0
+  }
+
+  excerpt(text: string, budget: number, source = 'notion-fetch'): string {
+    if (text.length <= budget) return text
+    // Bound ephemeral memory across every result in this turn.
+    if (this.storedChars + text.length > 1_000_000) {
+      return truncateResult(text, budget) + '\nCONTINUATION_UNAVAILABLE: turn memory limit. Retrieve a targeted subtree or state the missing scope.'
+    }
+    const handle = crypto.randomUUID()
+    this.continuations.set(handle, { text, source })
+    this.storedChars += text.length
+    return text.slice(0, budget) + `\n<continuation handle="${handle}" offset="${budget}" total_chars="${text.length}" tool="nox-read-continuation"/>`
+  }
+
+  private continuation(args: Record<string, unknown>): string {
+    const value = typeof args.handle === 'string' ? this.continuations.get(args.handle) : undefined
+    if (!value) throw new Error('CONTINUATION_UNAVAILABLE: handle expired or unknown; fetch the source again.')
+    this.deps.assertToolAllowed(value.source)
+    const offset = args.offset
+    if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0 || offset > value.text.length) throw new Error('INVALID_OFFSET')
+    const end = Math.min(offset + (this.opts.resultBudgetChars ?? DEFAULT_RESULT_BUDGET_CHARS), value.text.length)
+    return value.text.slice(offset, end) + `\n<continuation offset="${end}" total_chars="${value.text.length}"/>\n` + (end === value.text.length ? 'END_OF_RESULT' : 'MORE_AVAILABLE')
   }
 
   get stepsTaken(): number {
@@ -50,7 +81,7 @@ export class ToolExecutor {
       )
     }
     try {
-      this.deps.assertToolAllowed(req.tool)
+      if (req.tool !== 'nox-read-continuation') this.deps.assertToolAllowed(req.tool)
     } catch {
       return refusal(`TOOL_UNAVAILABLE: "${req.tool}" is not available on this Notion plan or connection.`)
     }
@@ -58,12 +89,16 @@ export class ToolExecutor {
     this.stepsUsed += 1
     const startedAt = Date.now()
     try {
-      const result = await this.deps.callTool(req.tool, req.args, this.signal, req.provenance)
+      const signal = this.signal
+      const result = req.tool === 'nox-read-continuation'
+        ? { content: [{ type: 'text', text: this.continuation(req.args) }] }
+        : await this.deps.callTool(req.tool, req.args, signal, req.provenance)
+      signal?.throwIfAborted()
       const text = result.content
         .filter((c) => c.type === 'text' && typeof c.text === 'string')
         .map((c) => c.text)
         .join('\n')
-      const processed = wrapUntrusted(truncateResult(text, this.opts.resultBudgetChars ?? DEFAULT_RESULT_BUDGET_CHARS))
+      const processed = wrapUntrusted(req.tool === 'nox-read-continuation' ? text : this.excerpt(text, this.opts.resultBudgetChars ?? DEFAULT_RESULT_BUDGET_CHARS, req.tool))
       this.opts.onJournalEvent?.({ req, status: 'ok', ms: Date.now() - startedAt })
       return { success: true, contentItems: [{ type: 'inputText', text: processed }], displayText: truncateResult(text, 2_000) }
     } catch (e) {

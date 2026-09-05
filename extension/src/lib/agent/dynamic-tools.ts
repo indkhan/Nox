@@ -27,5 +27,9 @@ export function toDynamicTools(tools: McpTool[], gate: CapabilityGate): DynamicT
       inputSchema: tool.inputSchema ?? { type: 'object', properties: {} },
     })
   }
-  return [...out, WORKSPACE_PLAN_TOOL, UPLOAD_FILE_TOOL]
+  return [...out, WORKSPACE_PLAN_TOOL, UPLOAD_FILE_TOOL, {
+    type: 'function', name: 'nox-read-continuation',
+    description: 'Read an omitted excerpt of already-fetched text using its opaque handle and character offset. Read-only, current turn only. Prefer Notion subtree IDs or supported targeted retrieval for remote truncation.',
+    inputSchema: { type: 'object', properties: { handle: { type: 'string' }, offset: { type: 'integer', minimum: 0 } }, required: ['handle', 'offset'], additionalProperties: false },
+  }]
 }
