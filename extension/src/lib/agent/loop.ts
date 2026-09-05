@@ -168,12 +168,3 @@ export class AgentLoop {
     void this.deps.codex.interrupt()
   }
 }
-
-/** Word-boundary trim for auto-titling threads (MVP §6.1). */
-export function titleFromExchange(userText: string): string {
-  const clean = userText.replace(/\s+/g, ' ').trim()
-  if (clean.length <= 48) return clean || 'New chat'
-  const cut = clean.slice(0, 48)
-  const lastSpace = cut.lastIndexOf(' ')
-  return (lastSpace > 20 ? cut.slice(0, lastSpace) : cut).trimEnd() + '…'
-}

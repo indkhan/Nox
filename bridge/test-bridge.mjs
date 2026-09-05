@@ -52,8 +52,6 @@ child.stdout.on('data', (c) => {
         throw new Error('reassembled chunk did not parse as JSON');
       }
       messages.push(frame); // keep the raw end marker for assertions
-    } else if (frame.t === undefined && frame.type === 'chunkEnd') {
-      messages.push(frame); // legacy mode keeps its own shape
     } else {
       messages.push(frame);
     }
@@ -121,15 +119,7 @@ const streamed = deltas.map((d) => d.params.delta).join('');
 assert.equal(streamed.length, 2 * 1024 * 1024, 'streamed deltas reassemble to the full text');
 console.log(`✔ turn relayed: tool round trip + ${deltas.length} deltas (${(streamed.length / 1048576).toFixed(1)} MB) via ${chunkFrames.length} chunk frames`);
 
-// ── 5. legacy framing self-test (raw oversized payload mode) ─────────────────
-const chunkFramesBefore = chunkFrames.length;
-send({ type: 'big', bytes: 2 * 1024 * 1024, mode: 'chunked', id: 7 });
-const legacy = await waitFor((m) => m.legacyBig === true, 'legacy big payload');
-assert.equal(legacy.payload.length, 2 * 1024 * 1024);
-assert(chunkFrames.length > chunkFramesBefore, 'legacy payload rode chunk framing too');
-console.log(`✔ legacy 2 MB payload delivered via ${chunkFrames.length - chunkFramesBefore} additional chunk frames`);
-
-// ── 6. crash restart ──
+// ── 5. crash restart ──
 const runningBefore = messages.filter((m) => m.t === 'status' && m.state === 'running').length;
 send({ t: 'rpc', cid: 'crash', method: 'test/crash', params: {} });
 await waitFor(

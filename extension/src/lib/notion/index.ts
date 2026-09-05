@@ -138,10 +138,6 @@ export class Notion {
     return this.scheduler.schedule(bucket, () => this.client.callTool(name, args, signal), signal)
   }
 
-  readResource(uri: string): Promise<Array<{ uri: string; text?: string; mimeType?: string }>> {
-    return this.scheduler.schedule('global', () => this.client.readResource(uri))
-  }
-
   /** Classified failure helper for UI surfaces that catch directly. */
   explain(error: unknown): ReturnType<typeof classifyError> {
     return classifyError(error)

@@ -50,7 +50,7 @@ keeps answering `ping` (health only); a new session requires reopening the panel
 
 ## Chunk framing (host → ext)
 
-Any envelope whose serialized length exceeds `SAFE_CHUNK` (512 KiB) is split:
+Any envelope whose serialized length exceeds `SAFE_CHUNK` (256 Ki UTF-16 code units) is split:
 
 ```jsonc
 {"t":"chunk","id":41,"data":"<slice>"}        // 1..n messages, in order

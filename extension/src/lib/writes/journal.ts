@@ -19,7 +19,6 @@ export interface JournalEntry {
 export interface JournalStore {
   append(entry: JournalEntry): Promise<void>
   list(): Promise<JournalEntry[]>
-  remove?(id: string): Promise<void>
 }
 
 export function memoryJournalStore(): JournalStore {
@@ -31,9 +30,6 @@ export function memoryJournalStore(): JournalStore {
     async list() {
       return [...entries]
     },
-    async remove(id) {
-      entries = entries.filter((e) => e.id !== id)
-    },
   }
 }
 
@@ -44,9 +40,6 @@ export function idbJournalStore(db: () => Promise<IDBPDatabase>): JournalStore {
     },
     async list() {
       return await (await db()).getAll('journal') as JournalEntry[]
-    },
-    async remove(id) {
-      await (await db()).delete('journal', id)
     },
   }
 }
@@ -125,10 +118,5 @@ export class MutationJournal {
 
   releaseUndo(): void {
     this.undoInFlight = false
-  }
-
-  /** Removes an entry after it was undone (or explicitly dismissed). */
-  async drop(id: string): Promise<void> {
-    await this.store.remove?.(id)
   }
 }

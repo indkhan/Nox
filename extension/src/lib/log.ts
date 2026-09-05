@@ -26,10 +26,6 @@ export function logInfo(msg: string): void {
   push('info', msg)
 }
 
-export function logWarn(msg: string): void {
-  push('warn', msg)
-}
-
 export function logError(msg: string): void {
   push('error', msg)
 }

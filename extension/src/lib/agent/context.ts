@@ -14,7 +14,6 @@ export interface ContextInput {
   currentPage?: CurrentPage
   mentions?: Array<MentionRef & { markdown?: string }>
   attachments?: LocalAttachment[]
-  extraNotes?: string[]
 }
 
 /**
@@ -23,7 +22,7 @@ export interface ContextInput {
  */
 export function buildContextPreamble(input: ContextInput): string {
   const blocks: string[] = []
-  const { currentPage, mentions = [], attachments = [], extraNotes = [] } = input
+  const { currentPage, mentions = [], attachments = [] } = input
 
   const content: string[] = []
   if (currentPage) {
@@ -47,7 +46,6 @@ export function buildContextPreamble(input: ContextInput): string {
   for (const attachment of attachments) {
     content.push(`<local_attachment id="${escapeXml(attachment.id)}" name="${escapeXml(attachment.name)}" mime="${escapeXml(attachment.mimeType)}" size="${attachment.size}"/>`)
   }
-  for (const note of extraNotes) content.push(`<note>${note}</note>`)
   blocks.push('<context>')
   if (content.length) blocks.push(wrapUntrusted(content.join('\n')))
   blocks.push('</context>')

@@ -1,8 +1,7 @@
-import type { QueryResultTable } from '../../src/lib/db/query'
+import type { QueryResultTable } from '../lib/db/query'
 
-/** Compact results table with counts and optional groups (MVP §6.6). */
-export function ResultsTable({ table, groupByColumn }: { table: QueryResultTable; groupByColumn?: string }) {
-  const groups = groupByColumn ? computeGroups(table, groupByColumn) : null
+/** Compact results table with counts (MVP §6.6). */
+export function ResultsTable({ table }: { table: QueryResultTable }) {
   return (
     <div className="overflow-hidden rounded-card bg-surface shadow-card" data-testid="results-table">
       <div className="overflow-x-auto">
@@ -34,19 +33,7 @@ export function ResultsTable({ table, groupByColumn }: { table: QueryResultTable
           {table.totalRows} row{table.totalRows === 1 ? '' : 's'}
           {table.totalRows > 100 ? ' (showing 100)' : ''}
         </span>
-        {groups && <span className="truncate">{Object.entries(groups).map(([k, n]) => `${k}: ${n}`).join(' · ')}</span>}
       </div>
     </div>
   )
-}
-
-function computeGroups(table: QueryResultTable, column: string): Record<string, number> | null {
-  const idx = table.columns.indexOf(column)
-  if (idx === -1) return null
-  const out: Record<string, number> = {}
-  for (const row of table.rows) {
-    const key = String(row[idx])
-    out[key] = (out[key] ?? 0) + 1
-  }
-  return out
 }

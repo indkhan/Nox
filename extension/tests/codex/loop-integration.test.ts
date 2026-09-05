@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { AgentLoop, titleFromExchange } from '../../src/lib/agent/loop'
+import { AgentLoop } from '../../src/lib/agent/loop'
 import { ToolExecutor } from '../../src/lib/agent/executor'
 import { CodexClient, type CodexEvent } from '../../src/lib/codex/client'
 import type { NativeBridge } from '../../src/lib/codex/native'
@@ -210,10 +210,6 @@ describe('AgentLoop integration (scripted codex)', () => {
     })
     loop.cancel()
     expect(rejected).toBe(1)
-  })
-
-  it('titles threads from the exchange', () => {
-    expect(titleFromExchange('Summarize Q3 roadmap')).toBe('Summarize Q3 roadmap')
   })
 
   it('starts fresh after resetting the thread', async () => {

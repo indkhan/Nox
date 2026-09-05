@@ -1,19 +1,7 @@
-import type { CapabilityGate } from '../notion/capabilities'
-
-/** SQL is metered below Business + Notion AI (RESEARCH §2.5). */
-export type QueryMode = 'sql' | 'view'
-
-export function chooseQueryMode(gate: CapabilityGate): QueryMode {
-  return gate.can('notion-query-data-sources').allowed && gate.can('notion-query-data-sources').state === 'available'
-    ? 'sql'
-    : 'view'
-}
-
 export interface QueryResultTable {
   columns: string[]
   rows: Array<Array<string | number | boolean | null>>
   totalRows: number
-  groups?: Record<string, number>
 }
 
 /** Normalizes whatever the tool returned into a renderable table. */
@@ -44,15 +32,6 @@ export function tableFromObjects(objects: Array<Record<string, unknown>>): Query
     rows: objects.map((o) => columns.map((c) => cellToString(o[c]) ?? null)),
     totalRows: objects.length,
   }
-}
-
-export function groupBy(rows: QueryResultTable['rows'], columnIndex: number): Record<string, number> {
-  const groups: Record<string, number> = {}
-  for (const row of rows) {
-    const key = String(row[columnIndex] ?? '—')
-    groups[key] = (groups[key] ?? 0) + 1
-  }
-  return groups
 }
 
 function cellToString(v: unknown): string | number | boolean | null {

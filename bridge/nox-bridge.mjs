@@ -256,16 +256,7 @@ function handle(msg) {
       startCodex();
       return;
 
-    // Legacy diagnostics modes retained from E0 (old `type`-keyed messages).
-    case 'big':
-    case undefined:
-      if (msg?.type === 'big' || msg?.t === 'big') {
-        const bytes = Math.min(msg.bytes ?? 2 * 1024 * 1024, 16 * 1024 * 1024);
-        const payload = 'x'.repeat(bytes);
-        if (msg.mode === 'chunked') return sendToExtension({ legacyBig: true, bytes, payload });
-        return write({ type: 'bigRaw', bytes, payload });
-      }
-      if (msg?.t === undefined && msg?.ping !== undefined) return write(pong());
+    default:
       return write({ type: 'error', error: `unknown message type: ${JSON.stringify(msg?.t ?? msg?.type ?? msg)}` });
   }
 }

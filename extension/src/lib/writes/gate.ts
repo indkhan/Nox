@@ -114,7 +114,7 @@ export class WriteGate {
             richPage: detectRichPage(snapshot.markdown),
           }
         }
-        if (snapshot && !this.isUndoRequest(req)) {
+        if (snapshot) {
           await assertUnchanged((id) => this.deps.fetchPageMarkdown(id, req.signal), snapshot)
         }
       }
@@ -127,7 +127,7 @@ export class WriteGate {
     const result = await this.deps.callTool(req.tool, stripReservedArgs(req.args), req.signal)
     if (isToolError(result)) return result
     if (preImage.pageId) this.readHashes.delete(normalizeId(preImage.pageId) ?? preImage.pageId)
-    const inverse = buildInverse(req.tool, req.args, preImage)
+    const inverse = buildInverse(preImage)
     if (inverse.kind === 'execute-tool' && preImage.pageId) {
       try {
         const postWrite = await capturePageSnapshot((id) => this.deps.fetchPageMarkdown(id, req.signal), preImage.pageId)
@@ -162,11 +162,6 @@ export class WriteGate {
     }
 
     return result
-  }
-
-  private isUndoRequest(_req: ToolCallRequest): boolean {
-    // Reserved for E7 bulk undo flows that bypass the guard deliberately.
-    return false
   }
 }
 

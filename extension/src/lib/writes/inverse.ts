@@ -13,16 +13,13 @@ export interface PreImage {
   pageId?: string
   markdown?: string
   richPage?: boolean
-  properties?: Array<{ name: string; type: string; value: unknown }>
-  moves?: Array<{ pageId: string; parentPageId: string }>
-  config?: Record<string, unknown>
 }
 
 /**
  * Builds the inverse operation for a mutation given its pre-image (MVP §6.5).
  * Returns not-undoable with a plain-language reason when no safe inverse exists.
  */
-export function buildInverse(_toolName: string, _args: Record<string, unknown>, preImage: PreImage): InversePlan {
+export function buildInverse(preImage: PreImage): InversePlan {
   switch (preImage.kind) {
     case 'move': {
       return { kind: 'not-undoable', reason: 'the prior parent is not captured yet' }

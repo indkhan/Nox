@@ -4,7 +4,6 @@ import { wrapUntrusted, UNTRUSTED_BEGIN, UNTRUSTED_END } from '../../src/lib/age
 import { buildDeveloperInstructions } from '../../src/lib/agent/instructions'
 import { buildContextPreamble, truncateResult, TRUNCATION_MARKER } from '../../src/lib/agent/context'
 import { ToolExecutor, DEFAULT_STEP_LIMIT } from '../../src/lib/agent/executor'
-import { titleFromExchange } from '../../src/lib/agent/loop'
 import type { McpTool } from '../../src/lib/mcp/client'
 import { CapabilityGate } from '../../src/lib/notion/capabilities'
 import { WORKSPACE_PLAN_TOOL } from '../../src/lib/architect/tool'
@@ -242,21 +241,6 @@ describe('ToolExecutor', () => {
     expect(events).toHaveLength(2)
     expect(events[0]).toMatchObject({ status: 'ok', req: { tool: 'good' } })
     expect(events[1]).toMatchObject({ status: 'error', error: 'nope' })
-  })
-})
-
-describe('titleFromExchange', () => {
-  it('keeps short messages intact', () => {
-    expect(titleFromExchange('Find overdue tasks')).toBe('Find overdue tasks')
-  })
-
-  it('cuts long messages at a word boundary with ellipsis', () => {
-    const t = titleFromExchange('Find all the pages in my workspace that mention quarterly planning deadlines')
-    expect(t).toBe('Find all the pages in my workspace that mention…')
-  })
-
-  it('falls back for empty input', () => {
-    expect(titleFromExchange('')).toBe('New chat')
   })
 })
 

@@ -45,33 +45,6 @@ export function StopIcon({ className = 'h-3 w-3' }: IconProps) {
   )
 }
 
-export function SlidersIcon({ className = 'h-4 w-4' }: IconProps) {
-  return (
-    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" className={className} aria-hidden="true">
-      <path d="M2.5 5h11M2.5 11h11" strokeLinecap="round" />
-      <circle cx="6" cy="5" r="1.6" fill="currentColor" stroke="none" />
-      <circle cx="10" cy="11" r="1.6" fill="currentColor" stroke="none" />
-    </svg>
-  )
-}
-
-export function MicIcon({ className = 'h-4 w-4' }: IconProps) {
-  return (
-    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.3" className={className} aria-hidden="true">
-      <rect x="6" y="1.8" width="4" height="7.4" rx="2" />
-      <path d="M3.5 7.8a4.5 4.5 0 0 0 9 0M8 12.3v1.9" strokeLinecap="round" />
-    </svg>
-  )
-}
-
-export function PlusIcon({ className = 'h-4 w-4' }: IconProps) {
-  return (
-    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" className={className} aria-hidden="true">
-      <path d="M8 2.5v11M2.5 8h11" strokeLinecap="round" />
-    </svg>
-  )
-}
-
 export function PageIcon({ className = 'h-3.5 w-3.5' }: IconProps) {
   return (
     <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" className={className} aria-hidden="true">

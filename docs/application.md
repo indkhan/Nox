@@ -186,7 +186,7 @@ undoable rather than promising a partial restore.
 
 ## Local data
 
-IndexedDB database `nox` is currently version 2.
+IndexedDB database `nox` is currently version 3.
 
 | Store | Contains |
 |---|---|
@@ -194,7 +194,9 @@ IndexedDB database `nox` is currently version 2.
 | `messages` | User/assistant text, stream state, usage, and activity. |
 | `journal` | Applied changes, safe inverse calls, and undo state. |
 | `attachments` | Files attached to local conversations. |
-| `pageCache`, `mentionCache` | Local page/mention lookup data. |
+
+Version 3 removes unused page/mention cache stores and unused sort indexes while
+preserving threads, messages, attachments, and the change journal.
 
 Streaming messages are updated in place, so reopening the panel can identify and show an
 interrupted turn. Users can search, export, or delete local history. Codex also retains

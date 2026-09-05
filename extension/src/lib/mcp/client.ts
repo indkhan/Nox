@@ -82,13 +82,6 @@ export class McpClient {
     return (await this.rpc('tools/call', { name, arguments: args }, signal)) as McpCallResult
   }
 
-  async readResource(uri: string): Promise<Array<{ uri: string; text?: string; mimeType?: string }>> {
-    const result = (await this.rpc('resources/read', { uri })) as {
-      contents?: Array<{ uri: string; text?: string; mimeType?: string }>
-    }
-    return result.contents ?? []
-  }
-
   /** Flattens a tool result into the text the model should see. */
   static resultText(result: McpCallResult): string {
     if (!Array.isArray(result.content)) return ''

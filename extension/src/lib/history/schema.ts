@@ -1,9 +1,8 @@
 import { openDB, type IDBPDatabase } from 'idb'
-import type { IDBDatabase } from '../../shared/idb-types'
 import type { ActivityItem } from '../agent/activity'
 
 export const DB_NAME = 'nox'
-export const DB_VERSION = 2
+export const DB_VERSION = 3
 const openConnections = new Set<IDBPDatabase>()
 
 export interface ThreadRow {
@@ -29,19 +28,8 @@ export interface MessageRow {
   ts: number
 }
 
-export interface JournalRow {
-  id: string
-  threadId: string
-  turnId: string
-  tool: string
-  args: unknown
-  preImage?: unknown
-  inverse?: { tool: string; args: Record<string, unknown> }
-  status: 'applied' | 'undone' | 'failed'
-}
-
-/** Versioned migration chain (MVP §8). Add v2 blocks below, never edit v1. */
-function migrations(db: IDBDatabase, oldVersion: number): void {
+/** Versioned migration chain (MVP §8). Add upgrade blocks below, never edit v1. */
+function migrations(db: IDBPDatabase, oldVersion: number): void {
   if (oldVersion < 1) {
     const threads = db.createObjectStore('threads', { keyPath: 'id' })
     threads.createIndex('by_updated', 'updatedAt')
@@ -65,8 +53,15 @@ function migrations(db: IDBDatabase, oldVersion: number): void {
 
 export async function openNoxDB(): Promise<IDBPDatabase> {
   const connection = await openDB(DB_NAME, DB_VERSION, {
-    upgrade(db, oldVersion) {
-      migrations(db as unknown as IDBDatabase, oldVersion)
+    upgrade(db, oldVersion, _newVersion, transaction) {
+      migrations(db, oldVersion)
+      if (oldVersion < 3) {
+        db.deleteObjectStore('pageCache')
+        db.deleteObjectStore('mentionCache')
+        transaction.objectStore('threads').deleteIndex('by_updated')
+        transaction.objectStore('threads').deleteIndex('by_pinned')
+        transaction.objectStore('messages').deleteIndex('by_ts')
+      }
     },
   })
   openConnections.add(connection)

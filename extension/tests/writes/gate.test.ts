@@ -321,9 +321,9 @@ describe('MutationJournal undo ordering', () => {
   })
 
   it('does not advertise unsupported inverse plans', () => {
-    expect(buildInverse('notion-move-pages', {}, { kind: 'move', moves: [{ pageId: 'a', parentPageId: 'b' }] }).kind).toBe('not-undoable')
-    expect(buildInverse('notion-update-page', {}, { kind: 'properties', properties: [{ name: 'N', type: 'number', value: 1 }] }).kind).toBe('not-undoable')
-    expect(buildInverse('notion-update-view', {}, { kind: 'view', config: {} }).kind).toBe('not-undoable')
+    expect(buildInverse({ kind: 'move' }).kind).toBe('not-undoable')
+    expect(buildInverse({ kind: 'properties' }).kind).toBe('not-undoable')
+    expect(buildInverse({ kind: 'view' }).kind).toBe('not-undoable')
   })
 
   it('exposes GuardViolation as a typed error', () => {

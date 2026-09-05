@@ -80,7 +80,7 @@ export const agentLoop = new AgentLoop({
       }
       if (result?.isError && Array.isArray(result.content)) {
         // Guard/refusal outcomes flow back to the model as data (MVP §6).
-        throw Object.assign(new Error(result.content.map((c) => c.text).join('\n')), { handledByGate: true })
+        throw new Error(result.content.map((c) => c.text).join('\n'))
       }
       return { content: result.content ?? [] }
     },

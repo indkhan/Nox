@@ -21,7 +21,6 @@
     "@crxjs/vite-plugin": "^2.0.0",
     "@tailwindcss/vite": "^4.0.0",
     "@types/chrome": "^0.1.0",
-    "@types/dompurify": "^3.2.0",
     "@types/node": "^26.2.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",

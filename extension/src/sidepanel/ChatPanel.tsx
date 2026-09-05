@@ -105,8 +105,6 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
 
   const scrollToEnd = () => requestAnimationFrame(() => scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }))
 
-  const v_error_placeholder = () => '(no content)'
-
   async function send(text: string, mentions: MentionRef[] = [], attachments: LocalAttachment[] = []) {
     if (busyRef.current || readOnly) return
     historyRestoreCancelledRef.current = true
@@ -207,7 +205,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
       })
 
       currentActivity = attachJournalEntries(currentActivity, await writeGate.journal.newestFirst())
-      const finalText = result.text || streamedAnswer || (result.interrupted ? '' : v_error_placeholder())
+      const finalText = result.text || streamedAnswer || (result.interrupted ? '' : '(no content)')
       await persisted?.persistAssistant(finalText, lastUsageRef.current ?? undefined, currentActivity, result.interrupted ? 'interrupted' : 'complete').catch(() => undefined)
 
       if (threadTitle === 'New chat') {

@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import 'fake-indexeddb/auto'
+import { openDB, deleteDB } from 'idb'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { openNoxDB, DB_VERSION } from '../src/lib/history/schema'
 import { threadRepository, type ThreadRepository } from '../src/lib/history/repository'
@@ -7,11 +8,44 @@ import { MutationJournal, idbJournalStore } from '../src/lib/writes/journal'
 import { startPersistedTurn } from '../src/lib/history/turn'
 
 describe('IndexedDB schema', () => {
-  it('opens at the current version with all six stores', async () => {
+  it('removes unused v2 stores and indexes while preserving records', async () => {
+    const old = await openDB('nox', 2, {
+      upgrade(db) {
+        const threads = db.createObjectStore('threads', { keyPath: 'id' })
+        threads.createIndex('by_updated', 'updatedAt')
+        threads.createIndex('by_pinned', 'pinned')
+        const messages = db.createObjectStore('messages', { keyPath: 'id' })
+        messages.createIndex('by_thread', 'threadId')
+        messages.createIndex('by_ts', 'ts')
+        db.createObjectStore('journal', { keyPath: 'id' }).createIndex('by_thread', 'threadId')
+        db.createObjectStore('attachments', { keyPath: 'id' }).createIndex('by_thread', 'threadId')
+        db.createObjectStore('pageCache', { keyPath: 'pageId' })
+        db.createObjectStore('mentionCache', { keyPath: 'pageId' })
+      },
+    })
+    for (const store of ['threads', 'messages', 'journal', 'attachments']) {
+      await old.put(store, { id: store, threadId: 'threads', text: 'retained' })
+    }
+    old.close()
     const db = await openNoxDB()
-    expect(DB_VERSION).toBe(2)
+    try {
+      expect([...db.objectStoreNames]).toEqual(['attachments', 'journal', 'messages', 'threads'])
+      expect([...db.transaction('threads').store.indexNames]).toEqual([])
+      expect([...db.transaction('messages').store.indexNames]).toEqual(['by_thread'])
+      for (const store of ['threads', 'messages', 'journal', 'attachments']) {
+        expect(await db.get(store, store)).toMatchObject({ id: store, text: 'retained' })
+      }
+    } finally {
+      db.close()
+      await deleteDB('nox')
+    }
+  })
+
+  it('opens at the current version with only the four used stores', async () => {
+    const db = await openNoxDB()
+    expect(DB_VERSION).toBe(3)
     expect(db.version).toBe(DB_VERSION)
-    for (const store of ['threads', 'messages', 'journal', 'pageCache', 'mentionCache', 'attachments']) {
+    for (const store of ['threads', 'messages', 'journal', 'attachments']) {
       expect(db.objectStoreNames.contains(store)).toBe(true)
     }
     db.close()
