@@ -1,6 +1,7 @@
 export type ActivityItem =
   | { kind: 'reasoning'; id: string; text: string }
-  | { kind: 'search'; id: string; status: 'running' | 'completed' }
+  | { kind: 'commentary'; id: string; text: string }
+  | { kind: 'search'; id: string; status: 'running' | 'completed'; query?: string; action?: Record<string, unknown> }
   | {
       kind: 'tool'
       id: string
@@ -18,8 +19,9 @@ export type ActivityItem =
 
 export type ActivityEvent =
   | { kind: 'reasoning'; text: string }
-  | { kind: 'web-search' }
-  | { kind: 'web-search-completed' }
+  | { kind: 'commentary'; id: string; text: string }
+  | { kind: 'web-search'; id?: string; query?: string; action?: Record<string, unknown> }
+  | { kind: 'web-search-completed'; id?: string; query?: string; action?: Record<string, unknown> }
   | { kind: 'tool-call'; tool: string; args: Record<string, unknown>; callId?: string }
   | { kind: 'tool-completed'; tool?: string; callId?: string; success?: boolean; durationMs?: number; error?: string; resultText?: string }
 
@@ -53,14 +55,15 @@ export function applyActivityEvent(items: ActivityItem[], event: ActivityEvent):
   if (event.kind === 'reasoning') {
     return [...items, { kind: 'reasoning', id: `reasoning-${items.length}`, text: event.text }]
   }
-  if (event.kind === 'web-search') {
-    return [...items, { kind: 'search', id: `search-${items.length}`, status: 'running' }]
+  if (event.kind === 'commentary') {
+    const found = items.some(item => item.kind === 'commentary' && item.id === event.id)
+    return found ? items.map(item => item.kind === 'commentary' && item.id === event.id ? { ...item, text: event.text } : item) : [...items, event]
   }
-  if (event.kind === 'web-search-completed') {
-    const index = [...items].reverse().findIndex((item) => item.kind === 'search' && item.status === 'running')
-    if (index === -1) return items
-    const actual = items.length - 1 - index
-    return items.map((item, itemIndex) => itemIndex === actual && item.kind === 'search' ? { ...item, status: 'completed' } : item)
+  if (event.kind === 'web-search' || event.kind === 'web-search-completed') {
+    const id = event.id ?? (event.kind === 'web-search-completed' ? [...items].reverse().find(item => item.kind === 'search' && item.status === 'running')?.id : undefined) ?? `search-${items.length}`
+    const existing = items.find(item => item.kind === 'search' && item.id === id) as Extract<ActivityItem, { kind: 'search' }> | undefined
+    const next: ActivityItem = { kind: 'search', id, status: event.kind === 'web-search-completed' || existing?.status === 'completed' ? 'completed' : 'running', query: event.query ?? existing?.query, action: event.action ?? existing?.action }
+    return existing ? items.map(item => item === existing ? next : item) : [...items, next]
   }
   if (event.kind === 'tool-call') {
     return [...items, {
@@ -99,13 +102,14 @@ export function failedToolActivityLabel(tool: string): string {
   return `Failed to ${toolPresentation(tool).failed}`
 }
 
-export function deriveActivitySummary(items: ActivityItem[], state: { active: boolean; answerStarted: boolean }): ActivitySummary {
-  const actions = items.filter((item): item is Extract<ActivityItem, { kind: 'search' | 'tool' }> => item.kind !== 'reasoning')
+export function deriveActivitySummary(items: ActivityItem[], state: { active: boolean; answerStarted: boolean; outcome?: 'failed' | 'interrupted' }): ActivitySummary {
+  const actions = items.filter((item): item is Extract<ActivityItem, { kind: 'search' | 'tool' }> => item.kind === 'search' || item.kind === 'tool')
   const tools = actions.filter((item): item is Extract<ActivityItem, { kind: 'tool' }> => item.kind === 'tool')
   const durationMs = tools.reduce((total, item) => total + (item.durationMs ?? 0), 0)
   const failed = [...tools].reverse().find((item) => item.status === 'failed')
   const running = [...actions].reverse().find((item) => item.status === 'running')
 
+  if (state.outcome) return { label: state.outcome === 'failed' ? 'Response failed' : 'Response stopped', actionCount: actions.length, durationMs, status: 'failed' }
   if (failed) return { label: failedToolActivityLabel(failed.tool), actionCount: actions.length, durationMs, status: 'failed' }
   if (!state.active) return { label: 'Answer ready', actionCount: actions.length, durationMs, status: 'completed' }
   if (state.answerStarted) return { label: 'Writing the answer…', actionCount: actions.length, durationMs, status: 'active' }

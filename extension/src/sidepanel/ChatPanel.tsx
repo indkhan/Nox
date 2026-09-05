@@ -20,6 +20,7 @@ interface TurnView {
   activity: ActivityItem[]
   answer: string
   error: string | null
+  outcome?: 'failed' | 'interrupted'
   pending: boolean
 }
 
@@ -156,6 +157,8 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
             break
           case 'reasoning-delta':
             pendingReasoning += event.text
+            currentActivity = applyActivityEvent(currentActivity, { kind: 'commentary', id: `summary-${turnId}`, text: pendingReasoning.slice(0, 480) })
+            patch((v) => ({ ...v, activity: currentActivity }))
             break
           case 'web-search':
             logInfo('Web search started')
@@ -191,7 +194,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
             lastUsageRef.current = (event.usage as Record<string, number> | null) ?? null
             break
           case 'commentary':
-            currentActivity = applyActivityEvent(currentActivity, { kind: 'reasoning', text: event.text })
+            currentActivity = applyActivityEvent(currentActivity, event)
             patch((v) => ({ ...v, activity: currentActivity }))
             break
           case 'text-replaced':
@@ -230,13 +233,14 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
         ...v,
         activity: currentActivity,
         answer: result.text,
+        outcome: result.interrupted ? 'interrupted' : undefined,
         error: result.interrupted ? 'Stopped before Nox finished responding.' : null,
         pending: false,
       }))
       logInfo(result.interrupted ? 'Turn interrupted' : 'Turn complete')
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e)
-      patch((v) => ({ ...v, error: message, pending: false }))
+      patch((v) => ({ ...v, error: message, outcome: 'failed', pending: false }))
       await persisted?.persistAssistant(streamedAnswer, lastUsageRef.current ?? undefined, currentActivity, 'failed', message).catch(() => undefined)
       logError(`Turn failed: ${message}`)
     } finally {
@@ -265,7 +269,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
                 <span className="max-w-[85%] whitespace-pre-wrap rounded-2xl bg-zinc-800 px-3.5 py-2 text-sm leading-relaxed">{userText}</span>
               </div>
               {(view.activity.length > 0 || view.pending) && (
-                <ActivityTimeline items={view.activity} active={view.pending} answerStarted={view.answer.length > 0} onUndo={(id) => void undoActivity(id, setTurns)} />
+                <ActivityTimeline items={view.activity} outcome={view.outcome} active={view.pending} answerStarted={view.answer.length > 0} onUndo={(id) => void undoActivity(id, setTurns)} />
               )}
               {view.answer && <div aria-live={view.pending ? 'polite' : undefined} aria-atomic="false"><AssistantMarkdown markdown={view.answer} /></div>}
               {!readOnly && !view.pending && view.answer && (

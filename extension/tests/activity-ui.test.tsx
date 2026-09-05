@@ -108,3 +108,14 @@ describe('ActivityTimeline', () => {
     expect(html).not.toContain('<script>')
   })
 })
+
+it('shows commentary and expandable evidence details', () => {
+  const html = renderToStaticMarkup(<ActivityTimeline initiallyExpanded items={[
+    { kind: 'commentary', id: 'c1', text: 'Checking the official release notes.' },
+    { kind: 'search', id: 's1', status: 'completed', query: 'node release', action: { type: 'openPage', url: 'https://nodejs.org/' } },
+  ]} />)
+  expect(html).toContain('Checking the official release notes.')
+  expect(html).toContain('node release')
+  expect(html).toContain('https://nodejs.org/')
+  expect(html).toContain('<details')
+})

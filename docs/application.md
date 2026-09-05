@@ -81,7 +81,18 @@ window run turns; another open panel becomes a read-only viewer. This avoids dup
 agents writing into the same thread.
 
 The UI is React with a single Zustand store. Model output is rendered through `marked`
-and DOMPurify. The composer supports the current page, explicit `@` page mentions, local
+and DOMPurify. Valid dashed or undashed Notion UUID links become HTTPS page links;
+web sources use Markdown links with safe new-tab behavior. Search activity preserves
+item IDs, queries and available open/find actions, with expandable details. Commentary
+and documented reasoning summaries are shown as progress, separate from the answer;
+legacy raw-reasoning activity remains hidden. Failed/stopped response labels survive
+history restoration.
+
+Answering instructions are rebuilt per turn from current identity, tool capabilities,
+search preference and date/timezone. Workspace claims require workspace evidence;
+current external facts require available web research. Discussion/research does not
+authorize changes, including in Auto mode. Incomplete evidence and failed work must
+be disclosed, and selected files are described as upload inputs. The composer supports the current page, explicit `@` page mentions, local
 attachments, Ask/Auto mode, model, reasoning effort, and service tier.
 
 ### Notion connection

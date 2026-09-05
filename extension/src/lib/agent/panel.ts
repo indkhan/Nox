@@ -95,7 +95,9 @@ export const agentLoop = new AgentLoop({
     for (const approval of useNoxStore.getState().pendingApprovals) useNoxStore.getState().removeApproval(approval.id)
   },
   getDynamicTools: async () => toDynamicTools(await notion.listTools(), notion.capabilities),
-  developerInstructions: buildDeveloperInstructions({
+  developerInstructions: (settings) => buildDeveloperInstructions({
+    webSearchEnabled: settings.webSearchEnabled,
+    availableTools: settings.dynamicTools?.map(t => (t as { name: string }).name),
     userName: notion.identity?.userName,
     workspaceName: notion.identity?.workspaceName,
   }),

@@ -86,3 +86,14 @@ describe('activity undo state', () => {
     expect(applyUndoResult([item], 'j1')[0]).toMatchObject({ undoable: false, resultText: 'Change undone' })
   })
 })
+
+it('retains search identity and action details across out-of-order completions', () => {
+  let items = applyActivityEvent([], { kind: 'web-search', id: 's1', query: 'first' })
+  items = applyActivityEvent(items, { kind: 'web-search', id: 's2', query: 'second' })
+  items = applyActivityEvent(items, { kind: 'web-search-completed', id: 's1', action: { type: 'openPage', url: 'https://nodejs.org/' } })
+  expect(items[0]).toMatchObject({ id: 's1', query: 'first', status: 'completed', action: { type: 'openPage' } })
+  expect(items[1]).toMatchObject({ id: 's2', status: 'running' })
+})
+it('never describes a failed response as answer ready', () => {
+  expect(deriveActivitySummary([], { active: false, answerStarted: true, outcome: 'failed' }).label).toBe('Response failed')
+})

@@ -156,6 +156,7 @@ export class CodexClient {
     const params = {
       ...this.threadParams(settings),
       config: research.config,
+      developerInstructions: [settings.developerInstructions, research.limitation].filter(Boolean).join('\n'),
       // Pin the chosen model explicitly so a stale binary fails loudly instead
       // of silently defaulting (RESEARCH §3.4).
       model: settings.model ?? this.defaultModel(models),
@@ -185,6 +186,7 @@ export class CodexClient {
       threadId,
       ...params,
       config: research.config,
+      developerInstructions: [settings.developerInstructions, research.limitation].filter(Boolean).join('\n'),
       sandbox: 'read-only',
       approvalPolicy: 'never',
     })) as { thread?: { id?: string }; id?: string }

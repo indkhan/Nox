@@ -36,7 +36,7 @@ describe('renderMarkdown', () => {
   it('keeps notion: page links and chips them for the UI', () => {
     const id = 'a'.repeat(32)
     const html = renderMarkdown(`[Second Brain](notion://page/${id})`)
-    expect(html).toContain(`data-page-id="${id}"`)
+    expect(html).toContain(`data-page-id="aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"`)
     expect(html).toContain('nox-source-chip')
   })
 
@@ -45,4 +45,13 @@ describe('renderMarkdown', () => {
     expect(html).toContain('<code')
     expect(html).not.toContain('<script>')
   })
+})
+
+it('normalizes dashed and uppercase Notion IDs into safe browser links', () => {
+  const id = 'ABCDEFAB-CDEF-ABCD-EFAB-CDEFABCDEFAB'
+  const html = renderMarkdown(`[Source](notion://page/${id})`)
+  expect(html).toContain('href="https://www.notion.so/abcdefabcdefabcdefabcdefabcdefab"')
+  expect(html).toContain('target="_blank"')
+  expect(html).toContain('noopener')
+  expect(renderMarkdown('[bad](notion://page/-------------------------------a)')).not.toContain('href=')
 })

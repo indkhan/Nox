@@ -13,7 +13,7 @@ export interface AgentLoopDeps {
   executor: ToolExecutor
   /** Returns tools already filtered through the capability gate. */
   getDynamicTools: () => Promise<unknown[]>
-  developerInstructions: string | (() => string)
+  developerInstructions: string | ((settings: ThreadSettings) => string)
   beginTurn?: () => void
   cancelPending?: () => void
 }
@@ -79,10 +79,11 @@ export class AgentLoop {
     signal?.throwIfAborted()
     const full: ThreadSettings = {
       dynamicTools,
-      developerInstructions: typeof this.deps.developerInstructions === 'function' ? this.deps.developerInstructions() : this.deps.developerInstructions,
+      developerInstructions: '',
       ...this.overrides,
       ...settings,
     }
+    full.developerInstructions = typeof this.deps.developerInstructions === 'function' ? this.deps.developerInstructions(full) : this.deps.developerInstructions
     if (this.threadId) {
       const original = this.threadId
       for (let attempt = 0; attempt < 2; attempt++) {

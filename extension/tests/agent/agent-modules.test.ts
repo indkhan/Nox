@@ -269,3 +269,15 @@ it('can retrieve an omitted decisive fact and expires handles between turns', as
   executor.beginTurn()
   expect((await executor.execute(request)).success).toBe(false)
 })
+
+it('builds capability-aware evidence instructions without authorizing discussion mutations', () => {
+  const prompt = buildDeveloperInstructions({ webSearchEnabled: false, availableTools: ['notion-fetch'], now: new Date('2026-09-05T12:00:00Z'), timezone: 'Europe/Berlin' })
+  expect(prompt).toContain('Web research is disabled')
+  expect(prompt).toContain('2026-09-05')
+  expect(prompt).toContain('Europe/Berlin')
+  expect(prompt).toMatch(/discussion.*do not authorize mutations/i)
+  expect(prompt).toMatch(/Auto mode does not expand/i)
+  expect(prompt).toMatch(/reference-only.*fetch/i)
+  expect(prompt).toMatch(/upload inputs.*contents have not been read/i)
+  expect(prompt).not.toContain('Your tools operate on the connected Notion workspace only.')
+})

@@ -5,13 +5,13 @@ import { deriveActivitySummary, failedToolActivityLabel, toolActivityLabel, tool
 import { toResultTable } from '../lib/db/query'
 import { ResultsTable } from './ResultsTable'
 
-export function ActivityTimeline({ items, active = false, answerStarted = false, initiallyExpanded = false, onUndo }: { items: ActivityItem[]; active?: boolean; answerStarted?: boolean; initiallyExpanded?: boolean; onUndo?: (journalId: string) => void }) {
+export function ActivityTimeline({ items, active = false, answerStarted = false, initiallyExpanded = false, outcome, onUndo }: { items: ActivityItem[]; active?: boolean; answerStarted?: boolean; initiallyExpanded?: boolean; outcome?: 'failed' | 'interrupted'; onUndo?: (journalId: string) => void }) {
   const [open, setOpen] = useState(initiallyExpanded)
   useEffect(() => {
     if (answerStarted) setOpen(false)
   }, [answerStarted])
   if (items.length === 0 && !active) return null
-  const summary = deriveActivitySummary(items, { active, answerStarted })
+  const summary = deriveActivitySummary(items, { active, answerStarted, outcome })
   const meta = !active && summary.actionCount > 0
     ? `${summary.actionCount} action${summary.actionCount === 1 ? '' : 's'}${summary.durationMs ? ` · ${formatDuration(summary.durationMs)}` : ''}`
     : null
@@ -37,7 +37,15 @@ export function ActivityTimeline({ items, active = false, answerStarted = false,
 }
 
 function ActivityRow({ item, onUndo }: { item: Exclude<ActivityItem, { kind: 'reasoning' }>; onUndo?: (journalId: string) => void }) {
-  if (item.kind === 'search') return <li className="nox-info py-1 text-xs">{item.status === 'completed' ? 'Searched the web' : 'Searching the web…'}</li>
+  if (item.kind === 'commentary') return <li className="py-1 text-xs text-zinc-500">{item.text}</li>
+  if (item.kind === 'search') return <li className="nox-info py-1 text-xs">
+    {item.status === 'completed' ? 'Searched the web' : 'Searching the web...'}
+    {(item.query || item.action) && <details className="mt-1 text-xs text-zinc-500">
+      <summary className="cursor-pointer">Research details</summary>
+      {item.query && <p>{item.query}</p>}
+      {item.action && <pre className="max-h-32 overflow-auto whitespace-pre-wrap">{safeStringify(item.action)}</pre>}
+    </details>}
+  </li>
   const completed = item.status === 'completed'
   const base = toolActivityLabel(item.tool, item.args, completed)
   const label = item.undone ? 'Change undone' : item.status === 'failed' ? failedToolActivityLabel(item.tool) : base
