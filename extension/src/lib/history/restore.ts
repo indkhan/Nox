@@ -30,7 +30,7 @@ export function restoreTurns(messages: MessageRow[], journal: JournalEntry[] = [
       turn.view = {
         activity: message.activity ?? [],
         answer: message.text,
-        error: interrupted ? 'This turn was interrupted before Nox finished responding.' : null,
+        error: message.turnStatus === 'failed' ? message.error ?? 'This turn failed before Nox finished responding.' : interrupted ? 'This turn was interrupted before Nox finished responding.' : null,
         pending: false,
       }
     }

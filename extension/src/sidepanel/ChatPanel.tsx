@@ -27,6 +27,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
   const [turns, setTurns] = useState<Array<{ id: string; userText: string; view: TurnView }>>([])
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false)
+  const sendAbortRef = useRef<AbortController | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const currentThreadIdRef = useRef<string | null>(null)
   const lastUsageRef = useRef<Record<string, number> | null>(null)
@@ -113,6 +114,11 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
       setTurns((t) => [...t, { id: crypto.randomUUID(), userText: text, view: { activity: [], answer: '', error: 'Connect Notion first — open Settings (top right) to connect.', pending: false } }])
       return
     }
+    const currentPage = useNoxStore.getState().currentPage ?? undefined
+    const sendAbort = new AbortController()
+    sendAbortRef.current = sendAbort
+    const deadline = setTimeout(() => { sendAbort.abort(); agentLoop.cancel() }, 10 * 60 * 1000)
+    lastUsageRef.current = null
     prepareAgentTurn(useNoxStore.getState().mode, mentions.map((mention) => mention.pageId), attachments.map((attachment) => attachment.id))
     busyRef.current = true
     setAgentBusy(true)
@@ -184,6 +190,16 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
           case 'usage':
             lastUsageRef.current = (event.usage as Record<string, number> | null) ?? null
             break
+          case 'commentary':
+            currentActivity = applyActivityEvent(currentActivity, { kind: 'reasoning', text: event.text })
+            patch((v) => ({ ...v, activity: currentActivity }))
+            break
+          case 'text-replaced':
+            streamedAnswer = event.text
+            void persisted?.persistAssistant(streamedAnswer, undefined, currentActivity).catch(() => undefined)
+            patch((v) => ({ ...v, answer: event.text }))
+            scrollToEnd()
+            break
           case 'text-delta':
             streamedAnswer += event.text
             void persisted?.persistAssistant(streamedAnswer, undefined, currentActivity).catch(() => undefined)
@@ -193,19 +209,15 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
         }
       })
 
-      let mentionContext: Array<MentionRef & { markdown?: string }> = mentions
-      if (mentions.length > 0) {
-        mentionContext = await Promise.all(mentions.map((m) => fetchMentionContext(m)))
-      }
-
       const result = await agentLoop.sendUserMessage(text, {
-        currentPage: useNoxStore.getState().currentPage ?? undefined,
-        mentions: mentionContext.map(({ pageId, title, markdown }) => ({ pageId, title, markdown })),
+        currentPage,
+        signal: sendAbort.signal,
+        prepareContext: (signal) => Promise.all(mentions.map(m => fetchMentionContext(m, signal))),
         attachments,
       })
 
       currentActivity = attachJournalEntries(currentActivity, await writeGate.journal.newestFirst())
-      const finalText = result.text || streamedAnswer || (result.interrupted ? '' : '(no content)')
+      const finalText = result.text
       await persisted?.persistAssistant(finalText, lastUsageRef.current ?? undefined, currentActivity, result.interrupted ? 'interrupted' : 'complete').catch(() => undefined)
 
       if (threadTitle === 'New chat') {
@@ -217,7 +229,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
       patch((v) => ({
         ...v,
         activity: currentActivity,
-        answer: result.text || v.answer || (result.interrupted ? '' : '(no content)'),
+        answer: result.text,
         error: result.interrupted ? 'Stopped before Nox finished responding.' : null,
         pending: false,
       }))
@@ -225,8 +237,11 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e)
       patch((v) => ({ ...v, error: message, pending: false }))
+      await persisted?.persistAssistant(streamedAnswer, lastUsageRef.current ?? undefined, currentActivity, 'failed', message).catch(() => undefined)
       logError(`Turn failed: ${message}`)
     } finally {
+      clearTimeout(deadline)
+      sendAbortRef.current = null
       unsubscribe?.()
       busyRef.current = false
       setAgentBusy(false)
@@ -277,7 +292,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
         busy={busy}
         readOnly={readOnly}
         onSend={(t, mentions, attachments) => void send(t, mentions, attachments)}
-        onCancel={() => agentLoop.cancel()}
+        onCancel={() => { sendAbortRef.current?.abort(); agentLoop.cancel() }}
       />
       </>}
     </section>

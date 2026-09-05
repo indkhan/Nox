@@ -12,8 +12,8 @@ export async function startPersistedTurn(
   let persistQueue = Promise.resolve<unknown>(undefined)
   return {
     threadId: id,
-    persistAssistant(text: string, usage?: Record<string, number>, activity?: ActivityItem[], turnStatus: 'streaming' | 'complete' | 'interrupted' = 'streaming') {
-      persistQueue = persistQueue.then(() => repo.appendMessage(id, { id: assistantId, role: 'assistant', text, usage, activity, turnStatus }))
+    persistAssistant(text: string, usage?: Record<string, number>, activity?: ActivityItem[], turnStatus: 'streaming' | 'complete' | 'interrupted' | 'failed' = 'streaming', error?: string) {
+      persistQueue = persistQueue.then(() => repo.appendMessage(id, { id: assistantId, role: 'assistant', text, usage, activity, turnStatus, error }))
       return persistQueue
     },
   }

@@ -502,7 +502,7 @@ function ModelControls({ disabled }: { disabled: boolean }) {
         <span className="sr-only">Reasoning effort</span>
         <select
           disabled={disabled}
-          value={settings.effort ?? 'low'}
+          value={settings.effort ?? selected?.defaultReasoningEffort ?? ''}
           onChange={(event) => apply({ ...settings, effort: event.target.value })}
           aria-label="Reasoning effort"
           data-testid="effort-select"

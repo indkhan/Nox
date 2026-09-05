@@ -5,6 +5,7 @@ export interface ModelInfo {
   id: string
   displayName?: string
   description?: string
+  defaultReasoningEffort?: string
   isDefault?: boolean
   inputModalities?: string[]
   supportedReasoningEfforts?: Array<{ reasoningEffort: string }>
@@ -38,6 +39,8 @@ export type CodexEvent =
   | { kind: 'reasoning-delta'; text: string }
   | { kind: 'text-started' }
   | { kind: 'text-delta'; text: string }
+  | { kind: 'text-replaced'; text: string }
+  | { kind: 'commentary'; id: string; text: string }
   | { kind: 'web-search' }
   | { kind: 'web-search-completed' }
   | { kind: 'tool-call'; tool: string; args: Record<string, unknown>; callId?: string }
@@ -59,10 +62,12 @@ export interface ToolCallRequest {
 
 interface ItemParams extends Record<string, unknown> {
   threadId?: string
-  item?: { type?: string; id?: string; text?: string; tool?: string; status?: string }
+  turnId?: string
+  itemId?: string
+  item?: { type?: string; id?: string; text?: string; phase?: string | null; tool?: string; status?: string }
   delta?: string
   error?: { message?: string }
-  turn?: { usage?: TurnUsage }
+  turn?: { id?: string; status?: string; error?: { message?: string } | null; usage?: TurnUsage }
   usage?: TurnUsage
   interrupted?: boolean
 }
@@ -84,6 +89,12 @@ export class CodexClient {
   private turnFinalText = ''
   private sawError: string | null = null
   private turnRunning = false
+  private activeTurn: string | null = null
+  private effort: string | undefined
+  private pendingEvents: Array<() => void> = []
+  private messages = new Map<string, { text: string; phase?: string | null; completed: boolean }>()
+  private cancelled = false
+  private interruptPending: Promise<void> | null = null
 
   constructor(private readonly bridge: NativeBridge) {}
 
@@ -92,7 +103,20 @@ export class CodexClient {
     if (this.wired) return
     this.wired = true
     this.bridge.onNotification = ({ method, params }) => this.handleNotification(method, params as ItemParams)
-    this.bridge.onCodexRequest = (req) => void this.handleServerRequest(req)
+    this.bridge.onCodexRequest = (req) => {
+      if (this.turnRunning && !this.activeTurn) this.pendingEvents.push(() => void this.handleServerRequest(req))
+      else void this.handleServerRequest(req)
+    }
+    const disconnected = this.bridge.onBridgeDisconnected
+    this.bridge.onBridgeDisconnected = () => {
+      this.failActiveTurn('bridge port disconnected; reconnect before continuing')
+      disconnected?.()
+    }
+    const status = this.bridge.onStatus
+    this.bridge.onStatus = (event) => {
+      if (['exited', 'dead'].includes(event.state)) this.failActiveTurn('Codex disconnected; reconnect before continuing')
+      status?.(event)
+    }
   }
 
   async initialize(): Promise<string> {
@@ -101,6 +125,7 @@ export class CodexClient {
       clientInfo: { name: 'nox', title: 'Nox', version: '0.1.0' },
       capabilities: { experimentalApi: true },
     })) as { userAgent?: string }
+    this.bridge.notify('initialized')
     this.userAgent = result.userAgent ?? null
     return this.userAgent ?? 'unknown'
   }
@@ -120,12 +145,12 @@ export class CodexClient {
   async startThread(settings: ThreadSettings): Promise<string> {
     this.wire()
     const models = await this.listModels()
+    this.selectEffort(settings, models)
     const params = {
-      ...settings,
+      ...this.threadParams(settings),
       // Pin the chosen model explicitly so a stale binary fails loudly instead
       // of silently defaulting (RESEARCH §3.4).
       model: settings.model ?? this.defaultModel(models),
-      effort: settings.effort ?? 'low',
       ephemeral: settings.ephemeral ?? false,
       sandbox: 'read-only',
       approvalPolicy: 'never',
@@ -143,46 +168,101 @@ export class CodexClient {
 
   async resumeThread(threadId: string, settings: ThreadSettings): Promise<string> {
     this.wire()
+    this.selectEffort(settings, await this.listModels())
+    const { dynamicTools: _tools, ephemeral: _ephemeral, ...params } = this.threadParams(settings)
     const result = (await this.bridge.rpc<Record<string, unknown>>('thread/resume', {
       threadId,
-      ...settings,
+      ...params,
+      sandbox: 'read-only',
+      approvalPolicy: 'never',
     })) as { thread?: { id?: string }; id?: string }
     const resumed = (result.thread?.id ?? result.id) ?? threadId
     this.activeThread = resumed
     return resumed
   }
 
-  /**
-   * Starts one turn and resolves when it completes. Events stream through
-   * onEvent while it runs.
-   */
+  private threadParams(settings: ThreadSettings) {
+    const { effort: _effort, ...params } = settings
+    return params
+  }
+
+  private selectEffort(settings: ThreadSettings, models: ModelInfo[]): void {
+    const model = models.find(m => m.id === (settings.model ?? this.defaultModel(models)))
+    if (settings.effort && model?.supportedReasoningEfforts?.length &&
+        !model.supportedReasoningEfforts.some(e => e.reasoningEffort === settings.effort)) {
+      throw new Error(`Reasoning effort ${settings.effort} is unavailable for ${model.id}. Choose a supported effort.`)
+    }
+    this.effort = settings.effort ?? model?.defaultReasoningEffort
+  }
+
   async runTurn(input: TurnInput[]): Promise<{ interrupted: boolean; finalText: string }> {
-    if (!this.activeThread) throw new Error('no active thread — start or resume one first')
+    if (!this.activeThread) throw new Error('no active thread ? start or resume one first')
     if (this.turnRunning) throw new Error('turn already running')
     this.turnRunning = true
     this.wire()
+    this.activeTurn = null
+    this.cancelled = false
+    this.interruptPending = null
+    this.pendingEvents = []
+    this.messages.clear()
     this.turnFinalText = ''
     this.sawError = null
-    // Register the completion promise BEFORE the request goes out — the server
-    // may stream notifications before its response frame arrives.
     const completion = new Promise<{ interrupted: boolean; finalText: string }>((resolve, reject) => {
       this.turnDone = resolve
       this.turnFail = reject
     })
+    // A disconnect can reject completion while the start RPC is still pending.
+    void completion.catch(() => undefined)
     this.emit({ kind: 'turn-started', threadId: this.activeThread })
     try {
-      await this.bridge.rpc('turn/start', { threadId: this.activeThread, input })
+      const result = await Promise.race([
+        this.bridge.rpc<{ turn: { id: string } }>('turn/start', { threadId: this.activeThread, input, effort: this.effort }),
+        completion.then(() => { throw new Error('Turn ended before acknowledgement') }),
+      ])
+      if (!result.turn?.id) throw new Error('turn/start returned no turn id')
+      this.activeTurn = result.turn.id
+      for (const apply of this.pendingEvents.splice(0)) apply()
+      if (this.cancelled && this.turnDone) void this.interrupt().catch(() => undefined)
       return await completion
     } finally {
       this.turnRunning = false
+      this.activeTurn = null
       this.turnDone = null
       this.turnFail = null
+      this.pendingEvents = []
     }
   }
 
   async interrupt(): Promise<void> {
-    if (!this.activeThread) return
-    await this.bridge.rpc('turn/interrupt', { threadId: this.activeThread }).catch(() => undefined)
+    this.cancelled = true
+    if (!this.activeThread || !this.turnRunning || !this.activeTurn || !this.turnDone) return
+    if (this.interruptPending) return this.interruptPending
+    this.interruptPending = (async () => {
+      try {
+        await this.bridge.rpc('turn/interrupt', { threadId: this.activeThread, turnId: this.activeTurn }, 5000)
+      } catch (e) {
+        const message = `Could not stop Codex: ${e instanceof Error ? e.message : String(e)}`
+        this.bridge.disconnect()
+        this.failActiveTurn(message)
+        throw new Error(message)
+      }
+    })()
+    return this.interruptPending
+  }
+
+  private failActiveTurn(message: string): void {
+    if (!this.turnFail) return
+    this.cancelled = true
+    this.emit({ kind: 'text-replaced', text: this.answerText() })
+    this.emit({ kind: 'error', message })
+    this.turnFail(new Error(message))
+    this.turnFail = null
+    this.turnDone = null
+  }
+
+  private answerText(): string {
+    const candidates = [...this.messages.values()].filter(m => m.phase !== 'commentary')
+    return candidates.filter(m => m.phase === 'final_answer').at(-1)?.text ?? candidates.at(-1)?.text ?? ''
   }
 
   emit: (event: CodexEvent) => void = () => {}
@@ -196,6 +276,11 @@ export class CodexClient {
     params: Record<string, unknown>
   }): Promise<void> {
     if (req.method === 'item/tool/call') {
+      if (!this.turnDone || this.cancelled || req.params.threadId !== this.activeThread || req.params.turnId !== this.activeTurn) {
+        this.bridge.respondTool(req.rid, { success: false, contentItems: [{ type: 'inputText', text: 'TURN_UNAVAILABLE: this turn is no longer active.' }] })
+        return
+      }
+      const turnId = this.activeTurn
       const p = req.params as { tool?: string; namespace?: string; arguments?: Record<string, unknown>; callId?: string }
       const tool = p.tool ?? p.namespace ?? 'unknown'
       const args = p.arguments ?? {}
@@ -208,6 +293,7 @@ export class CodexClient {
         this.bridge.respondTool(req.rid, result)
         const outcome = toolOutcomeMeta(result)
         const resultText = toolResultText(result)
+        if (this.activeTurn !== turnId || !this.turnDone) return
         this.emit({
           kind: 'tool-completed', tool, callId: p.callId, success: outcome.success,
           durationMs: Date.now() - startedAt, resultText, error: outcome.success ? undefined : resultText,
@@ -234,60 +320,74 @@ export class CodexClient {
   }
 
   private handleNotification(method: string, p: ItemParams): void {
-    if (method.startsWith('item/') && method.endsWith('/delta')) {
-      const itemType = method.slice(5, -6) // between item/ and /delta
-      if (!p.delta) return
-      if (itemType === 'agentMessage') {
-        this.turnFinalText += p.delta
-        this.emit({ kind: 'text-delta', text: p.delta })
-      } else if (itemType === 'reasoning') {
-        this.emit({ kind: 'reasoning-delta', text: p.delta })
-      }
+    if (!this.turnDone || p.threadId !== this.activeThread) return
+    if (!this.activeTurn) {
+      this.pendingEvents.push(() => this.handleNotification(method, p))
       return
     }
-
+    if ((p.turn?.id ?? p.turnId) !== this.activeTurn) return
+    if (method === 'item/reasoning/summaryTextDelta' && p.delta) {
+      this.emit({ kind: 'reasoning-delta', text: p.delta })
+      return
+    }
+    if (method === 'item/agentMessage/delta' && p.itemId && p.delta) {
+      const message = this.messages.get(p.itemId) ?? { text: '', completed: false }
+      if (message.completed) return
+      message.text += p.delta
+      this.messages.set(p.itemId, message)
+      if (message.phase === 'final_answer') this.emit({ kind: 'text-replaced', text: message.text })
+      // Unknown phases wait for completion: progress must never flash as an answer.
+      return
+    }
     switch (method) {
-      case 'item/started': {
-        const type = p.item?.type
-        if (type === 'reasoning') this.emit({ kind: 'reasoning-started' })
-        else if (type === 'agentMessage') this.emit({ kind: 'text-started' })
-        else if (type === 'webSearch') this.emit({ kind: 'web-search' })
-        return
-      }
-      case 'item/completed': {
-        if (p.item?.type === 'agentMessage') {
-          // Prefer the authoritative completed text over accumulated deltas.
-          if (typeof p.item.text === 'string' && p.item.text.length >= this.turnFinalText.length) {
-            this.turnFinalText = p.item.text
-          }
+      case 'item/started':
+        if (p.item?.type === 'reasoning') this.emit({ kind: 'reasoning-started' })
+        if (p.item?.type === 'agentMessage' && p.item.id) {
+          this.messages.set(p.item.id, { text: p.item.text ?? '', phase: p.item.phase, completed: false })
+          if (p.item.phase === 'final_answer') this.emit({ kind: 'text-started' })
         }
-        if (p.item?.type === 'dynamicToolCall') this.emit({ kind: 'tool-completed' })
+        if (p.item?.type === 'webSearch') this.emit({ kind: 'web-search' })
+        return
+      case 'item/completed':
+        if (p.item?.type === 'agentMessage' && p.item.id) {
+          this.messages.set(p.item.id, { text: p.item.text ?? '', phase: p.item.phase, completed: true })
+          if (p.item.phase === 'commentary') this.emit({ kind: 'commentary', id: p.item.id, text: p.item.text ?? '' })
+          if (p.item.phase === 'final_answer') this.emit({ kind: 'text-replaced', text: p.item.text ?? '' })
+        }
         if (p.item?.type === 'webSearch') this.emit({ kind: 'web-search-completed' })
         return
-      }
-      case 'error': {
-        this.sawError = p.error?.message ?? JSON.stringify(p)
-        this.emit({ kind: 'error', message: this.sawError })
+      case 'error':
+        this.sawError = p.error?.message ?? 'Codex error'
+        return
+      case 'thread/tokenUsage/updated': {
+        const usage = p.tokenUsage as { last?: { inputTokens?: number; outputTokens?: number } } | undefined
+        this.emit({ kind: 'usage', usage: { input_tokens: usage?.last?.inputTokens, output_tokens: usage?.last?.outputTokens } })
         return
       }
       case 'turn/completed': {
-        const usage = p.turn?.usage ?? p.usage ?? null
-        this.emit({ kind: 'usage', usage })
-        const interrupted = p.interrupted === true
+        this.turnFinalText = this.answerText()
+        const candidateId = [...this.messages].filter(([, m]) => m.phase !== 'commentary').at(-1)?.[0]
+        for (const [id, message] of this.messages) {
+          if (!message.phase && id !== candidateId) this.emit({ kind: 'commentary', id, text: message.text })
+        }
+        this.emit({ kind: 'text-replaced', text: this.turnFinalText })
+        // Legacy usage is retained for older saved fixtures; current usage arrives separately.
+        if (p.turn?.usage || p.usage) this.emit({ kind: 'usage', usage: p.turn?.usage ?? p.usage ?? null })
+        if (p.turn?.status === 'failed') {
+          this.failActiveTurn(p.turn.error?.message ?? this.sawError ?? 'Codex turn failed')
+          return
+        }
+        const interrupted = p.turn?.status === 'interrupted'
+        if (!interrupted && p.turn?.status !== 'completed') {
+          this.failActiveTurn('Unknown Codex completion status')
+          return
+        }
         this.emit({ kind: 'done', interrupted, finalText: this.turnFinalText })
-        const done = this.turnDone
-        const fail = this.turnFail
+        this.turnDone?.({ interrupted, finalText: this.turnFinalText })
         this.turnDone = null
         this.turnFail = null
-        if (fail && this.sawError && !interrupted && !this.turnFinalText) {
-          fail(new Error(this.sawError))
-        } else {
-          done?.({ interrupted, finalText: this.turnFinalText })
-        }
         return
       }
-      default:
-      // Unknown notifications are ignored deliberately.
     }
   }
 }

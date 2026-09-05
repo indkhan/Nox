@@ -42,3 +42,8 @@ describe('restoreTurns', () => {
     expect(turns[0].view.error).toMatch(/interrupted/i)
   })
 })
+
+it('restores failure with partial output and the original error', () => {
+  const turns = restoreTurns([row({ role: 'user' }), row({ role: 'assistant', text: 'Partial', turnStatus: 'failed', error: 'Quota exhausted' })])
+  expect(turns[0].view).toMatchObject({ answer: 'Partial', error: 'Quota exhausted', pending: false })
+})

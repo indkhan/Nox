@@ -13,7 +13,7 @@ function fakeBridge() {
       if (method === 'turn/start') {
         // turn/start resolves when the server acks; the promise we care about
         // is the client's completion promise.
-        return Promise.resolve({})
+        return Promise.resolve({ turn: { id: 'turn_1' } })
       }
       return new Promise<unknown>((resolve) => {
         rpcHandlers.push({ method, resolve })
@@ -32,7 +32,7 @@ function fakeBridge() {
 }
 
 function emit(bridge: NativeBridge, method: string, params: Record<string, unknown>) {
-  bridge.onNotification?.({ method, params })
+  bridge.onNotification?.({ method, params: { threadId: 'thr_9', turnId: 'turn_1', itemId: 'a1', ...params, ...(method === 'turn/completed' ? { turn: { id: 'turn_1', status: params.interrupted ? 'interrupted' : 'completed', ...(params.turn as object ?? {}) } } : {}) } })
 }
 
 describe('CodexClient', () => {
@@ -77,7 +77,7 @@ describe('CodexClient', () => {
     const params = call![1] as Record<string, unknown>
     expect(params.model).toBe('gpt-x')
     expect(params.sandbox).toBe('read-only')
-    expect(params.effort).toBe('low')
+    expect(params).not.toHaveProperty('effort')
     expect(params.personality).toBe('pragmatic')
     await expect(client.listModels()).resolves.toHaveLength(2)
   })
@@ -91,7 +91,7 @@ describe('CodexClient', () => {
   it('streams deltas and resolves with final text + usage', async () => {
     await startThreadFixture()
     const turnPromise = client.runTurn([{ type: 'text', text: 'hi' }])
-    emit(h.bridge, 'item/reasoning/delta', { threadId: 'thr_9', delta: 'hmm' })
+    emit(h.bridge, 'item/reasoning/summaryTextDelta', { threadId: 'thr_9', delta: 'hmm' })
     emit(h.bridge, 'item/agentMessage/delta', { threadId: 'thr_9', delta: 'Hello' })
     emit(h.bridge, 'item/agentMessage/delta', { threadId: 'thr_9', delta: ' world' })
     emit(h.bridge, 'turn/completed', { threadId: 'thr_9', turn: { usage: { input_tokens: 1, output_tokens: 2 } } })
@@ -100,8 +100,7 @@ describe('CodexClient', () => {
     expect(events.map((e) => e.kind)).toEqual([
       'turn-started',
       'reasoning-delta',
-      'text-delta',
-      'text-delta',
+      'text-replaced',
       'usage',
       'done',
     ])
@@ -111,7 +110,7 @@ describe('CodexClient', () => {
     await startThreadFixture()
     const turnPromise = client.runTurn([])
     emit(h.bridge, 'item/agentMessage/delta', { threadId: 'thr_9', delta: 'partial' })
-    emit(h.bridge, 'item/completed', { threadId: 'thr_9', item: { type: 'agentMessage', text: 'the full answer' } })
+    emit(h.bridge, 'item/completed', { threadId: 'thr_9', item: { type: 'agentMessage', id: 'a1', text: 'the full answer' } })
     emit(h.bridge, 'turn/completed', {})
     const result = await turnPromise
     expect(result.finalText).toBe('the full answer')
@@ -121,7 +120,7 @@ describe('CodexClient', () => {
     await startThreadFixture()
     client.onToolCall = async () => ({ success: true, contentItems: [{ type: 'inputText', text: 'ok-data' }] })
     const turnPromise = client.runTurn([])
-    h.bridge.onCodexRequest?.({ rid: 42, method: 'item/tool/call', params: { tool: 'notion-fetch', arguments: { page_id: 'p1' }, callId: 'call_7' } })
+    h.bridge.onCodexRequest?.({ rid: 42, method: 'item/tool/call', params: { threadId: 'thr_9', turnId: 'turn_1', tool: 'notion-fetch', arguments: { page_id: 'p1' }, callId: 'call_7' } })
     await vi.waitFor(() => expect(h.responses.some((r) => r.rid === 42)).toBe(true))
     expect(h.responses[0].result).toMatchObject({ success: true })
     expect(events.filter((e) => e.kind === 'tool-call')).toHaveLength(1)
@@ -142,7 +141,7 @@ describe('CodexClient', () => {
       throw new Error('rate limited')
     }
     const turnPromise = client.runTurn([])
-    h.bridge.onCodexRequest?.({ rid: 43, method: 'item/tool/call', params: { tool: 'notion-search', arguments: {} } })
+    h.bridge.onCodexRequest?.({ rid: 43, method: 'item/tool/call', params: { threadId: 'thr_9', turnId: 'turn_1', tool: 'notion-search', arguments: {} } })
     await vi.waitFor(() => expect(h.responses.some((r) => r.rid === 43)).toBe(true))
     expect(JSON.stringify(h.responses[0].result)).toContain('ERROR: rate limited')
     expect(events.find((e) => e.kind === 'tool-completed')).toMatchObject({
@@ -167,20 +166,20 @@ describe('CodexClient', () => {
     const turnPromise = client.runTurn([])
     const assertion = expect(turnPromise).rejects.toThrow(/quota exhausted/)
     emit(h.bridge, 'error', { threadId: 'thr_9', error: { message: 'quota exhausted' } })
-    emit(h.bridge, 'turn/completed', { threadId: 'thr_9' })
+    emit(h.bridge, 'turn/completed', { threadId: 'thr_9', turn: { status: 'failed', error: { message: 'quota exhausted' } } })
     await assertion
   })
 
   it('interrupt sends turn/interrupt and completes interrupted=true', async () => {
     await startThreadFixture()
     const turnPromise = client.runTurn([])
-    emit(h.bridge, 'turn/completed', { threadId: 'thr_9', interrupted: true })
-    const result = await turnPromise
-    expect(result.interrupted).toBe(true)
+    await Promise.resolve()
     const interrupting = client.interrupt()
     h.rpcHandlers.find((r) => r.method === 'turn/interrupt')?.resolve({})
     await interrupting
-    expect(h.bridge.rpc).toHaveBeenCalledWith('turn/interrupt', { threadId: 'thr_9' })
+    expect(h.bridge.rpc).toHaveBeenCalledWith('turn/interrupt', { threadId: 'thr_9', turnId: 'turn_1' }, 5000)
+    emit(h.bridge, 'turn/completed', { interrupted: true })
+    expect((await turnPromise).interrupted).toBe(true)
   })
 
   it('refuses to run a turn before a thread exists', async () => {
@@ -206,7 +205,7 @@ describe('CodexClient', () => {
       contentItems: [{ type: 'inputText', text: 'wrapped rejection' }],
     })
     const turnPromise = client.runTurn([])
-    h.bridge.onCodexRequest?.({ rid: 45, method: 'item/tool/call', params: { tool: 'notion-update-page', arguments: {}, callId: 'rejected-1' } })
+    h.bridge.onCodexRequest?.({ rid: 45, method: 'item/tool/call', params: { threadId: 'thr_9', turnId: 'turn_1', tool: 'notion-update-page', arguments: {}, callId: 'rejected-1' } })
     await vi.waitFor(() => expect(h.responses.some((r) => r.rid === 45)).toBe(true))
     expect(events.find((e) => e.kind === 'tool-completed')).toMatchObject({
       kind: 'tool-completed', callId: 'rejected-1', success: false, resultText: 'REJECTED_BY_USER', error: 'REJECTED_BY_USER',
@@ -223,14 +222,14 @@ describe('CodexClient', () => {
     await first
   })
   // Expected failures establish the baseline before lifecycle implementation.
-  it.fails('wire: completed final text replaces longer deltas and commentary', async () => {
+  it('wire: completed final text replaces longer deltas and commentary', async () => {
     await startThreadFixture()
     const pending = client.runTurn([])
     for (const e of wireFixtures.messages) emit(h.bridge, e.method, e.params)
     expect((await pending).finalText).toBe('42.')
   })
 
-  it.fails('wire: failed status cannot be concealed by partial output', async () => {
+  it('wire: failed status cannot be concealed by partial output', async () => {
     await startThreadFixture()
     const pending = client.runTurn([])
     const assertion = expect(pending).rejects.toThrow('quota exhausted')
@@ -238,14 +237,14 @@ describe('CodexClient', () => {
     await assertion
   })
 
-  it.fails('wire: interrupted status preserves partial text', async () => {
+  it('wire: interrupted status preserves partial text', async () => {
     await startThreadFixture()
     const pending = client.runTurn([])
     for (const e of wireFixtures.interrupted) emit(h.bridge, e.method, e.params)
     expect(await pending).toMatchObject({ interrupted: true, finalText: 'Partial answer' })
   })
 
-  it.fails('wire: documented summary event supplies progress', async () => {
+  it('wire: documented summary event supplies progress', async () => {
     await startThreadFixture()
     const pending = client.runTurn([])
     for (const e of wireFixtures.summary) emit(h.bridge, e.method, e.params)
@@ -254,12 +253,39 @@ describe('CodexClient', () => {
     expect(events).toContainEqual({ kind: 'reasoning-delta', text: 'Checking evidence.' })
   })
 
-  it.fails('wire: explicit effort is sent on turn/start', async () => {
+  it('wire: explicit effort is sent on turn/start', async () => {
     await startThreadFixture({ effort: 'high' })
     const pending = client.runTurn([])
     emit(h.bridge, 'turn/completed', wireFixtures.messages.at(-1)!.params)
     await pending
     expect(h.bridge.rpc.mock.calls.find(c => c[0] === 'turn/start')![1]).toMatchObject({ effort: 'high' })
+  })
+
+  it('ignores foreign turns before the start response', async () => {
+    await startThreadFixture()
+    const pending = client.runTurn([])
+    emit(h.bridge, 'item/agentMessage/delta', { turnId: 'old', delta: 'wrong' })
+    emit(h.bridge, 'turn/completed', { turn: { id: 'old', status: 'completed' } })
+    emit(h.bridge, 'item/agentMessage/delta', { delta: 'right' })
+    emit(h.bridge, 'turn/completed', {})
+    expect((await pending).finalText).toBe('right')
+  })
+  it('uses the last phase-less completed message', async () => {
+    await startThreadFixture()
+    const pending = client.runTurn([])
+    emit(h.bridge, 'item/completed', { item: { type: 'agentMessage', id: 'a1', text: 'Progress' } })
+    emit(h.bridge, 'item/completed', { item: { type: 'agentMessage', id: 'a2', text: 'Answer' } })
+    emit(h.bridge, 'turn/completed', {})
+    expect((await pending).finalText).toBe('Answer')
+    expect(events).toContainEqual({ kind: 'commentary', id: 'a1', text: 'Progress' })
+  })
+  it('settles on disconnect after acknowledgement', async () => {
+    await startThreadFixture()
+    const pending = client.runTurn([])
+    const assertion = expect(pending).rejects.toThrow('disconnected')
+    await Promise.resolve()
+    h.bridge.onBridgeDisconnected?.()
+    await assertion
   })
 
 })

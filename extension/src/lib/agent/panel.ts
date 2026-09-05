@@ -111,9 +111,9 @@ export interface PageWithContext extends MentionRef {
 }
 
 /** Fetches a mentioned page's content for context injection (best effort). */
-export async function fetchMentionContext(page: MentionRef): Promise<PageWithContext> {
+export async function fetchMentionContext(page: MentionRef, signal?: AbortSignal): Promise<PageWithContext> {
   try {
-    const result = await notion.scheduleCallTool('notion-fetch', { id: page.pageId })
+    const result = await notion.scheduleCallTool('notion-fetch', { id: page.pageId }, signal)
     const markdown = result.content
       .filter((c) => c.type === 'text')
       .map((c) => c.text)

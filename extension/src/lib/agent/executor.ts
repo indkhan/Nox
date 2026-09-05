@@ -42,6 +42,7 @@ export class ToolExecutor {
   }
 
   async execute(req: ToolCallRequest): Promise<ToolOutcome> {
+    if (this.signal?.aborted) return refusal('TURN_CANCELLED: no further tools may run.')
     const stepLimit = this.opts.stepLimit ?? DEFAULT_STEP_LIMIT
     if (this.stepsUsed >= stepLimit) {
       return refusal(

@@ -24,7 +24,8 @@ export interface MessageRow {
   toolCalls?: Array<{ tool: string; args: unknown }>
   usage?: Record<string, number>
   activity?: ActivityItem[]
-  turnStatus?: 'streaming' | 'complete' | 'interrupted'
+  turnStatus?: 'streaming' | 'complete' | 'interrupted' | 'failed'
+  error?: string
   ts: number
 }
 

@@ -136,7 +136,18 @@ pass through Nox's separate write gate.
 
 `extension/src/lib/agent/` owns the thread and turn lifecycle. The current page is sent as
 a reference; page contents are included only for explicit `@` mentions. Codex events are
-normalized into reasoning, activity, tool-result, and answer updates for the panel.
+matched to the acknowledged thread and turn, including events received before the
+start response. Assistant messages are assembled by ID: completed text replaces
+streamed text, commentary stays in activity, and final answers stay separate. When
+phases are absent, the last assistant message is the answer. Only reasoning summaries
+are shown. Failed and interrupted turns preserve partial text and their outcome in
+history. Reasoning effort is validated against model capabilities and sent on
+`turn/start`, using the model default unless the user selects an override.
+
+Cancellation and the ten-minute deadline include mention preparation and thread
+setup. Cancellation aborts reads, rejects pending approvals, prevents late dynamic
+tools, and interrupts the acknowledged turn ID. An interruption RPC failure disconnects
+the bridge and surfaces an error; a disconnected turn is never automatically replayed.
 
 Every tool request passes through `ToolExecutor`, which:
 

@@ -13,6 +13,7 @@ import type { NativeBridge } from '../../src/lib/codex/native'
 class ScriptedBridge {
   onNotification: NativeBridge['onNotification'] = null
   onCodexRequest: NativeBridge['onCodexRequest'] = null
+  onBridgeDisconnected: NativeBridge['onBridgeDisconnected'] = null
   onStatus: NativeBridge['onStatus'] = null
   disconnectedCount = 0
 
@@ -39,8 +40,8 @@ class ScriptedBridge {
           throw new Error('bridge port disconnected')
         }
         this.turnInputs.push(params.input as never)
-        await this.streamTurn(String(params.threadId))
-        return {}
+        queueMicrotask(() => void this.streamTurn(String(params.threadId)).catch(() => this.onBridgeDisconnected?.()))
+        return { turn: { id: 'turn_1' } }
       }
       case 'turn/interrupt':
         this.interrupted = true
@@ -62,12 +63,12 @@ class ScriptedBridge {
   }
 
   private notif(method: string, params: Record<string, unknown>) {
-    this.onNotification?.({ method, params })
+    this.onNotification?.({ method, params: { turnId: 'turn_1', itemId: 'a1', ...params } })
   }
 
   /** Plays one scripted turn: reasoning → tool request → answer → completed. */
   private async streamTurn(threadId: string): Promise<void> {
-    this.notif('item/reasoning/delta', { threadId, delta: 'thinking' })
+    this.notif('item/reasoning/summaryTextDelta', { threadId, delta: 'thinking' })
     this.notif('item/started', { threadId, item: { type: 'dynamicToolCall', id: 't1', tool: 'notion-search' } })
 
     const rid = this.nextRid++
@@ -87,7 +88,7 @@ class ScriptedBridge {
     this.onCodexRequest?.({
       rid,
       method: 'item/tool/call',
-      params: { tool: 'notion-search', namespace: null, arguments: { query: 'overdue' }, callId: 'call_1' },
+      params: { threadId, turnId: 'turn_1', tool: 'notion-search', namespace: null, arguments: { query: 'overdue' }, callId: 'call_1' },
     })
     await Promise.race([answered, new Promise((r) => setTimeout(r, 2000))])
     if (this.failAfterTool) throw new Error('bridge port disconnected')
@@ -97,7 +98,7 @@ class ScriptedBridge {
     this.notif('item/agentMessage/delta', { threadId, delta: 'You have ' })
     this.notif('item/agentMessage/delta', { threadId, delta: '3 overdue items.' })
     this.notif('item/completed', { threadId, item: { type: 'agentMessage', id: 'a1', text: 'You have 3 overdue items.' } })
-    this.notif('turn/completed', { threadId, turn: { usage: { output_tokens: 5 } }, interrupted: false })
+    this.notif('turn/completed', { threadId, turn: { id: 'turn_1', status: 'completed', usage: { output_tokens: 5 } }, interrupted: false })
   }
 }
 
@@ -162,22 +163,17 @@ describe('AgentLoop integration (scripted codex)', () => {
       'reasoning-delta',
       'tool-call',
       'tool-completed',
-      'tool-completed',
-      'text-started',
-      'text-delta',
-      'text-delta',
+      'text-replaced',
       'usage',
       'done',
     ])
     expect(loop.currentThreadId).toBe('thr_A')
   })
 
-  it('reconnects transparently once when the bridge dies mid-turn', async () => {
+  it('does not replay a disconnected turn even before a visible tool call', async () => {
     bridge.failNextTurnStart = true
-    const result = await loop.sendUserMessage('hello there')
-    expect(result.text).toBe('You have 3 overdue items.')
-    expect(bridge.disconnectedCount).toBe(1)
-    // A fresh thread was started after the reconnect.
+    await expect(loop.sendUserMessage('hello there')).rejects.toThrow('disconnected')
+    expect(bridge.turnInputs).toHaveLength(0)
     expect(loop.currentThreadId).toBe('thr_A')
   })
 
@@ -240,4 +236,16 @@ describe('AgentLoop integration (scripted codex)', () => {
     release()
     await first
   })
+  it('cancels during thread preparation without starting a turn', async () => {
+    let release!: () => void
+    const blocked = new Promise<unknown[]>(resolve => { release = () => resolve([]) })
+    loop = new AgentLoop({ bridge: bridge as unknown as NativeBridge, codex, executor,
+      getDynamicTools: () => blocked, developerInstructions: 'Nox' })
+    const pending = loop.sendUserMessage('hello')
+    loop.cancel()
+    release()
+    expect((await pending).interrupted).toBe(true)
+    expect(bridge.turnInputs).toHaveLength(0)
+  })
+
 })
