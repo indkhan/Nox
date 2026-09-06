@@ -468,7 +468,7 @@ function ModelControls({ disabled }: { disabled: boolean }) {
   function apply(next: NoxSettings) {
     setSettings(next)
     agentLoop.setOverrides({ model: next.model, effort: next.effort, serviceTier: next.serviceTier })
-    void saveSettings(next)
+    void loadSettings().then(current => saveSettings({ ...current, model: next.model, effort: next.effort, serviceTier: next.serviceTier }))
   }
 
   const selected = models.find((model) => model.id === settings.model) ?? models.find((model) => model.isDefault) ?? models[0]

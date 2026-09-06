@@ -99,6 +99,7 @@ export class CodexClient {
   private searches = new Set<string>()
   private searchCompletions = new Set<string>()
   private cancelled = false
+  private interruptTimer: ReturnType<typeof setTimeout> | undefined
   private interruptPending: Promise<void> | null = null
 
   constructor(private readonly bridge: NativeBridge) {}
@@ -147,11 +148,13 @@ export class CodexClient {
     return models.find((m) => m.isDefault)?.id
   }
 
-  async startThread(settings: ThreadSettings): Promise<string> {
+  async startThread(settings: ThreadSettings, signal?: AbortSignal): Promise<string> {
     this.wire()
     const models = await this.listModels()
+    signal?.throwIfAborted()
     this.selectEffort(settings, models)
     const research = await researchConfig(this.bridge, settings.webSearchEnabled !== false)
+    signal?.throwIfAborted()
     this.researchLimitation = research.limitation
     const params = {
       ...this.threadParams(settings),
@@ -171,27 +174,46 @@ export class CodexClient {
     }
     const threadId = result.thread?.id ?? result.id
     if (!threadId) throw new Error('thread/start returned no thread id')
-    await verifyResearchTools(this.bridge, threadId)
+    signal?.throwIfAborted()
+    await verifyResearchTools(this.bridge, threadId, signal)
+    signal?.throwIfAborted()
     this.activeThread = threadId
     return threadId
   }
 
-  async resumeThread(threadId: string, settings: ThreadSettings): Promise<string> {
-    this.wire()
-    this.selectEffort(settings, await this.listModels())
+  async resumeThread(threadId: string, settings: ThreadSettings, signal?: AbortSignal): Promise<string> {
+    if (this.turnRunning) throw new Error('Cannot resume during an active turn')
+    signal?.throwIfAborted()
+    // 0.153.4 rejoins loaded threads without applying fresh configuration.
+    // Reload our owned server, then resume the same persisted ID; never replay a turn.
+    this.bridge.disconnect()
+    await this.initialize()
+    signal?.throwIfAborted()
+    const models = await this.listModels()
+    signal?.throwIfAborted()
+    this.selectEffort(settings, models)
     const research = await researchConfig(this.bridge, settings.webSearchEnabled !== false)
+    signal?.throwIfAborted()
     this.researchLimitation = research.limitation
     const { dynamicTools: _tools, ephemeral: _ephemeral, ...params } = this.threadParams(settings)
     const result = (await this.bridge.rpc<Record<string, unknown>>('thread/resume', {
       threadId,
       ...params,
+      model: settings.model ?? this.defaultModel(models),
       config: research.config,
       developerInstructions: [settings.developerInstructions, research.limitation].filter(Boolean).join('\n'),
       sandbox: 'read-only',
       approvalPolicy: 'never',
     })) as { thread?: { id?: string }; id?: string }
     const resumed = (result.thread?.id ?? result.id) ?? threadId
-    await verifyResearchTools(this.bridge, resumed)
+    if (resumed !== threadId) throw new Error('Server returned a different thread')
+    signal?.throwIfAborted()
+    await verifyResearchTools(this.bridge, resumed, signal)
+    signal?.throwIfAborted()
+    // Resume retains old developer messages in model-visible history on 0.153.4.
+    // Append the current trusted policy using the documented history-input RPC.
+    await this.bridge.rpc('thread/inject_items', { threadId: resumed, items: [{ type: 'message', role: 'developer', content: [{ type: 'input_text', text: [settings.developerInstructions, research.limitation].filter(Boolean).join('\n') }] }] })
+    signal?.throwIfAborted()
     this.activeThread = resumed
     return resumed
   }
@@ -211,7 +233,7 @@ export class CodexClient {
   }
 
   async runTurn(input: TurnInput[]): Promise<{ interrupted: boolean; finalText: string }> {
-    if (!this.activeThread) throw new Error('no active thread ? start or resume one first')
+    if (!this.activeThread) throw new Error('no active thread: start or resume one first')
     if (this.turnRunning) throw new Error('turn already running')
     this.turnRunning = true
     this.wire()
@@ -242,6 +264,8 @@ export class CodexClient {
       if (this.cancelled && this.turnDone) void this.interrupt().catch(() => undefined)
       return await completion
     } finally {
+      clearTimeout(this.interruptTimer)
+      this.interruptTimer = undefined
       this.turnRunning = false
       this.activeTurn = null
       this.turnDone = null
@@ -252,15 +276,23 @@ export class CodexClient {
 
   async interrupt(): Promise<void> {
     this.cancelled = true
-    if (!this.activeThread || !this.turnRunning || !this.activeTurn || !this.turnDone) return
+    if (!this.turnDone) return
+    const done = this.turnDone
+    if (!this.interruptTimer) this.interruptTimer = setTimeout(() => {
+      if (this.turnDone !== done) return
+      this.failActiveTurn('Could not stop Codex: no completion received within five seconds.')
+      this.bridge.disconnect()
+    }, 5000)
+    if (!this.activeThread || !this.turnRunning || !this.activeTurn) return
     if (this.interruptPending) return this.interruptPending
     this.interruptPending = (async () => {
       try {
         await this.bridge.rpc('turn/interrupt', { threadId: this.activeThread, turnId: this.activeTurn }, 5000)
       } catch (e) {
+        if (this.turnDone !== done) return
         const message = `Could not stop Codex: ${e instanceof Error ? e.message : String(e)}`
-        this.bridge.disconnect()
         this.failActiveTurn(message)
+        this.bridge.disconnect()
         throw new Error(message)
       }
     })()
@@ -277,9 +309,15 @@ export class CodexClient {
     this.turnDone = null
   }
 
+  private answerEntry(completed = false) {
+    const candidates = [...this.messages].filter(([, m]) => m.phase !== 'commentary')
+    return candidates.filter(([, m]) => m.phase === 'final_answer').at(-1)
+      ?? (completed ? candidates.filter(([, m]) => m.completed).at(-1) : undefined)
+      ?? candidates.at(-1)
+  }
+
   private answerText(): string {
-    const candidates = [...this.messages.values()].filter(m => m.phase !== 'commentary')
-    return candidates.filter(m => m.phase === 'final_answer').at(-1)?.text ?? candidates.at(-1)?.text ?? ''
+    return this.answerEntry()?.[1].text ?? ''
   }
 
   emit: (event: CodexEvent) => void = () => {}
@@ -297,7 +335,7 @@ export class CodexClient {
         this.bridge.respondTool(req.rid, { success: false, contentItems: [{ type: 'inputText', text: 'TURN_UNAVAILABLE: this turn is no longer active.' }] })
         return
       }
-      const turnId = this.activeTurn
+      const done = this.turnDone
       const p = req.params as { tool?: string; namespace?: string; arguments?: Record<string, unknown>; callId?: string }
       const tool = p.tool ?? p.namespace ?? 'unknown'
       const args = p.arguments ?? {}
@@ -307,15 +345,16 @@ export class CodexClient {
         const result = this.onToolCall
           ? await this.onToolCall({ tool, namespace: p.namespace ?? null, args, rid: req.rid, callId: p.callId })
           : { decision: 'decline' }
+        if (this.turnDone !== done || this.cancelled) return
         this.bridge.respondTool(req.rid, result)
         const outcome = toolOutcomeMeta(result)
         const resultText = toolResultText(result)
-        if (this.activeTurn !== turnId || !this.turnDone) return
         this.emit({
           kind: 'tool-completed', tool, callId: p.callId, success: outcome.success,
           durationMs: Date.now() - startedAt, resultText, error: outcome.success ? undefined : resultText,
         })
       } catch (e) {
+        if (this.turnDone !== done || this.cancelled) return
         // Errors become model-readable results, never a crashed turn (MVP §6).
         this.bridge.respondTool(req.rid, {
           success: false,
@@ -395,8 +434,9 @@ export class CodexClient {
         return
       }
       case 'turn/completed': {
-        this.turnFinalText = this.answerText()
-        const candidateId = [...this.messages].filter(([, m]) => m.phase !== 'commentary').at(-1)?.[0]
+        const answer = this.answerEntry(p.turn?.status === 'completed')
+        this.turnFinalText = answer?.[1].text ?? ''
+        const candidateId = answer?.[0]
         for (const [id, message] of this.messages) {
           if (!message.phase && id !== candidateId) this.emit({ kind: 'commentary', id, text: message.text })
         }

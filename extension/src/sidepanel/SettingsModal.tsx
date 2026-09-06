@@ -1,3 +1,4 @@
+import { agentLoop } from '../lib/agent/panel'
 import { useEffect, useRef, useState } from 'react'
 import { useNoxStore } from './store'
 import { ConnectionCard } from './ConnectionCard'
@@ -84,7 +85,6 @@ function ResearchSection() {
   async function change(next: boolean) {
     setEnabled(next)
     await saveSettings({ ...await loadSettings(), webSearchEnabled: next })
-    const { agentLoop } = await import('../lib/agent/panel')
     agentLoop.setOverrides({ webSearchEnabled: next })
   }
   return <section aria-label="Web research">

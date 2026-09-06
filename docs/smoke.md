@@ -75,3 +75,38 @@ every write test — creations cannot be undone.
 - [ ] Stop the bridge (`taskkill` the node process) → next turn reconnects once transparently or shows install hint
 - [ ] `codex` missing → actionable empty state with the exact command
 - [ ] Quota/login errors map to their dedicated messages
+
+
+## Answer quality (Codex 0.153.4 compatibility)
+
+Use the binary selected by `node bridge/resolve-codex.mjs`, not necessarily PATH.
+The protocol assumptions and actual observations are recorded in
+[answer-quality-verification.md](answer-quality-verification.md).
+
+- Run `node scripts/live/codex-smoke.mjs --search` for public-only native research,
+  opening a source, interruption, and follow-up checks using the production client
+  and loop. Set `NOX_LIVE_MODEL` and `NOX_LIVE_EFFORT` explicitly for comparisons.
+- Run `node scripts/live/codex-smoke.mjs --toggle-search` to start with research
+  disabled and enable it on the same persisted conversation. A live source-opening
+  event is required; the model saying search is available is insufficient.
+- Reports stay under ignored `.release/`. Failed runs retain timing, events and
+  errors. These smoke checks never supply workspace tools.
+- Create baseline and candidate ledgers with
+  `node scripts/live/answer-quality-eval.mjs init <local.json> <model> <effort> live`.
+  Run all 20 prompts in public contexts or a connected scratch workspace, repeating
+  current/mixed research three times. Record actual output, sources, elapsed time,
+  usage (or `usageUnavailableReason`), rubric judgments and failure reviews.
+  Run `report <local.json>` for each ledger; the candidate must meet the release
+  criterion. Retain baseline failures and do not fabricate missing historical runs.
+- [ ] Compare baseline/candidate correctness, supporting evidence and latency.
+- [ ] Confirm zero unauthorized changes, invented citations, hidden conversation
+  resets, or failed/partial turns labeled successful.
+- [ ] Inspect model-specific native tool isolation; read-only sandbox and prompt
+  prohibitions alone do not establish absence of native tools.
+- [ ] In the actual side panel, expand search/open details and commentary, follow
+  source links, stop a streaming answer, and reopen history to check text/outcomes.
+- [ ] Repeat with both Web research settings and change model/effort afterward;
+  model settings must preserve the separately saved research preference.
+
+The current panel requires Notion connection before sending, including public-only
+questions. A disconnected-panel screenshot is not a successful live answer check.

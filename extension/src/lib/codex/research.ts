@@ -33,10 +33,11 @@ export async function researchConfig(bridge: NativeBridge, enabled: boolean) {
   return { config, limitation: enabled && !live ? 'Live web research is unavailable under managed Codex restrictions. External facts have not been freshly checked.' : null }
 }
 
-export async function verifyResearchTools(bridge: NativeBridge, threadId: string): Promise<void> {
+export async function verifyResearchTools(bridge: NativeBridge, threadId: string, signal?: AbortSignal): Promise<void> {
   const features = new Map<string, boolean>()
   let cursor: string | null = null
   do {
+    signal?.throwIfAborted()
     const page: { data: Array<{ name: string; enabled: boolean }>; nextCursor?: string | null } = await bridge.rpc('experimentalFeature/list', { threadId, limit: 200, cursor })
     if (!Array.isArray(page.data)) throw new Error('Cannot verify the effective Codex tool surface. Update Codex and reconnect.')
     for (const feature of page.data) features.set(feature.name, feature.enabled)
@@ -46,6 +47,7 @@ export async function verifyResearchTools(bridge: NativeBridge, threadId: string
     if (features.get(feature) !== false) throw new Error(`Nox cannot safely run: Codex feature ${feature} is enabled or cannot be verified.`)
   }
   do {
+    signal?.throwIfAborted()
     const page: { data: Array<{ name: string; tools: Record<string, unknown> }>; nextCursor?: string | null } = await bridge.rpc('mcpServerStatus/list', { threadId, cursor })
     if (!Array.isArray(page.data)) throw new Error('Cannot verify inherited MCP tools.')
     if (page.data.some(server => Object.keys(server.tools ?? {}).length > 0)) throw new Error('Nox cannot safely run: unrelated MCP tools remain exposed.')

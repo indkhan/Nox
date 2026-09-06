@@ -43,8 +43,9 @@ export class NativeBridge {
     this.disconnected = false
     this.assembler.reset()
     const port = this.connectPort()
-    port.onMessage.addListener((raw) => this.onEnvelope(raw))
+    port.onMessage.addListener((raw) => { if (this.port === port) this.onEnvelope(raw) })
     port.onDisconnect.addListener(() => {
+      if (this.port !== port) return
       const wasConnected = !this.disconnected
       this.disconnected = true
       this.port = null

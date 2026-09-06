@@ -86,7 +86,8 @@ web sources use Markdown links with safe new-tab behavior. Search activity prese
 item IDs, queries and available open/find actions, with expandable details. Commentary
 and documented reasoning summaries are shown as progress, separate from the answer;
 legacy raw-reasoning activity remains hidden. Failed/stopped response labels survive
-history restoration.
+history restoration. Journal recovery merges tool outcomes without discarding
+saved commentary or research activity.
 
 Answering instructions are rebuilt per turn from current identity, tool capabilities,
 search preference and date/timezone. Workspace claims require workspace evidence;
@@ -150,6 +151,11 @@ thread-scoped configuration. It never changes global Codex settings. Managed sea
 restrictions are inspected before thread setup and reported as limitations. Freshness
 is established by actual source retrieval, not by the preference alone.
 
+Before resuming a conversation, Nox reconnects its owned app-server process so
+configuration overrides apply to a reloaded thread, preserving the same stored ID.
+Codex 0.153.4 retains old developer messages across resume; Nox appends its current
+trusted instructions through `thread/inject_items` before starting the next turn.
+This refreshes settings, capability and date context without replaying user work.
 Before each turn, Nox verifies thread-scoped feature flags and MCP inventory. It
 turns off inherited MCP servers, plugins/connectors, shell access, browser/computer
 use, image tools, hooks, memory, and multi-agent features, and caps agent threads at
@@ -183,14 +189,15 @@ is retried once against the same thread, before any turn is sent. Codex events a
 matched to the acknowledged thread and turn, including events received before the
 start response. Assistant messages are assembled by ID: completed text replaces
 streamed text, commentary stays in activity, and final answers stay separate. When
-phases are absent, the last assistant message is the answer. Only reasoning summaries
+phases are absent, the last completed assistant message is the answer; interrupted
+turns retain the latest partial text. Only reasoning summaries
 are shown. Failed and interrupted turns preserve partial text and their outcome in
 history. Reasoning effort is validated against model capabilities and sent on
 `turn/start`, using the model default unless the user selects an override.
 
 Cancellation and the ten-minute deadline include mention preparation and thread
 setup. Cancellation aborts reads, rejects pending approvals, prevents late dynamic
-tools, and interrupts the acknowledged turn ID. An interruption RPC failure disconnects
+tools, and interrupts the acknowledged turn ID. An interruption RPC failure or missing completion after five seconds disconnects
 the bridge and surfaces an error; a disconnected turn is never automatically replayed.
 
 Every tool request passes through `ToolExecutor`, which:

@@ -1,5 +1,5 @@
 // Opt-in public-only smoke using Nox's real client, loop, native framing and executor.
-// node scripts/live/codex-smoke.mjs [--search]
+// node scripts/live/codex-smoke.mjs [--search] [--toggle-search]
 import { spawn } from 'node:child_process';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -10,7 +10,7 @@ const { NativeBridge } = await vite.ssrLoadModule('/src/lib/codex/native.ts');
 const { CodexClient } = await vite.ssrLoadModule('/src/lib/codex/client.ts');
 const { AgentLoop } = await vite.ssrLoadModule('/src/lib/agent/loop.ts');
 const { ToolExecutor } = await vite.ssrLoadModule('/src/lib/agent/executor.ts');
-const { buildDeveloperInstructions } = await vite.ssrLoadModule('/src/lib/agent/instructions.ts');
+const { buildDeveloperInstructions, PROMPT_REVISION } = await vite.ssrLoadModule('/src/lib/agent/instructions.ts');
 const children = [];
 const bridge = new NativeBridge(() => {
   const child = spawn(process.execPath, [root + 'bridge/nox-bridge.mjs'], { stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true });
@@ -41,18 +41,20 @@ const bridge = new NativeBridge(() => {
 const codex = new CodexClient(bridge);
 const loop = new AgentLoop({ bridge, codex,
   executor: new ToolExecutor({ assertToolAllowed: () => { throw new Error('No workspace tools in public smoke'); }, callTool: async () => { throw new Error('No workspace calls'); } }),
-  getDynamicTools: async () => [], developerInstructions: () => buildDeveloperInstructions(),
+  getDynamicTools: async () => [], developerInstructions: settings => buildDeveloperInstructions({ webSearchEnabled: settings.webSearchEnabled, availableTools: [] }),
 });
-const report = { timestamp: new Date().toISOString(), userAgent: null, model: null, effort: null, runs: [] };
+const search = process.argv.includes('--search') || process.argv.includes('--toggle-search');
+const toggleSearch = process.argv.includes('--toggle-search');
+const report = { promptRevision: PROMPT_REVISION, search, toggleSearch, timestamp: new Date().toISOString(), userAgent: null, model: null, effort: null, runs: [] };
 const deadline = setTimeout(() => { bridge.disconnect(); process.exitCode = 1; }, 240000);
 try {
   report.userAgent = await codex.initialize();
   const models = await codex.listModels();
-  const model = models.find(m => m.id === process.env.NOX_LIVE_MODEL) ?? models.find(m => m.isDefault);
-  if (!model) throw new Error('No available default model');
+  const model = process.env.NOX_LIVE_MODEL ? models.find(m => m.id === process.env.NOX_LIVE_MODEL) : models.find(m => m.isDefault);
+  if (!model) throw new Error('Requested/default model is unavailable');
   report.model = model.id;
   report.effort = process.env.NOX_LIVE_EFFORT ?? model.defaultReasoningEffort;
-  loop.setOverrides({ model: report.model, effort: report.effort, webSearchEnabled: process.argv.includes('--search') });
+  loop.setOverrides({ model: report.model, effort: report.effort, webSearchEnabled: search && !toggleSearch });
   async function run(id, prompt, stopOnSearch = false) {
     const events = []; const start = Date.now();
     const unsubscribe = loop.onTurnEvent(event => {
@@ -64,26 +66,37 @@ try {
       report.runs.push({ id, prompt, result, elapsedMs: Date.now() - start, events });
       console.log(id, JSON.stringify(result), Date.now() - start, 'ms');
       return { result, events };
+    } catch (error) {
+      report.runs.push({ id, prompt, error: String(error), elapsedMs: Date.now() - start, events });
+      throw error;
     } finally { unsubscribe(); }
   }
-  const first = await run('simple-disabled', 'Reply with exactly: OK');
-  if (first.result.text.trim() !== 'OK' || first.events.some(e => e.kind === 'web-search')) throw new Error('Simple disabled-search smoke failed');
+  const first = await run('simple', 'Reply with exactly: OK');
+  if (first.result.text.trim() !== 'OK' || first.events.some(e => e.kind === 'web-search')) throw new Error('Simple no-search-needed smoke failed');
   const followup = await run('followup', 'What exact token did I ask you to reply with in my preceding message? Reply only with that token.');
   if (followup.result.text.trim() !== 'OK') throw new Error('Follow-up context failed');
-  if (process.argv.includes('--search')) {
+  if (search) {
     loop.setOverrides({ webSearchEnabled: true });
     const research = await run('live-search', 'Find the latest stable Node.js release. Search the web, open the official release source, and give its version and a Markdown link to that source.');
-    if (!research.events.some(e => e.kind === 'web-search') || !/https:\/\//.test(research.result.text)) throw new Error('Live search/link not observed');
+    if (!research.events.some(e => e.kind === 'web-search') || !research.events.some(e => e.kind === 'web-search-completed' && e.action?.type === 'openPage') || !/https:\/\//.test(research.result.text)) throw new Error('Live search/link not observed');
     await run('interruption', 'Research current Node.js and Chrome stable releases, opening official sources for both and comparing their release dates.', true);
     if (!report.runs.at(-1).result.interrupted) throw new Error('Interruption was not observed');
-    await run('after-interruption', 'Reply with exactly: OK');
+    const after = await run('after-interruption', 'Reply with exactly: OK');
+    if (after.result.interrupted || after.result.text.trim() !== 'OK') throw new Error('Post-interruption follow-up failed');
+    if (toggleSearch) {
+      loop.setOverrides({ webSearchEnabled: false });
+      const disabled = await run('search-disabled-again', 'What is the latest stable Chrome version today? Verify it using live web research if available; otherwise state that you cannot verify it.');
+      if (disabled.events.some(e => e.kind === 'web-search')) throw new Error('Search ran while disabled');
+    }
   }
 } catch (error) {
   report.error = String(error); process.exitCode = 1; console.error(String(error));
 } finally {
   clearTimeout(deadline); bridge.disconnect();
   mkdirSync(root + '.release', { recursive: true });
-  writeFileSync(root + '.release/codex-smoke.json', JSON.stringify(report, null, 2));
+  const output = JSON.stringify(report, null, 2);
+  writeFileSync(root + '.release/codex-smoke.json', output);
+  writeFileSync(root + '.release/codex-smoke-' + report.timestamp.replaceAll(':', '-') + '.json', output);
   await vite.close();
   for (const child of children) child.stdin.end();
 }

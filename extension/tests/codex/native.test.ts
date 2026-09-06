@@ -156,3 +156,20 @@ describe('NativeBridge', () => {
     expect(pong.codex.version).toBe('9.9.9')
   })
 })
+
+
+it('ignores messages and disconnects from a replaced native port', async () => {
+  const old = fakePort(), current = fakePort()
+  const connect = vi.fn().mockReturnValueOnce(old.port).mockReturnValue(current.port)
+  const bridge = new NativeBridge(connect)
+  bridge.ensureConnected()
+  bridge.disconnect()
+  bridge.ensureConnected()
+  const notified = vi.fn()
+  bridge.onNotification = notified
+  old.emit({ t: 'notif', method: 'turn/completed', params: {} })
+  old.emitDisconnect()
+  expect(bridge.isConnected).toBe(true)
+  expect(notified).not.toHaveBeenCalled()
+  bridge.disconnect()
+})

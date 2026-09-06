@@ -7,6 +7,7 @@ const checks = [
   ['typecheck', 'pnpm', ['--dir', 'extension', 'typecheck']],
   ['tests', 'pnpm', ['--dir', 'extension', 'test']],
   ['production build', 'pnpm', ['--dir', 'extension', 'build']],
+  ['evaluation ledger', process.execPath, ['--test', 'scripts/live/answer-quality-eval.test.mjs']],
   ['native bridge', process.execPath, ['bridge/test-bridge.mjs']],
   ['release archives', process.execPath, ['scripts/package-release.mjs']],
 ]

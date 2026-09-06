@@ -41,7 +41,7 @@ export function restoreTurns(messages: MessageRow[], journal: JournalEntry[] = [
   const relevantJournal = interrupted ? journal.filter((entry) => entry.ts >= interrupted.startedAt) : []
   if (interrupted?.view.error && relevantJournal.length > 0) {
     const latestTurnId = relevantJournal[0].turnId
-    interrupted.view.activity = relevantJournal
+    const recovered = relevantJournal
       .filter((entry) => entry.turnId === latestTurnId)
       .map((entry) => ({
         kind: 'tool' as const,
@@ -52,6 +52,13 @@ export function restoreTurns(messages: MessageRow[], journal: JournalEntry[] = [
         journalId: entry.id,
         undoable: entry.status === 'applied' && entry.inverse != null,
       }))
+    const activity = [...interrupted.view.activity]
+    for (const item of recovered) {
+      const index = activity.findIndex(existing => existing.kind === 'tool' && (existing.id === item.id || existing.journalId === item.journalId))
+      if (index < 0) activity.push(item)
+      else activity[index] = { ...activity[index], ...item }
+    }
+    interrupted.view.activity = activity
   }
   return turns
 }

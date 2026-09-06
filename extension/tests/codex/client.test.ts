@@ -11,6 +11,7 @@ function fakeBridge() {
   const responses: Array<{ rid: number; result: unknown }> = []
   const bridge = {
     rpc: vi.fn((method: string, _params?: unknown) => {
+      if (method === 'thread/inject_items') return Promise.resolve({})
       if (method === 'config/read') return Promise.resolve({ config: {} })
       if (method === 'configRequirements/read') return Promise.resolve({ requirements: null })
       if (method === 'experimentalFeature/list') return Promise.resolve({ data: RESTRICTED_FEATURES.map(name => ({ name, enabled: false })) })
@@ -25,6 +26,7 @@ function fakeBridge() {
       })
     }),
     notify: vi.fn(),
+    disconnect: vi.fn(),
     respondTool: vi.fn((rid: number, result: unknown) => responses.push({ rid, result })),
     onNotification: null as NativeBridge['onNotification'],
     onCodexRequest: null as NativeBridge['onCodexRequest'],
@@ -308,6 +310,93 @@ describe('CodexClient', () => {
     await pending
     expect(events.filter(e => e.kind === 'web-search')).toHaveLength(12)
     expect(events.find(e => e.kind === 'web-search')).toMatchObject({ id: 's0', query: 'public question' })
+  })
+
+  it.each([false, true])('settles cancellation without a completion event (before ack: %s)', async (beforeAck) => {
+    await startThreadFixture()
+    vi.useFakeTimers()
+    try {
+      if (beforeAck) h.bridge.rpc.mockImplementationOnce(() => new Promise(() => {}))
+      const pending = client.runTurn([])
+      const assertion = expect(pending).rejects.toThrow(/stop.*completion/i)
+      await Promise.resolve()
+      const stopping = client.interrupt()
+      h.rpcHandlers.find(r => r.method === 'turn/interrupt')?.resolve({})
+      await stopping
+      await vi.advanceTimersByTimeAsync(5000)
+      await assertion
+      expect(h.bridge.disconnect).toHaveBeenCalledOnce()
+    } finally { vi.useRealTimers() }
+  })
+
+  it.each(['resolve', 'reject'])('ignores a late tool %s after the next turn starts', async (outcome) => {
+    await startThreadFixture()
+    let resolve!: (v: unknown) => void
+    let reject!: (e: Error) => void
+    client.onToolCall = () => new Promise((yes, no) => { resolve = yes; reject = no })
+    const first = client.runTurn([])
+    h.bridge.onCodexRequest?.({ rid: 99, method: 'item/tool/call', params: { threadId: 'thr_9', turnId: 'turn_1', tool: 'notion-fetch' } })
+    await vi.waitFor(() => expect(resolve).toBeDefined())
+    emit(h.bridge, 'turn/completed', { interrupted: true })
+    await first
+    const next = client.runTurn([])
+    if (outcome === 'resolve') resolve({ success: true })
+    else reject(new Error('late failure'))
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(events.filter(e => e.kind === 'tool-completed')).toHaveLength(0)
+    expect(h.responses.filter(r => r.rid === 99)).toHaveLength(0)
+    emit(h.bridge, 'turn/completed', {})
+    await next
+  })
+
+  it('uses the last completed phaseless answer over a later unfinished message', async () => {
+    await startThreadFixture()
+    const pending = client.runTurn([])
+    emit(h.bridge, 'item/completed', { item: { type: 'agentMessage', id: 'a1', text: 'Answer' } })
+    emit(h.bridge, 'item/agentMessage/delta', { itemId: 'a2', delta: 'Unfinished' })
+    emit(h.bridge, 'turn/completed', {})
+    expect((await pending).finalText).toBe('Answer')
+    expect(events).not.toContainEqual({ kind: 'commentary', id: 'a1', text: 'Answer' })
+  })
+
+  it('does not activate a thread whose setup was cancelled', async () => {
+    await startThreadFixture()
+    const abort = new AbortController()
+    const pending = client.resumeThread('other-thread', {}, abort.signal)
+    h.rpcHandlers.find(r => r.method === 'initialize')!.resolve({ userAgent: 'codex/0.153.4' })
+    await vi.waitFor(() => expect(h.rpcHandlers.some(r => r.method === 'thread/resume')).toBe(true))
+    abort.abort()
+    h.rpcHandlers.find(r => r.method === 'thread/resume')!.resolve({ thread: { id: 'other-thread' } })
+    await expect(pending).rejects.toThrow()
+    const turn = client.runTurn([])
+    emit(h.bridge, 'turn/completed', {})
+    await turn
+    expect(h.bridge.rpc.mock.calls.find(c => c[0] === 'turn/start')![1]).toMatchObject({ threadId: 'thr_9' })
+  })
+
+  it('reloads the app server before resuming so updated research settings take effect', async () => {
+    await startThreadFixture()
+    const pending = client.resumeThread('thr_9', { webSearchEnabled: true, developerInstructions: 'Current instructions' })
+    await vi.waitFor(() => expect(h.bridge.disconnect).toHaveBeenCalledOnce())
+    h.rpcHandlers.find(r => r.method === 'initialize')!.resolve({ userAgent: 'codex/0.153.4' })
+    await vi.waitFor(() => expect(h.rpcHandlers.some(r => r.method === 'thread/resume')).toBe(true))
+    h.rpcHandlers.find(r => r.method === 'thread/resume')!.resolve({ thread: { id: 'thr_9' } })
+    expect(await pending).toBe('thr_9')
+    expect(h.bridge.rpc).toHaveBeenCalledWith('thread/inject_items', { threadId: 'thr_9', items: [{ type: 'message', role: 'developer', content: [{ type: 'input_text', text: 'Current instructions' }] }] })
+    expect(h.bridge.rpc.mock.calls.find(c => c[0] === 'thread/resume')![1]).toMatchObject({ threadId: 'thr_9', config: { web_search: 'live' } })
+  })
+
+
+
+  it('rejects a different resumed thread before appending instructions', async () => {
+    await startThreadFixture()
+    const pending = client.resumeThread('thr_9', {})
+    h.rpcHandlers.find(r => r.method === 'initialize')!.resolve({ userAgent: 'codex/0.153.4' })
+    await vi.waitFor(() => expect(h.rpcHandlers.some(r => r.method === 'thread/resume')).toBe(true))
+    h.rpcHandlers.find(r => r.method === 'thread/resume')!.resolve({ thread: { id: 'unexpected' } })
+    await expect(pending).rejects.toThrow(/different thread/)
+    expect(h.bridge.rpc.mock.calls.some(c => c[0] === 'thread/inject_items')).toBe(false)
   })
 
 })

@@ -88,7 +88,7 @@ export class AgentLoop {
       const original = this.threadId
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
-          const resumed = await this.deps.codex.resumeThread(original, full)
+          const resumed = await this.deps.codex.resumeThread(original, full, signal)
           signal?.throwIfAborted()
           if (resumed !== original) throw new Error('Server returned a different thread')
           return resumed
@@ -104,7 +104,7 @@ export class AgentLoop {
         }
       }
     }
-    const started = await this.deps.codex.startThread(full)
+    const started = await this.deps.codex.startThread(full, signal)
     signal?.throwIfAborted()
     this.threadId = started
     return this.threadId

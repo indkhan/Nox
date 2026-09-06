@@ -1,6 +1,22 @@
 # Nox answer quality implementation plan
 
-Status: proposed; implementation has not started.
+Status: stages 1-5 implemented; stage 6 regression hardening is implemented,
+with live release acceptance still in progress. See
+[verification evidence](answer-quality-verification.md). No 90% quality result is claimed.
+
+Implementation commits:
+
+1. `10b1fe0` - protocol fixtures and evaluation rubric.
+2. `7f0d985` - authoritative answers and turn outcomes.
+3. `5c61a1f` - fetched context, continuation, and explicit resume recovery.
+4. `8d526c7` - bounded web research and native restriction inspection.
+5. `b0a6934` - evidence policy, citations, and persisted research activity.
+6. `test: harden answer quality release regressions` - lifecycle/settings follow-up
+   fixes, evaluation validation, live smoke evidence and remaining acceptance checks.
+
+The evaluation rubric exists, but a complete live before/after baseline has not
+been recorded. Workspace acceptance requires a connected dedicated test workspace;
+production workspace changes are excluded.
 
 Goal: Nox understands the request, gathers appropriate evidence, gives a useful supported answer, preserves conversational context, and reports incomplete work honestly.
 
