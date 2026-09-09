@@ -19,17 +19,7 @@ and uses your local Codex installation. There is no Nox server, Nox account, or 
 - Install the [Codex CLI](https://github.com/openai/codex), then sign in with `codex login`.
 - Have Chrome (or another Chromium browser), a Notion account, and Notion Web ready.
 
-### Option 1: Download Nox
-
-1. On the [Nox GitHub page](https://github.com/indkhan/Nox), select **Code → Download ZIP**.
-2. Extract the ZIP.
-3. Open the extracted folder in a terminal and run:
-
-```bash
-node install.mjs
-```
-
-### Option 2: Clone Nox
+### Clone Nox
 
 Run:
 
