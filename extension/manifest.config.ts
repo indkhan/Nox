@@ -7,7 +7,7 @@ export default defineManifest({
   manifest_version: 3,
   name: 'Nox',
   version: '0.1.0',
-  description: 'Notion workspace assistant.',
+  description: 'Open-source Notion AI-style assistant powered by your local Codex login.',
   key: PUBLIC_KEY,
   permissions: [
     'sidePanel',
