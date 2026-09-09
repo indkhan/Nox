@@ -10,6 +10,7 @@ import { installLogCapture, logInfo } from '../lib/log'
 import { connectCodexAction } from './codex-connect'
 import { GearIcon, NoxMark, PlusCircleIcon } from './Icons'
 import { ThreadMenu } from './ThreadMenu'
+import { SetupScreen } from './SetupScreen'
 
 export function App() {
   const connectionStatus = useNoxStore((s) => s.connectionStatus)
@@ -80,7 +81,9 @@ export function App() {
         </button>}
       </header>
       <main className="flex min-h-0 flex-1 flex-col">
-        <ChatPanel readOnly={role !== 'owner'} />
+        {role === 'owner' && setupIncomplete
+          ? <SetupScreen />
+          : <ChatPanel readOnly={role !== 'owner'} />}
       </main>
       {settingsOpen && role === 'owner' && <SettingsModal />}
     </div>

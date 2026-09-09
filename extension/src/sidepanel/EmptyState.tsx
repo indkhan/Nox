@@ -37,12 +37,12 @@ export function EmptyState({
 
   const suggestions: SuggestionDef[] = [
     {
-      testid: 'suggest-outline',
-      message: `Draft an outline for ${pageTitle}`,
+      testid: 'suggest-summary',
+      message: `Summarize ${pageTitle}`,
       icon: <PencilIcon className="h-4 w-4 shrink-0" />,
       body: (
         <>
-          <span>Draft an outline for</span>
+          <span>Summarize</span>
           {chip}
           <span className="truncate font-semibold">{pageTitle}</span>
         </>
@@ -82,6 +82,7 @@ export function EmptyState({
         {suggestions.map((s) => (
           <button
             key={s.testid}
+            aria-label={s.message}
             disabled={readOnly}
             onClick={() => {
               const el = document.querySelector<HTMLElement>('[data-testid=composer]')

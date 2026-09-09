@@ -76,9 +76,11 @@ The extension is MV3 and has three runtime pieces.
 | Content script | `extension/src/content/` | Reads only the visible page title and icon. Page identity comes from the tab URL, not the DOM. |
 | Side panel | `extension/src/sidepanel/` | Owns the UI and long-running runtime: connections, agent loop, approvals, streaming, history, and settings. |
 
-The panel is the only product surface. A Web Lock named `nox-agent-owner` lets one browser
-window run turns; another open panel becomes a read-only viewer. This avoids duplicate
-agents writing into the same thread.
+The panel is the only product surface. Until both Codex and Notion are connected, the
+owner panel shows the existing connection controls as a dedicated setup screen and moves
+to chat automatically when both are ready. A Web Lock named `nox-agent-owner` lets one
+browser window run turns; another open panel becomes a read-only viewer. This avoids
+duplicate agents writing into the same thread.
 
 The UI is React with a single Zustand store. Model output is rendered through `marked`
 and DOMPurify. Valid dashed or undashed Notion UUID links become HTTPS page links;
