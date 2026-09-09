@@ -14,7 +14,8 @@ and uses your local Codex installation. There is no Nox server, Nox account, or 
 
 ### Before you start
 
-- Install [Node.js 22 or newer](https://nodejs.org/) and [pnpm 10 or newer](https://pnpm.io/installation).
+- Install [Node.js 22 or newer](https://nodejs.org/). The installer obtains pnpm through
+  Node's Corepack when pnpm 10+ is not already available.
 - Install the [Codex CLI](https://github.com/openai/codex), then sign in with `codex login`.
 - Have Chrome (or another Chromium browser), a Notion account, and Notion Web ready.
 
@@ -40,8 +41,8 @@ node install.mjs
 
 ### Finish in Chrome
 
-The installer installs dependencies, builds Nox, registers the local bridge, and prints
-the extension folder you need next.
+The installer obtains pnpm when needed, installs dependencies, builds Nox, registers the
+local bridge, checks for Codex and Chrome, and prints the extension folder you need next.
 
 1. Restart Chrome.
 2. Open `chrome://extensions`.

@@ -302,7 +302,9 @@ Nox/
 
 ## Build and verify
 
-Nox requires Node.js 22+ and pnpm.
+Nox requires Node.js 22+. The main installer uses an existing pnpm 10+ installation or
+downloads a pinned pnpm release through Node's Corepack, then checks whether Codex is
+installed and signed in and whether Chrome is present.
 
 ```bash
 node install.mjs                 # install, build, and register the bridge

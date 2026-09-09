@@ -18,7 +18,8 @@ node bridge/test-bridge.mjs     # deterministic integration vs fixtures/fake-cod
 ```
 
 For a complete local install, run `node install.mjs` from the repository root,
-then follow its **Load unpacked** prompt and restart Chrome.
+then follow its **Load unpacked** prompt and restart Chrome. This path obtains pnpm
+through Node's Corepack when pnpm 10+ is unavailable.
 
 ## Ground rules
 
