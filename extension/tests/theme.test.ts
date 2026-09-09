@@ -9,6 +9,12 @@ describe('Nox theme', () => {
     expect(css).toContain('@media (prefers-color-scheme: light)')
   })
 
+  it('remaps the dark zinc shell when explicit Light is active', () => {
+    expect(css).toContain(':root[data-theme="light"]')
+    expect(css).toContain('bg-zinc-950')
+    expect(css).toContain('text-zinc-100')
+  })
+
   it('disables interface motion when reduced motion is requested', () => {
     expect(css).toContain('@media (prefers-reduced-motion: reduce)')
     expect(css).toContain('.nox-resolve')

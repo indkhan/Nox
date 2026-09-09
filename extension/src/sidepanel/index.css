@@ -209,6 +209,76 @@
   }
 }
 
+/* Light-theme compatibility shim — most panel UI still uses fixed dark
+ * zinc-* utilities, so swapping tokens alone leaves a dark shell over a
+ * light page and the setting looks broken. Remap the dark zinc ramps to
+ * light tokens when explicit Light is active (any system theme) or when
+ * the system theme is light and no explicit Dark is set. Substring
+ * attribute selectors also catch opacity modifiers (e.g. bg-zinc-900/60)
+ * and hover: variants (hover effect is suppressed in light — acceptable).
+ * Light-surface utilities (bg-zinc-100/200) and dark text on light buttons
+ * (text-zinc-900) are intentionally left alone. Long-term fix is migrating
+ * the remaining zinc-* classes to the semantic tokens above. */
+:root[data-theme="light"] #root > div,
+:root[data-theme="light"] [class*="bg-zinc-950"] {
+  background-color: var(--page) !important;
+}
+:root[data-theme="light"] [class*="bg-zinc-900"],
+:root[data-theme="light"] [class*="bg-zinc-800"] {
+  background-color: var(--surface) !important;
+}
+:root[data-theme="light"] [class*="bg-zinc-700"] {
+  background-color: var(--hover-2) !important;
+}
+:root[data-theme="light"] [class*="text-zinc-100"],
+:root[data-theme="light"] [class*="text-zinc-200"],
+:root[data-theme="light"] [class*="text-zinc-300"] {
+  color: var(--ink) !important;
+}
+:root[data-theme="light"] [class*="text-zinc-400"],
+:root[data-theme="light"] [class*="text-zinc-500"] {
+  color: var(--ink-2) !important;
+}
+:root[data-theme="light"] [class*="text-zinc-600"] {
+  color: var(--ink-3) !important;
+}
+:root[data-theme="light"] [class*="border-zinc-700"],
+:root[data-theme="light"] [class*="border-zinc-800"],
+:root[data-theme="light"] [class*="border-zinc-600"] {
+  border-color: var(--line-strong) !important;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) #root > div,
+  :root:not([data-theme="dark"]) [class*="bg-zinc-950"] {
+    background-color: var(--page) !important;
+  }
+  :root:not([data-theme="dark"]) [class*="bg-zinc-900"],
+  :root:not([data-theme="dark"]) [class*="bg-zinc-800"] {
+    background-color: var(--surface) !important;
+  }
+  :root:not([data-theme="dark"]) [class*="bg-zinc-700"] {
+    background-color: var(--hover-2) !important;
+  }
+  :root:not([data-theme="dark"]) [class*="text-zinc-100"],
+  :root:not([data-theme="dark"]) [class*="text-zinc-200"],
+  :root:not([data-theme="dark"]) [class*="text-zinc-300"] {
+    color: var(--ink) !important;
+  }
+  :root:not([data-theme="dark"]) [class*="text-zinc-400"],
+  :root:not([data-theme="dark"]) [class*="text-zinc-500"] {
+    color: var(--ink-2) !important;
+  }
+  :root:not([data-theme="dark"]) [class*="text-zinc-600"] {
+    color: var(--ink-3) !important;
+  }
+  :root:not([data-theme="dark"]) [class*="border-zinc-700"],
+  :root:not([data-theme="dark"]) [class*="border-zinc-800"],
+  :root:not([data-theme="dark"]) [class*="border-zinc-600"] {
+    border-color: var(--line-strong) !important;
+  }
+}
+
 @theme inline {
   /* colors */
   --color-page: var(--page);
