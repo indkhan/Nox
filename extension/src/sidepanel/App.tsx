@@ -8,6 +8,7 @@ import { agentLoop } from '../lib/agent/panel'
 import { claimWindowRole, type WindowRole } from '../lib/history/panel'
 import { installLogCapture, logInfo } from '../lib/log'
 import { connectCodexAction } from './codex-connect'
+import { restoreNotionAction } from './notion-connect'
 import { GearIcon, NoxMark, PlusCircleIcon } from './Icons'
 import { ThreadMenu } from './ThreadMenu'
 import { SetupScreen } from './SetupScreen'
@@ -40,7 +41,10 @@ export function App() {
   }, [])
 
   useEffect(() => {
-    if (role === 'owner') void connectCodexAction()
+    if (role === 'owner') {
+      void connectCodexAction()
+      void restoreNotionAction()
+    }
   }, [role])
 
   // Amber dot on the gear until both connections are up.

@@ -78,7 +78,10 @@ The extension is MV3 and has three runtime pieces.
 
 The panel is the only product surface. Until both Codex and Notion are connected, the
 owner panel shows the existing connection controls as a dedicated setup screen and moves
-to chat automatically when both are ready. A Web Lock named `nox-agent-owner` lets one
+to chat automatically when both are ready. On startup, the owner reconnects Codex and
+silently restores Notion when a durable refresh token is available; OAuth consent is
+available when the saved authorization cannot be restored. A Web Lock named
+`nox-agent-owner` lets one
 browser window run turns; another open panel becomes a read-only viewer. This avoids
 duplicate agents writing into the same thread.
 
