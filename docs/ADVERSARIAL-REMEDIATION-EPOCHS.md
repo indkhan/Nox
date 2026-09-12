@@ -661,7 +661,7 @@ Initial status: **planning only; no implementation or test execution claimed by 
 
 | Epoch | Code status | Commits | Automated evidence | Browser evidence | Blockers / next step |
 |---|---|---|---|---|---|
-| 01 | Pending | — | — | C01–C02 pending | Start here |
+| 01 | Locally implemented | `4d88919`, `050a8c6` | EXT gate passed: 372 passed, 7 opt-in skips | C01–C02 BLOCKED | Live Chrome/network and supported-model evidence still required |
 | 02 | Pending | — | — | C03 pending | Depends on 01 |
 | 03 | Pending | — | — | Fixture evidence pending | Depends on 02 |
 | 04 | Pending | — | — | C04/C09 pending | Depends on 03 |
@@ -691,6 +691,15 @@ Architecture/public claims updated:
 Remaining defects, unsupported features, and acceptance blockers:
 Next epoch and any contract changes the successor must know:
 ```
+
+Epoch 01 / 2026-09-12 / candidate commits: `4d88919`, `050a8c6`
+Implemented behavior: Markdown images render as clicked source links; raw media/resource HTML and resource attributes are removed; remote page-icon URLs use local fallbacks; the production extension CSP permits packaged assets and the verified Notion MCP/upload origins only. Chat and turn setup wait for settings hydration, report a retryable failure, apply research-only opt-out with default model settings, and preserve the effective research preference on model changes.
+Regressions observed failing before fix: hostile current-page icon rendered a remote `<img>`; no extension-page CSP existed; chat rendered before delayed settings completed; a settings read failure still enabled chat; research-only false was omitted from `setOverrides`; model changes omitted the effective research preference. The Markdown renderer and its initial regression cases were already uncommitted when work began, so their pre-fix failure was not observed in this run.
+Commands actually run and results (include skips): `pnpm exec vitest run tests/setup-screen.test.tsx tests/manifest.test.ts` initially failed 4 expected regressions; focused six-file suite passed 50 tests; `pnpm test` passed 372 tests with 7 opt-in live tests skipped; `pnpm typecheck` passed; `pnpm build` passed and emitted a manifest with the CSP; `pnpm dev` reached CRXJS ready state; `git diff --check` passed before this record update and is rerun below.
+Browser scenario IDs, versions, actual observations: C01 BLOCKED — no loaded disposable Chrome extension plus controlled receiver/network instrumentation. C02 BLOCKED — no supported Codex/Notion session or designated live test scope. The CRXJS development server started, but no browser-side behavior is claimed.
+Architecture/public claims updated: `docs/application.md` now describes non-loading rendering/page-icon behavior, the restrictive extension-page CSP, and hydration-gated settings startup.
+Remaining defects, unsupported features, and acceptance blockers: H1 live network evidence and C01 remain pending; C02 remains pending. No browser/live check is counted as passed.
+Next epoch and any contract changes the successor must know: Epoch 01's locally implementable work is complete. Start Epoch 02 only; do not treat C01/C02 as closed.
 
 Final acceptance requires all of the following:
 
