@@ -86,7 +86,10 @@ browser window run turns; another open panel becomes a read-only viewer. This av
 duplicate agents writing into the same thread.
 
 The UI is React with a single Zustand store. Model output is rendered through `marked`
-and DOMPurify. Valid dashed or undashed Notion UUID links become HTTPS page links;
+and DOMPurify without automatic media/resource sinks: Markdown images become ordinary
+clickable links, raw resource tags are removed, and page icon URLs use a local fallback.
+Extension-page CSP permits packaged assets and only the verified Notion MCP/upload
+connections. Valid dashed or undashed Notion UUID links become HTTPS page links;
 web sources use Markdown links with safe new-tab behavior. Search activity preserves
 item IDs, queries and available open/find actions, with expandable details. Commentary
 and documented reasoning summaries are shown as progress, separate from the answer;
@@ -95,7 +98,9 @@ history restoration. Journal recovery merges tool outcomes without discarding
 saved commentary or research activity.
 
 Answering instructions are rebuilt per turn from current identity, tool capabilities,
-search preference and date/timezone. Workspace claims require workspace evidence;
+search preference and date/timezone. The panel loads settings before it enables chat or
+turn setup; a failed settings read is retryable and does not silently enable research.
+Workspace claims require workspace evidence;
 current external facts require available web research. Discussion/research does not
 authorize changes, including in Auto mode. Incomplete evidence and failed work must
 be disclosed, and selected files are described as upload inputs. The composer supports the current page, explicit `@` page mentions, local

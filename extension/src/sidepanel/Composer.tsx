@@ -466,7 +466,7 @@ function ModelControls({ disabled }: { disabled: boolean }) {
 
   function apply(next: NoxSettings) {
     setSettings(next)
-    agentLoop.setOverrides({ model: next.model, effort: next.effort, serviceTier: next.serviceTier })
+    agentLoop.setOverrides({ webSearchEnabled: next.webSearchEnabled, model: next.model, effort: next.effort, serviceTier: next.serviceTier })
     void loadSettings().then(current => saveSettings({ ...current, model: next.model, effort: next.effort, serviceTier: next.serviceTier }))
   }
 

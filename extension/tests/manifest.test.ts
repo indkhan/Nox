@@ -3,7 +3,7 @@ import manifest from '../manifest.config'
 
 describe('extension-page content security policy', () => {
   it('allows only packaged resources and the verified Notion network endpoints', () => {
-    const policy = manifest.content_security_policy?.extension_pages
+    const policy = (manifest as { content_security_policy?: { extension_pages?: string } }).content_security_policy?.extension_pages
     expect(policy).toContain("default-src 'self'")
     expect(policy).toContain("img-src 'self'")
     expect(policy).toContain("media-src 'none'")

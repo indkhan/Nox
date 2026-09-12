@@ -21,23 +21,34 @@ export function App() {
   const settingsOpen = useNoxStore((s) => s.settingsOpen)
   const setSettingsOpen = useNoxStore((s) => s.setSettingsOpen)
   const [role, setRole] = useState<WindowRole>('pending')
+  const [settingsReady, setSettingsReady] = useState(false)
+  const [settingsError, setSettingsError] = useState<string | null>(null)
   const agentBusy = useNoxStore((s) => s.agentBusy)
+
+  function hydrateSettings() {
+    setSettingsReady(false)
+    setSettingsError(null)
+    void (async () => {
+      try {
+        const settings = await loadSettings()
+        applyTheme(settings.theme)
+        agentLoop.setOverrides({ webSearchEnabled: settings.webSearchEnabled, model: settings.model, effort: settings.effort, serviceTier: settings.serviceTier })
+        setSettingsReady(true)
+        const stored = await chrome.storage.local.get('nox_thread_title')
+        const title = stored['nox_thread_title']
+        if (typeof title === 'string' && title) useNoxStore.getState().setThreadTitle(title)
+      } catch (error) {
+        setSettingsError(error instanceof Error ? error.message : String(error))
+      }
+    })()
+  }
 
   useEffect(() => {
     installLogCapture()
     logInfo('Panel opened')
     void hydrateCurrentPage()
     void claimWindowRole().then(setRole)
-    void (async () => {
-      const settings = await loadSettings()
-      applyTheme(settings.theme)
-      if (settings.model || settings.effort || settings.serviceTier) {
-        agentLoop.setOverrides({ webSearchEnabled: settings.webSearchEnabled, model: settings.model, effort: settings.effort, serviceTier: settings.serviceTier })
-      }
-      const stored = await chrome.storage.local.get('nox_thread_title')
-      const title = stored['nox_thread_title']
-      if (typeof title === 'string' && title) useNoxStore.getState().setThreadTitle(title)
-    })()
+    hydrateSettings()
   }, [])
 
   useEffect(() => {
@@ -85,7 +96,11 @@ export function App() {
         </button>}
       </header>
       <main className="flex min-h-0 flex-1 flex-col">
-        {role === 'owner' && setupIncomplete
+        {settingsError ? <section className="m-3 rounded-md border border-amber-700/60 bg-amber-950/30 p-3 text-sm" role="alert">
+          <p>Could not load settings: {settingsError}</p>
+          <button onClick={hydrateSettings} className="mt-2 rounded-md border border-zinc-700 px-2 py-1 text-xs hover:bg-zinc-800">Retry</button>
+        </section> : !settingsReady ? <p className="p-3 text-sm text-zinc-400" role="status">Loading settings…</p>
+          : role === 'owner' && setupIncomplete
           ? <SetupScreen />
           : <ChatPanel readOnly={role !== 'owner'} />}
       </main>

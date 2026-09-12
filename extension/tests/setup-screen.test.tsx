@@ -13,8 +13,11 @@ const state = vi.hoisted(() => ({
   threadTitle: 'New chat',
   settingsOpen: false,
   agentBusy: false,
+  currentPage: null as { pageId: string; title?: string; iconEmoji?: string; iconUrl?: string } | null,
   setSettingsOpen: vi.fn(),
   requestNewChat: vi.fn(),
+  setOverrides: vi.fn(),
+  loadSettings: vi.fn(async () => ({})),
   setConnection: vi.fn((update: Record<string, unknown>) => Object.assign(state, update)),
   hasRefreshToken: vi.fn(async () => true),
   refreshIdentity: vi.fn(async () => ({
@@ -62,13 +65,13 @@ vi.mock('../src/sidepanel/Icons', () => ({
   SearchIcon: () => null,
   SparkleIcon: () => null,
 }))
-vi.mock('../src/lib/agent/panel', () => ({ agentLoop: { setOverrides: vi.fn() } }))
+vi.mock('../src/lib/agent/panel', () => ({ agentLoop: { setOverrides: state.setOverrides } }))
 vi.mock('../src/lib/history/panel', () => ({ claimWindowRole: vi.fn(async () => 'owner') }))
 vi.mock('../src/lib/log', () => ({ installLogCapture: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
 vi.mock('../src/sidepanel/codex-connect', () => ({ connectCodexAction: vi.fn(async () => undefined) }))
 vi.mock('../src/lib/settings', () => ({
   applyTheme: vi.fn(),
-  loadSettings: vi.fn(async () => ({})),
+  loadSettings: state.loadSettings,
 }))
 
 import { App } from '../src/sidepanel/App'
@@ -81,7 +84,10 @@ describe('first-run setup', () => {
     state.identity = null
     state.limitations = []
     state.codexStatus = 'disconnected'
+    state.currentPage = null
     state.setConnection.mockClear()
+    state.setOverrides.mockClear()
+    state.loadSettings.mockReset().mockResolvedValue({})
     state.hasRefreshToken.mockReset().mockResolvedValue(true)
     state.refreshIdentity.mockReset().mockResolvedValue({
       identity: { workspaceName: 'Acme', userName: 'Dana' },
@@ -117,6 +123,54 @@ describe('first-run setup', () => {
     const html = renderToStaticMarkup(<EmptyState />)
 
     expect(html).toContain('aria-label="Summarize this page"')
+  })
+
+  it('does not render a remote current-page icon', () => {
+    state.currentPage = { pageId: 'page-1', title: 'Private page', iconUrl: 'https://attacker.invalid/icon.png' }
+    const html = renderToStaticMarkup(<EmptyState />)
+
+    expect(html).not.toContain('<img')
+    expect(html).not.toContain('attacker.invalid')
+  })
+
+  it('waits for settings before enabling chat and applies a research-only opt-out', async () => {
+    state.connectionStatus = 'connected'
+    state.codexStatus = 'connected'
+    let resolveSettings!: (settings: { webSearchEnabled: boolean }) => void
+    state.loadSettings.mockReturnValueOnce(new Promise((resolve) => { resolveSettings = resolve }))
+    const container = document.createElement('div')
+    const root = createRoot(container)
+
+    await act(async () => {
+      root.render(<App />)
+      await Promise.resolve()
+    })
+    expect(container.textContent).not.toContain('Chat ready')
+
+    await act(async () => {
+      resolveSettings({ webSearchEnabled: false })
+      await Promise.resolve()
+    })
+    expect(container.textContent).toContain('Chat ready')
+    expect(state.setOverrides).toHaveBeenCalledWith({ webSearchEnabled: false, model: undefined, effort: undefined, serviceTier: undefined })
+    await act(async () => root.unmount())
+  })
+
+  it('shows a retryable error instead of enabling chat when settings cannot load', async () => {
+    state.connectionStatus = 'connected'
+    state.codexStatus = 'connected'
+    state.loadSettings.mockRejectedValueOnce(new Error('storage unavailable'))
+    const container = document.createElement('div')
+    const root = createRoot(container)
+
+    await act(async () => {
+      root.render(<App />)
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(container.textContent).toContain('storage unavailable')
+    expect(container.textContent).not.toContain('Chat ready')
+    await act(async () => root.unmount())
   })
 
   it('restores a saved Notion connection when the owner panel starts', async () => {

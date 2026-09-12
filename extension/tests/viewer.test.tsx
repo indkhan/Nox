@@ -1,12 +1,14 @@
 // @vitest-environment jsdom
 import { vi } from 'vitest'
 
-vi.hoisted(() => {
+const browser = vi.hoisted(() => {
+  const storageGet = vi.fn(async () => ({}))
   ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
   vi.stubGlobal('chrome', {
     runtime: { onMessage: { addListener: vi.fn() }, sendMessage: vi.fn(async () => ({ pages: [] })) },
-    storage: { local: { get: vi.fn(async () => ({})), set: vi.fn(async () => undefined) } },
+    storage: { local: { get: storageGet, set: vi.fn(async () => undefined) } },
   })
+  return { storageGet }
 })
 
 vi.mock('../src/lib/agent/panel', () => ({
@@ -36,6 +38,7 @@ import { ApprovalCards } from '../src/sidepanel/ApprovalCards'
 import { EmptyState } from '../src/sidepanel/EmptyState'
 import { useNoxStore } from '../src/sidepanel/store'
 import { notion } from '../src/lib/notion/panel'
+import { agentLoop } from '../src/lib/agent/panel'
 
 describe('viewer mode', () => {
   it('disables the composer for read-only windows', () => {
@@ -71,6 +74,20 @@ describe('viewer mode', () => {
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
     const speed = container.querySelector('[data-testid=speed-select]') as HTMLSelectElement
     expect([...speed.options].map((option) => option.text)).toEqual(['Standard', 'Fast'])
+    await act(async () => root.unmount())
+  })
+
+  it('keeps the effective research preference when changing model settings', async () => {
+    browser.storageGet.mockResolvedValueOnce({ 'nox.settings': { webSearchEnabled: false } })
+    useNoxStore.setState({ codexStatus: 'connected' })
+    const container = document.createElement('div')
+    const root = createRoot(container)
+    await act(async () => root.render(<Composer busy={false} onSend={vi.fn()} onCancel={vi.fn()} />))
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+
+    const model = container.querySelector('[data-testid=model-select]') as HTMLSelectElement
+    await act(async () => model.dispatchEvent(new Event('change', { bubbles: true })))
+    expect(agentLoop.setOverrides).toHaveBeenCalledWith({ webSearchEnabled: false, model: 'gpt-fast', effort: undefined, serviceTier: undefined })
     await act(async () => root.unmount())
   })
 
