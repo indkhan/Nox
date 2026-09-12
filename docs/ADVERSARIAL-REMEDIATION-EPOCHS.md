@@ -662,7 +662,7 @@ Initial status: **planning only; no implementation or test execution claimed by 
 | Epoch | Code status | Commits | Automated evidence | Browser evidence | Blockers / next step |
 |---|---|---|---|---|---|
 | 01 | Locally implemented | `4d88919`, `050a8c6` | EXT gate passed: 372 passed, 7 opt-in skips | C01–C02 BLOCKED | Live Chrome/network and supported-model evidence still required |
-| 02 | Pending | — | — | C03 pending | Depends on 01 |
+| 02 | Locally implemented | `7c9c4a1`, `e10adc9` | EXT gate passed: 388 passed, 7 opt-in skips | C03 BLOCKED | Crash-time ambiguity open until epoch 04; start epoch 03 only |
 | 03 | Pending | — | — | Fixture evidence pending | Depends on 02 |
 | 04 | Pending | — | — | C04/C09 pending | Depends on 03 |
 | 05 | Pending | — | — | C05 pending | Depends on 04 |
@@ -700,6 +700,15 @@ Browser scenario IDs, versions, actual observations: C01 BLOCKED — no loaded d
 Architecture/public claims updated: `docs/application.md` now describes non-loading rendering/page-icon behavior, the restrictive extension-page CSP, and hydration-gated settings startup.
 Remaining defects, unsupported features, and acceptance blockers: H1 live network evidence and C01 remain pending; C02 remains pending. No browser/live check is counted as passed.
 Next epoch and any contract changes the successor must know: Epoch 01's locally implementable work is complete. Start Epoch 02 only; do not treat C01/C02 as closed.
+
+Epoch 02 / 2026-09-12 / candidate commits: `7c9c4a1`, `e10adc9`
+Implemented behavior: `claimWindowRole` now exposes a read-only owner lease/generation; `WriteGate` denies mutations without that lease (deny by default), captures owner/connection generations on admission, and re-checks lease, connection generation, and cancellation immediately before dispatch inside one serial mutation runner shared by forward writes, upload effects (`runEffectExclusive`), and undo. `Notion` bumps a connection generation on connect/identity-refresh/sign-out. Undo is refused while a turn is active and new turns are refused while undo holds the runner. Both timeline undo and Undo-bar undo use the single `requestRuntimeUndo` path, which re-reads the journal entry from storage and lets the gate re-validate status/scope before dispatch; viewer/busy panels show a reason instead of an enabled undo control. `claimUndo` releases its claim when a storage read throws.
+Regressions observed failing before fix: viewer writes/undo dispatched transport; queued mutations dispatched a second time after lease expiry and after connection change; three concurrent writes overlapped (max in-flight 3); `runEffectExclusive`/`isUndoActive`/`requestRuntimeUndo` did not exist; undo resolved during an active turn; `claimUndo` wedged after a storage throw (second claim returned null); restored viewer `ChatPanel` rendered an enabled “Undo this change” button with no reason text.
+Commands actually run and results (include skips): new `tests/writes/ownership.test.ts` (11 tests) failed 10 before the fix and passes after; `pnpm exec vitest run` on the six touched suites passes 89 tests; full `pnpm test` passes 388 tests with 7 opt-in live tests skipped; `pnpm typecheck` passes; `pnpm build` passes; `git diff --check` passes.
+Browser scenario IDs, versions, actual observations: C03 BLOCKED — no two-window live Chrome session with a designated scratch scope in this environment, so owner/viewer behavior is proven only by deterministic tests (viewer transport count zero, single in-flight dispatch). No browser/live check is counted as passed.
+Architecture/public claims updated: `docs/application.md` change-safety paragraph now describes the single-owner serial runner, lease/connection/cancellation re-checks, turn/undo mutual exclusion, the single storage-validated undo path, and viewer/busy reason messaging.
+Remaining defects, unsupported features, and acceptance blockers: crash-time ambiguity stays open until epoch 04 (a Web Lock cannot cancel an already-committed request; the next owner reconciles unresolved intent there). Cross-window undo reservation is still per-instance plus gate re-validation, not atomic. C03 remains pending. No browser/live check is counted as passed.
+Next epoch and any contract changes the successor must know: Epoch 02's locally implementable work is complete. Start Epoch 03 only; do not treat C01/C02/C03 as closed. `WriteGate` construction without `ownership` now denies mutations — future tests must wire explicit owner fakes.
 
 Final acceptance requires all of the following:
 
