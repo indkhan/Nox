@@ -5,7 +5,7 @@ import { deriveActivitySummary, failedToolActivityLabel, toolActivityLabel, tool
 import { toResultTable } from '../lib/db/query'
 import { ResultsTable } from './ResultsTable'
 
-export function ActivityTimeline({ items, active = false, answerStarted = false, initiallyExpanded = false, outcome, onUndo }: { items: ActivityItem[]; active?: boolean; answerStarted?: boolean; initiallyExpanded?: boolean; outcome?: 'failed' | 'interrupted'; onUndo?: (journalId: string) => void }) {
+export function ActivityTimeline({ items, active = false, answerStarted = false, initiallyExpanded = false, outcome, onUndo, undoUnavailableReason }: { items: ActivityItem[]; active?: boolean; answerStarted?: boolean; initiallyExpanded?: boolean; outcome?: 'failed' | 'interrupted'; onUndo?: (journalId: string) => void; undoUnavailableReason?: string }) {
   const [open, setOpen] = useState(initiallyExpanded)
   useEffect(() => {
     if (answerStarted) setOpen(false)
@@ -28,7 +28,7 @@ export function ActivityTimeline({ items, active = false, answerStarted = false,
         <div className="ml-2 mt-1 border-l border-zinc-800 pb-1 pl-3">
           <p className="pb-1 text-[10px] font-medium uppercase tracking-wider text-zinc-600">What Nox did</p>
           <ol>
-            {items.filter((item) => item.kind !== 'reasoning').map((item) => <ActivityRow key={item.id} item={item} onUndo={onUndo} />)}
+            {items.filter((item) => item.kind !== 'reasoning').map((item) => <ActivityRow key={item.id} item={item} onUndo={onUndo} undoUnavailableReason={undoUnavailableReason} />)}
           </ol>
         </div>
       )}
@@ -36,7 +36,7 @@ export function ActivityTimeline({ items, active = false, answerStarted = false,
   )
 }
 
-function ActivityRow({ item, onUndo }: { item: Exclude<ActivityItem, { kind: 'reasoning' }>; onUndo?: (journalId: string) => void }) {
+function ActivityRow({ item, onUndo, undoUnavailableReason }: { item: Exclude<ActivityItem, { kind: 'reasoning' }>; onUndo?: (journalId: string) => void; undoUnavailableReason?: string }) {
   if (item.kind === 'commentary') return <li className="py-1 text-xs text-zinc-500">{item.text}</li>
   if (item.kind === 'search') return <li className="nox-info py-1 text-xs">
     {item.status === 'completed' ? 'Searched the web' : 'Searching the web...'}
@@ -67,6 +67,9 @@ function ActivityRow({ item, onUndo }: { item: Exclude<ActivityItem, { kind: 're
           <button disabled={!item.undoable} onClick={() => onUndo(item.journalId!)} className="nox-active mt-1 text-[11px] underline-offset-2 hover:underline disabled:no-underline">
             {item.undone ? 'Undone' : 'Undo this change'}
           </button>
+        )}
+        {item.undoable && item.journalId && !onUndo && undoUnavailableReason && (
+          <span className="mt-1 block text-[11px] text-zinc-600">{undoUnavailableReason}</span>
         )}
         {item.undoError && <p className="nox-danger mt-1 text-[11px]" role="alert">Undo failed: {item.undoError}</p>}
       </div>

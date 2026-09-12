@@ -265,4 +265,17 @@ describe('AgentLoop integration (scripted codex)', () => {
     expect(rpc.mock.calls.some(([method]) => method === 'thread/start')).toBe(false)
   })
 
+  it('refuses a new turn while an undo holds the mutation boundary', async () => {
+    loop = new AgentLoop({
+      bridge: bridge as unknown as NativeBridge,
+      codex,
+      executor,
+      getDynamicTools: async () => [],
+      developerInstructions: buildInstructionsStub(),
+      isUndoActive: () => true,
+    })
+    await expect(loop.sendUserMessage('hello')).rejects.toThrow(/UNDO_IN_PROGRESS/)
+    expect(bridge.turnInputs).toHaveLength(0)
+  })
+
 })

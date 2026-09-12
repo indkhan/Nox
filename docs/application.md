@@ -236,7 +236,9 @@ the panel holding the `nox-agent-owner` Web Lock lease. The gate refuses
 mutations from viewer windows, re-checks the owner lease, the Notion
 connection generation, and cancellation immediately before dispatch, and
 rejects undo while a turn is active (new turns likewise wait while undo
-holds the runner).
+holds the runner). Timeline and Undo-bar undo share one runtime path that
+re-reads the journal entry from storage before dispatch; viewer and busy
+panels show why undo is unavailable instead of an enabled control.
 
 ```text
 change requested

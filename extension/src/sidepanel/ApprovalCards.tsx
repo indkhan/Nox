@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNoxStore } from './store'
 import { writeGate } from '../lib/agent/panel'
-import { undoNewest } from '../lib/writes/undo'
+import { requestRuntimeUndo } from '../lib/writes/undo'
 
 type CardApproval = { id: number; tool: string; summary: string; payloadJson: string; reasons: string[]; targetUrl?: string; reversibility: string }
 
@@ -78,7 +78,7 @@ export function ApprovalCards({ readOnly = false }: { readOnly?: boolean }) {
 }
 
 /** One-click undo of the latest reversible mutation (MVP §6.5). */
-export function UndoBar({ readOnly = false }: { readOnly?: boolean }) {
+export function UndoBar({ readOnly = false, busy = false }: { readOnly?: boolean; busy?: boolean }) {
   const [undoableCount, setUndoableCount] = useState(0)
   const [status, setStatus] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
@@ -90,12 +90,12 @@ export function UndoBar({ readOnly = false }: { readOnly?: boolean }) {
     return () => clearInterval(timer)
   }, [])
 
-  if (readOnly || (undoableCount === 0 && !status && !running)) return null
+  if (readOnly || (undoableCount === 0 && !status && !running && !busy)) return null
 
   const run = async () => {
-    if (running) return
+    if (running || busy) return
     setRunning(true)
-    const message = await runUndo(readOnly)
+    const message = await runUndo(readOnly, busy)
     setStatus(message)
     setUndoableCount((await writeGate.journal.undoable()).length)
     setRunning(false)
@@ -105,12 +105,13 @@ export function UndoBar({ readOnly = false }: { readOnly?: boolean }) {
   return (
     <div className="flex items-center justify-between border-t border-zinc-800 px-3 py-1.5" data-testid="undo-bar">
       <span className="text-[11px] text-zinc-500" role="status" aria-live="polite" aria-atomic="true">
-        {status ?? `${undoableCount} reversible change${undoableCount === 1 ? '' : 's'}`}
+        {status ?? (busy ? 'Undo unavailable while Nox is working' : `${undoableCount} reversible change${undoableCount === 1 ? '' : 's'}`)}
       </span>
       {undoableCount > 0 && (
         <button
           onClick={() => void run()}
-          disabled={running}
+          disabled={running || busy}
+          title={busy ? 'Undo unavailable while Nox is working' : undefined}
           data-testid="undo-latest"
           className="rounded-md border border-zinc-700 px-2 py-0.5 text-[11px] text-zinc-300 hover:bg-zinc-800"
         >
@@ -121,10 +122,13 @@ export function UndoBar({ readOnly = false }: { readOnly?: boolean }) {
   )
 }
 
-async function runUndo(readOnly: boolean): Promise<string> {
+async function runUndo(readOnly: boolean, busy: boolean): Promise<string> {
   if (readOnly) return 'Undo unavailable in read-only mode'
+  if (busy) return 'Undo unavailable while Nox is working'
   try {
-    const undone = await undoNewest(writeGate.journal, (tool, args) => writeGate.handleUndo(tool, args))
+    // Same runtime undo path as the timeline: the gate re-validates scope
+    // and status from storage before dispatching.
+    const undone = await requestRuntimeUndo(writeGate)
     return undone ? 'Undone — note block ids change on content restores' : 'Nothing available to undo'
   } catch (e) {
     return `Partial failure: ${e instanceof Error ? e.message : String(e)}`

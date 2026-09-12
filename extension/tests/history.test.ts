@@ -121,6 +121,35 @@ describe('persistent mutation journal', () => {
     await reopened.record({ tool: 'new', args: {}, kind: 'write' })
     expect((await reopened.newestFirst()).map((entry) => entry.tool)).toEqual(['new', 'old'])
   })
+
+  it('releases a failed undo claim instead of wedging later undo', async () => {
+    let failures = 1
+    const stored = {
+      id: 'e1',
+      ts: 1,
+      threadId: 't',
+      turnId: 'x',
+      status: 'applied' as const,
+      tool: 'write',
+      args: {},
+      kind: 'content-update',
+      inverse: { tool: 'undo', args: {} },
+    }
+    const journal = new MutationJournal({
+      append: async () => undefined,
+      list: async () => {
+        if (failures > 0) {
+          failures--
+          throw new Error('storage offline')
+        }
+        return [stored]
+      },
+    })
+    await expect(journal.claimUndo()).rejects.toThrow('storage offline')
+    const entry = await journal.claimUndo()
+    expect(entry?.id).toBe('e1')
+    journal.releaseUndo()
+  })
 })
 
 describe('ThreadRepository', () => {

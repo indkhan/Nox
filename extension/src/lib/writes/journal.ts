@@ -47,6 +47,9 @@ export function idbJournalStore(db: () => Promise<IDBPDatabase>): JournalStore {
 export class MutationJournal {
   private threadId: string | null = null
   private turnId: string | null = null
+  // Per-instance only: duplicate undo across panels is serialized by the
+  // gate's re-validation, but atomic cross-window reservation arrives with
+  // durable intent. Do not treat this flag as cross-window coordination.
   private undoInFlight = false
   private lastTimestamp = 0
   private scopeActive = false
@@ -111,9 +114,15 @@ export class MutationJournal {
   async claimUndo(id?: string): Promise<JournalEntry | null> {
     if (this.undoInFlight) return null
     this.undoInFlight = true
-    const entry = (await this.undoable()).find((candidate) => id == null || candidate.id === id) ?? null
-    if (!entry) this.undoInFlight = false
-    return entry
+    try {
+      const entry = (await this.undoable()).find((candidate) => id == null || candidate.id === id) ?? null
+      if (!entry) this.undoInFlight = false
+      return entry
+    } catch (e) {
+      // A failed storage read must not wedge later undo behind a stale claim.
+      this.undoInFlight = false
+      throw e
+    }
   }
 
   releaseUndo(): void {

@@ -2,21 +2,45 @@
 import { vi } from 'vitest'
 
 const browser = vi.hoisted(() => {
-  const storageGet = vi.fn(async () => ({}))
+  const storageGet = vi.fn(async (..._args: unknown[]): Promise<Record<string, unknown>> => ({}))
   ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
   vi.stubGlobal('chrome', {
     runtime: { onMessage: { addListener: vi.fn() }, sendMessage: vi.fn(async () => ({ pages: [] })) },
-    storage: { local: { get: storageGet, set: vi.fn(async () => undefined) } },
+    storage: { local: { get: storageGet, set: vi.fn(async () => undefined), remove: vi.fn(async () => undefined) } },
   })
   return { storageGet }
 })
 
+const chatMocks = vi.hoisted(() => ({
+  handleUndo: vi.fn(async () => ({ content: [] })),
+  scopeThread: vi.fn(),
+  newestForThread: vi.fn(async (): Promise<any[]> => []),
+  newestFirst: vi.fn(async (): Promise<any[]> => []),
+  undoable: vi.fn(async () => []),
+  restoreThread: vi.fn(),
+  setOverrides: vi.fn(),
+  getMessages: vi.fn(async (): Promise<any[]> => []),
+  getThread: vi.fn(async (): Promise<any> => null),
+}))
+
 vi.mock('../src/lib/agent/panel', () => ({
-  agentLoop: { setOverrides: vi.fn() },
+  agentLoop: { setOverrides: chatMocks.setOverrides, restoreThread: chatMocks.restoreThread },
+  fetchMentionContext: vi.fn(),
+  prepareAgentTurn: vi.fn(),
+  setAgentHistoryThread: vi.fn(),
   writeGate: {
     approvals: { answer: vi.fn() },
-    journal: { undoable: vi.fn(async () => []) },
+    journal: {
+      undoable: chatMocks.undoable,
+      scopeThread: chatMocks.scopeThread,
+      newestForThread: chatMocks.newestForThread,
+      newestFirst: chatMocks.newestFirst,
+    },
+    handleUndo: chatMocks.handleUndo,
   },
+}))
+vi.mock('../src/lib/history/panel', () => ({
+  historyRepo: { getMessages: chatMocks.getMessages, getThread: chatMocks.getThread },
 }))
 vi.mock('../src/lib/codex/panel', () => ({
   codex: { listModels: vi.fn(async () => [{
@@ -35,6 +59,7 @@ import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { Composer } from '../src/sidepanel/Composer'
 import { ApprovalCards } from '../src/sidepanel/ApprovalCards'
+import { ChatPanel } from '../src/sidepanel/ChatPanel'
 import { EmptyState } from '../src/sidepanel/EmptyState'
 import { useNoxStore } from '../src/sidepanel/store'
 import { notion } from '../src/lib/notion/panel'
@@ -292,5 +317,54 @@ describe('viewer mode', () => {
       root.unmount()
       useNoxStore.getState().removeApproval(2)
     })
+  })
+
+  it('restored viewer timelines explain unavailable undo and dispatch nothing', async () => {
+    browser.storageGet.mockImplementation(async (key) => key === 'nox_thread_id' ? { nox_thread_id: 'thread-viewer' } : {})
+    chatMocks.getMessages.mockResolvedValueOnce([
+      { id: 'u1', threadId: 'thread-viewer', role: 'user', text: 'rename the page', ts: 1 },
+      {
+        id: 'a1',
+        threadId: 'thread-viewer',
+        role: 'assistant',
+        text: 'done',
+        ts: 2,
+        turnStatus: 'complete',
+        activity: [{ kind: 'tool', id: 'call-1', tool: 'notion-update-page', args: { page_id: 'p1' }, status: 'completed' }],
+      },
+    ])
+    chatMocks.getThread.mockResolvedValueOnce({ id: 'thread-viewer', codexThreadId: null, title: 'Viewer thread' })
+    chatMocks.newestForThread.mockResolvedValueOnce([
+      {
+        id: 'journal-1',
+        ts: 2,
+        threadId: 'thread-viewer',
+        turnId: 'turn-1',
+        status: 'applied',
+        tool: 'notion-update-page',
+        args: {},
+        kind: 'properties',
+        inverse: { tool: 'notion-update-page', args: {} },
+        callId: 'call-1',
+      },
+    ])
+    chatMocks.handleUndo.mockClear()
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    try {
+      await act(async () => { root.render(<ChatPanel readOnly />) })
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+      const toggle = container.querySelector('[data-testid=activity-timeline] button')
+      expect(toggle).not.toBeNull()
+      await act(async () => { (toggle as HTMLButtonElement).click() })
+      expect(container.textContent).not.toContain('Undo this change')
+      expect(container.textContent).toContain('Undo unavailable in read-only mode')
+      expect(chatMocks.handleUndo).not.toHaveBeenCalled()
+    } finally {
+      await act(async () => root.unmount())
+      container.remove()
+      browser.storageGet.mockImplementation(async () => ({}))
+    }
   })
 })

@@ -81,6 +81,14 @@ describe('ActivityTimeline', () => {
     expect(html).toContain('Undo this change')
   })
 
+  it('explains unavailable undo instead of rendering an enabled button', () => {
+    const html = renderToStaticMarkup(<ActivityTimeline active items={[
+      { kind: 'tool', id: 'u', tool: 'notion-update-page', args: {}, status: 'completed', journalId: 'journal-1', undoable: true },
+    ]} initiallyExpanded undoUnavailableReason="Undo unavailable in read-only mode" />)
+    expect(html).not.toContain('Undo this change')
+    expect(html).toContain('Undo unavailable in read-only mode')
+  })
+
   it('renders follow-up actions as buttons', () => {
     const html = renderToStaticMarkup(<FollowUpActions suggestions={['Summarize these results']} onSelect={vi.fn()} />)
     expect(html).toContain('Follow-ups')

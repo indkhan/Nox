@@ -11,7 +11,7 @@ import { PlanCards } from './PlanCards'
 import { historyRepo } from '../lib/history/panel'
 import { startPersistedTurn } from '../lib/history/turn'
 import { logError, logInfo } from '../lib/log'
-import { undoEntry } from '../lib/writes/undo'
+import { requestRuntimeUndo } from '../lib/writes/undo'
 import { restoreTurns } from '../lib/history/restore'
 import type { MentionRef } from '../shared/notion-page'
 import type { LocalAttachment } from '../shared/attachments'
@@ -269,7 +269,14 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
                 <span className="max-w-[85%] whitespace-pre-wrap rounded-2xl bg-zinc-800 px-3.5 py-2 text-sm leading-relaxed">{userText}</span>
               </div>
               {(view.activity.length > 0 || view.pending) && (
-                <ActivityTimeline items={view.activity} outcome={view.outcome} active={view.pending} answerStarted={view.answer.length > 0} onUndo={(id) => void undoActivity(id, setTurns)} />
+                <ActivityTimeline
+                  items={view.activity}
+                  outcome={view.outcome}
+                  active={view.pending}
+                  answerStarted={view.answer.length > 0}
+                  onUndo={readOnly || busy ? undefined : (id) => void undoActivity(id, setTurns)}
+                  undoUnavailableReason={readOnly ? 'Undo unavailable in read-only mode' : busy ? 'Undo unavailable while Nox is working' : undefined}
+                />
               )}
               {view.answer && <div aria-live={view.pending ? 'polite' : undefined} aria-atomic="false"><AssistantMarkdown markdown={view.answer} /></div>}
               {!readOnly && !view.pending && view.answer && (
@@ -290,7 +297,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
       </div>
 
       {!readOnly && <ApprovalCards />}
-      {hasMessages && !readOnly && <UndoBar />}
+      {hasMessages && !readOnly && <UndoBar busy={busy} />}
 
       <Composer
         busy={busy}
@@ -321,7 +328,9 @@ async function undoActivity(
   undoingJournalIds.add(journalId)
   let error: string | undefined
   try {
-    const undone = await undoEntry(writeGate.journal, journalId, (tool, args) => writeGate.handleUndo(tool, args))
+    // One runtime undo path: the gate re-checks owner/turn state and the
+    // journal entry itself before any transport.
+    const undone = await requestRuntimeUndo(writeGate, journalId)
     if (!undone) error = 'This change is no longer available to undo.'
   } catch (cause) {
     error = cause instanceof Error ? cause.message : String(cause)
