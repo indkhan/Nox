@@ -1,14 +1,15 @@
+// @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { readFileSync } from 'node:fs'
-import { ActivityTimeline, FollowUpActions } from '../src/sidepanel/MessageParts'
+import { ActivityTimeline, AssistantMarkdown, FollowUpActions } from '../src/sidepanel/MessageParts'
 
 describe('ActivityTimeline', () => {
   it('provides polished activity motion with an accessible fallback', () => {
     const html = renderToStaticMarkup(<ActivityTimeline active items={[]} />)
     expect(html).toContain('nox-activity-mark')
     expect(html).toContain('data-active="true"')
-    const css = readFileSync(new URL('../src/sidepanel/index.css', import.meta.url), 'utf8')
+    const css = readFileSync('src/sidepanel/index.css', 'utf8')
     expect(css).toContain('@keyframes nox-activity-breathe')
     expect(css).toMatch(/prefers-reduced-motion[\s\S]*nox-activity-mark/)
   })
@@ -118,4 +119,11 @@ it('shows commentary and expandable evidence details', () => {
   expect(html).toContain('node release')
   expect(html).toContain('https://nodejs.org/')
   expect(html).toContain('<details')
+})
+
+it('keeps restored assistant media as a non-loading source link', () => {
+  const html = renderToStaticMarkup(<AssistantMarkdown markdown="![receipt](https://attacker.invalid/history.png)" />)
+  expect(html).not.toContain('<img')
+  expect(html).not.toContain('src=')
+  expect(html).toContain('href="https://attacker.invalid/history.png"')
 })

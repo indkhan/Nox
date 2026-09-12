@@ -116,6 +116,23 @@ describe('viewer mode', () => {
     useNoxStore.setState({ currentPage: null })
   })
 
+  it('uses the local page fallback for a current-page icon URL', async () => {
+    useNoxStore.setState({
+      currentPage: { pageId: 'p1', url: 'https://app.notion.com/p/Private-p1', title: 'Private', iconUrl: 'https://attacker.invalid/icon.png' },
+    })
+    const container = document.createElement('div')
+    const root = createRoot(container)
+    await act(async () => root.render(<Composer busy={false} onSend={vi.fn()} onCancel={vi.fn()} />))
+
+    await act(async () => {
+      ;(container.querySelector('[data-testid=add-current-page]') as HTMLButtonElement).click()
+    })
+    expect(container.innerHTML).not.toContain('<img')
+    expect(container.innerHTML).not.toContain('attacker.invalid')
+    await act(async () => root.unmount())
+    useNoxStore.setState({ currentPage: null })
+  })
+
   it('loads MCP JSON results after typing a mention query', async () => {
     vi.useFakeTimers()
     vi.mocked(notion.scheduleCallTool).mockClear().mockResolvedValueOnce({

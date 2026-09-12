@@ -98,7 +98,6 @@ function rangeForOffsets(el: HTMLElement, start: number, end: number): Range | n
 
 function PageChipContent({ item }: { item: PickerItem }) {
   if (item.iconEmoji) return <span className="leading-none">{item.iconEmoji}</span>
-  if (item.iconUrl) return <img src={item.iconUrl} alt="" className="h-3 w-3 shrink-0 rounded-[2px] object-cover" />
   return <PageIcon className="h-3 w-3 shrink-0 opacity-70" />
 }
 
