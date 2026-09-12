@@ -1,0 +1,703 @@
+# Nox adversarial remediation: implementation epochs
+
+Prepared 2026-09-11 against `5e49201e7a53e87de63518d4c3a3388e769d0370`.
+Source: [ADVERSARIAL-REVIEW.md](ADVERSARIAL-REVIEW.md), including its browser follow-up and coherent approval policy.
+Architecture reference: [application.md](application.md).
+
+**This is an implementation specification, not a report of completed fixes. All epochs and live checks start pending.** The source review is historical evidence; preserve it. This file intentionally specifies future behavior that differs from the current architecture document. Update that document as implementation lands, never ahead of the code.
+
+Navigation: [execution contract](#1-instructions-for-the-implementing-model) · [coverage](#2-wave-map-and-finding-coverage) · [shared decisions](#3-shared-implementation-decisions) · [Wave A](#4-wave-a--stop-unsafe-effects) · [Wave B](#5-wave-b--make-consent-precise-and-usable) · [Wave C](#6-wave-c--make-recovery-and-deletion-reliable) · [Wave D](#7-wave-d--harden-boundaries) · [Wave E](#8-wave-e--demonstrate-and-distribute-honestly) · [browser scripts](#11-computer-use-acceptance-script) · [execution record](#12-execution-record-and-definition-of-done).
+
+The target is a smooth, defensible alpha: comprehensible consent, bounded execution, honest recovery, reliable local data handling, and reproducible evidence. No finite plan can guarantee that future adversarial review finds zero defects. Completion means every finding below has evidence of resolution or an explicitly unsupported feature, no known unresolved release blocker, and a fresh review of the final implementation.
+
+## 1. Instructions for the implementing model
+
+1. Read the repository's current `AGENTS.md`, `docs/application.md`, this file's execution contract, and the complete next epoch before editing. Follow any newer user instructions.
+2. Check `git status --short` and `git rev-parse HEAD`. Preserve unrelated edits. At plan-writing time the source review was untracked; do not delete or overwrite it. If symbols moved, find their callers with `rg` and adapt paths; do not recreate old implementations.
+3. Implement epochs in numeric order. Each wave has a gate; do not claim the wave complete while its required checks are pending. A blocked live check does not prevent independent local work on later epochs, but it does block release sign-off for the affected feature.
+4. Each numbered commit below is a cohesive change boundary and suggested subject, not permission to push, publish, or touch valuable workspace data. Add the regression and fix together in a green commit; observe the regression fail before the fix while working. Split a commit further if necessary, preserving the epoch's invariant.
+5. Reuse React, Zustand, `idb`, DOMPurify, Vitest, fake-indexeddb, and the existing fake-Codex harness. Keep the bridge dependency-free. No new policy framework, backend, worker architecture, queue library, or browser-testing framework is required.
+6. Tests must exercise observable effects: transport call count and payload, persisted records, state transitions, rendered controls, and outbound requests. Safety words in prompts, mocked always-allow authorizers, and TypeScript casts do not prove a boundary.
+7. Mock external transports, clocks, and browser APIs at test boundaries; retain real `PlanEngine`, `ApprovalEngine`, `WriteGate`, `ToolExecutor`, journal, and production wiring in cross-component regressions. Reuse current fixtures. A narrowly extracted assembly helper is acceptable only if it is also used by production.
+8. Keep existing cancellation, original Codex thread resume, event correlation, Web Lock ownership, 12 dynamic calls, observed native-research limit, ten-minute deadline, and conservative undo. Do not raise these limits to make a demo pass.
+9. When a provider contract is unknown, obtain a redacted real fixture and authoritative contract reference, or disable that effect with an actionable reason. Never guess upload origins, mutation schemas, response completeness, idempotency, or native-tool isolation.
+10. Update `docs/application.md` in every commit that changes runtime flows, trust boundaries, or persistence. Keep small local details out of the architecture reference. Update public claims when the corresponding behavior changes.
+11. Run the epoch's narrow regressions first, then its final checks, then inspect `git diff --check` and the complete diff. Do not silently remove or weaken old tests that fail: replace assertions endorsing reviewed vulnerabilities with stronger behavior tests and explain the changed contract.
+12. Append a short execution record in section 12 after each epoch: commit IDs, commands and results, live evidence IDs, remaining blockers, and next epoch. A successor model must be able to resume without reading the conversation.
+
+### Progressive implementation boundaries
+
+Earlier epochs sometimes introduce a minimum primitive that later epochs strengthen. Implement that minimum at its first required use; never install a permissive placeholder just to satisfy a type. In epoch 04, capture immutable JSON arguments and runtime scope for the ledger; epoch 05 adds shared validated effect adapters and full consent UI. In epoch 05, record successful retrieval IDs for evidence; epoch 07 adds provider-specific completeness and baseline attribution. In epoch 08, associate the already-persisted selected attachment with its current persisted thread/turn before upload; epoch 10 replaces eager draft persistence with atomic persistence at Send. In epoch 09, cancel work and clear credentials before database deletion; epoch 11 completes cross-context credential-generation race handling. Record these intermediate limits and do not mark the dependent findings closed early.
+
+### 1.1 Copyable implementation prompt
+
+> Implement the next pending epoch in docs/ADVERSARIAL-REMEDIATION-EPOCHS.md. Read AGENTS.md and docs/application.md first. Follow the plan's execution contract and predecessor decisions. Trace all callers, reproduce the relevant defects with behavioral regressions, make the smallest correct changes, run the specified final checks, and review the diff. Update architecture and the execution record accurately. Preserve unrelated work. Do not implement later epochs opportunistically, replay uncertain mutations, invent provider contracts, or mark pending browser checks passed. Report exactly what now works and any blocked acceptance checks.
+
+### 1.2 Command conventions
+
+All paths in this file are repository-relative. Test filenames named below already exist unless marked **new**. New test names are proposed deliverables, not commands assumed to work today.
+
+From `extension/`:
+
+```text
+pnpm exec vitest run <test paths listed by the epoch>
+pnpm test
+pnpm typecheck
+pnpm build
+```
+
+From repository root:
+
+```text
+node bridge/test-bridge.mjs
+node --test scripts/install.test.mjs scripts/live/answer-quality-eval.test.mjs
+git diff --check
+```
+
+**EXT gate** means `pnpm test`, `pnpm typecheck`, and `pnpm build` from `extension/`, plus root `git diff --check`. **BRIDGE gate** adds `node bridge/test-bridge.mjs`. **ROOT gate** adds the root installer/evaluation tests. These are final epoch checks, not substitutes for the explicit adversarial cases. Record skipped live tests separately. Do not rerun unrelated expensive checks after a documentation-only correction.
+
+## 2. Wave map and finding coverage
+
+| Wave | Epochs | Result at the gate |
+|---|---|---|
+| A — stop unsafe effects | 01–04 | No passive media egress, viewer mutations, blind mutation replay, or invisible write intent |
+| B — make consent precise and usable | 05–08 | Validated effects, inspectable approvals, one-use plan scope, protected baselines, deliberate uploads |
+| C — make recovery and deletion reliable | 09–11 | Stable persistence, attachment ownership, sign-out that stays signed out, accurate connection/settings state |
+| D — harden boundaries | 12–14 | Bounded Unicode-safe protocols, narrow DNR, validated messages, private diagnostics, verified isolation evidence |
+| E — demonstrate and distribute honestly | 15–17 | Tested installation/artifacts, accurate claims, integrated browser acceptance and adversarial re-review |
+
+| Review findings | Primary epoch | Supporting/final checks |
+|---|---|---|
+| H1 | 01 | 08, 13, 17 |
+| H2 | 06 | 02, 05, 07, 17 |
+| H3 | 05 | 06, 17 |
+| H4 | 02 | 04, 09, 17 |
+| H5 | 03 | 04, 07, 08, 12, 17 |
+| M1, M2 | 06 | 05, 07, 17 |
+| M3 | 07 | 02, 04, 17 |
+| M4 | 04 | 03, 09, 17 |
+| M5 | 08 | 01, 04, 10, 17 |
+| M6 | 03 | 07, 12 |
+| M7 | 10 | 09, 17 |
+| M8 | 11 | 02, 09, 13, 17 |
+| M9 | 09 | 02, 11, 17 |
+| M10 | 01 | 11, 14, 17 |
+| M11, M12 | 12 | 03, 04, 14 |
+| M13 | 13 | 08, 11, 17 |
+| M14 | 05 | 06, 07 |
+| M15 | 15 | 16, 17 |
+| M16 | 09 | 17 |
+| L1, L4, L5 | 15 | 16, 17 |
+| L2 | 14 | 16, 17 |
+| L3 | 13 | 01, 11 |
+| L6 | 11 | 14, 17 |
+| D1 | 16 | Correct affected claims incrementally in every epoch |
+| D2 | 16 | Path/claim review |
+| D3 | 17 | Behavioral regressions in every epoch |
+| Additional OAuth-spike concern | 15 | 16 |
+| Live mutation contracts and native isolation limits | 07, 08, 14 | 17 |
+
+## 3. Shared implementation decisions
+
+These decisions resolve ambiguity for the implementing model. Change one only with a documented concrete reason and corresponding tests; do not silently substitute a weaker policy.
+
+### 3.1 Effects, authority, and Auto
+
+1. Availability, effect validation, plan necessity, consent, conflict checks, transport policy, and journaling are separate checks. Passing one does not skip another.
+2. Define a small validated effect description next to `writes/classify.ts` (a new `writes/effects.ts` is appropriate if needed). It contains the canonical tool name, complete canonical execution arguments, all affected existing targets, parent/destination, affected-object count, risk category, and whether a baseline or substantial-work plan is required. Use explicit adapters for supported tool shapes, not recursive extraction of every string called `id`.
+3. Freeze a JSON-compatible snapshot before showing consent. Compare the complete canonical argument structure, preserving array order and every provider field. Sort object keys for deterministic comparison; normalize only verified identifier fields. Reject non-JSON values, cycles, malformed objects, excessive nesting, and unknown effect shapes. Never use a model-generated summary as the comparison key.
+4. User text, current-page metadata, mentions, and selected files are inputs, not machine-verifiable grants of arbitrary effects. In particular, being on a page or choosing Auto must not authorize a write when the user asked only for analysis.
+5. Use existing Ask behavior for ungranted edits. For deterministic Auto without a natural-language authorization detector, introduce a small explicit composer option **Allow small edits this turn**, off by default and available only in Auto. It lists the current/explicitly selected target pages and explains its scope before Send. Capture that user-selected grant at Send. No model tool can set it. Auto without this grant requests ordinary action consent; switching mode does not silently set it.
+6. The small-edit grant permits only fixture-verified, non-destructive single-object property updates and targeted text additions on listed pages. It excludes replacement, deletion, creation, moves, schema/view changes, upload, unknown effects, and out-of-context targets. Cap it at five successful or dispatched logical effects in the turn; a bulk call is counted by objects, never as one. Crossing the cap requires a reviewed plan before dispatch. Reserve counts synchronously, and never release them after an ambiguous dispatch.
+7. Actual untrusted exposure remains tracked for diagnostics and model context. It cannot broaden the explicit grant. A read-then-write may execute without a new card only when the complete effect satisfies that independently enforced grant or an explicit exact approval. Do not claim that this proves a model's content intent or prevents all semantic injection.
+8. A plan is necessary for destructive schema changes, multi-page moves, database creation, more than five created pages, or a sequence exceeding five affected-object operations. A single cosmetic view rename or one single-page move needs ordinary action approval, not a mandatory workspace plan. A single move still always needs human consent. Repeated small calls contribute to the cumulative five-effect threshold; reads and local planning do not.
+9. Unknown/unvalidated tool effects are **unsupported**, not assumed reads and not fixed by requesting a vague plan. Return a specific unsupported-effect error before execution. Add read adapters only from verified contracts. Unknown provider annotations cannot grant local authority.
+10. Remove future-turn-wide `approveAllUntilTurnEnd`. Initially keep Approve/Reject for individual cards and exact plan approval for batching; no need to add a separate batch UI. A previously approved operation cannot cover a changed target, content, flag, destination, count, connection, or turn.
+
+This adds one explicit control to make Auto's authority auditable. Do not attempt a regex or another model to decide whether freeform user text authorized mutation. Tests must show this control is understandable and does not force plans for ordinary reads.
+
+### 3.2 One operation identity from preview through recovery
+
+Suggested contract sketch, to adapt to existing types rather than paste as a second parallel model:
+
+```ts
+type OperationScope = {
+  operationId: string
+  connectionGeneration: string
+  workspaceId: string
+  threadId: string
+  turnId: string
+}
+type OperationStatus = 'pending' | 'applied' | 'failed' | 'unknown'
+// frozenArgs are the provider arguments actually sent, after validated local
+// fields are removed. Keep internal metadata outside the provider payload.
+// An undo is another operation, linked to its original journal entry.
+```
+
+- Scope comes from Nox runtime and connection identity, never model fields. Refuse mutation without a persisted thread and established workspace scope; remove the production `unscoped` fallback for effects.
+- Plan operation state is `available → reserved → consumed`. Reserve atomically in synchronous local code before an await; persist intent before dispatch. Release a reservation only for a proven pre-dispatch failure. Dispatch, cancellation after dispatch, and lost replies consume it. Retry requires reconciliation and new consent.
+- Persist `pending` before any mutation request. A successful response establishes applied effect; failed verification changes verification/undo availability, not that fact. A lost response, parse failure after dispatch, or abort after dispatch is `unknown` unless reliable evidence proves the outcome.
+- Distinguish `failed` (known not applied) from `unknown`. An HTTP status, JSON-RPC error, or tool `isError` is not universal proof of rollback, especially for bulk calls. Provider-specific known-no-effect cases require a captured contract. The safe default after dispatch is unknown.
+- On startup, old pending operations become unresolved/unknown for display without replay. Successful readback can provide evidence but cannot always prove authorship. When creation cannot be identified uniquely, retain unknown and ask the user to inspect; never infer absence from one empty search result.
+- A successful remote effect followed by local update failure is visibly **Applied; recovery record could not be updated** for the current session. The older pending record remains recoverable on restart. Do not promise durable information that the failing store could not save.
+- Existing `applied`/`failed`/`undone` historical records remain readable. Do not give old rows invented authorization, baselines, or safe inverses. Added optional fields do not alone require an IndexedDB version bump; change version only for actual store/index migrations.
+
+### 3.3 UI and evidence rules
+
+- Every approval shows operation, all targets/destination, affected count, changed fields or content, and undo limitation. Full canonical payload is reachable before Approve. A collapsed preview says it is a preview.
+- Prefer existing cards, native `<details>`, wrapping `<pre>`, and existing activity rows. Keyboard focus enters a new approval predictably, Escape/reject never approves, and focus returns to the composer after resolution. Avoid new modal stacks.
+- No component can grant authority by hiding a button. Runtime guards are mandatory. UI disabling explains why the action is unavailable.
+- Unknown, failed, stopped, applied, verified, and undone are distinct observable states. A stopped assistant can still have an applied or unknown tool operation.
+- Browser acceptance checks use only disposable synthetic data and an explicitly designated scratch parent. Attaching files, editing Notion, and changing another application's permissions are not authorized merely by this plan-writing task. The executing user must designate/authorize the live test scope. Do not automate OAuth permission dialogs.
+- Network, IndexedDB, and native-surface claims need instrumentation as well as Computer Use. If the computer-control tool cannot inspect them, use an approved browser/network test interface or record the check as blocked; a screenshot cannot prove zero network requests.
+
+## 4. Wave A — stop unsafe effects
+
+### Epoch 01 — private rendering and faithful preference startup
+
+**Findings:** H1, M10. **Depends on:** none. **Outcome:** rendering an answer or saved history sends no passive remote resource request; saved Web research off applies before the first send.
+
+**Read/modify:** `extension/src/lib/markdown.ts` (`renderMarkdown`), `extension/manifest.config.ts`, `extension/src/sidepanel/MessageParts.tsx`, `Composer.tsx`, `EmptyState.tsx`, `App.tsx`, `store.ts`, `extension/src/lib/settings.ts`.
+
+**01.1 — `fix(privacy): prevent automatic resource loads from generated content`**
+
+1. Convert Markdown image tokens into escaped text placeholders or ordinary user-clicked links before HTML insertion. Raw HTML resource tags must be removed by the sanitizer, not transformed with a broad regex over arbitrary HTML.
+2. Forbid automatic sinks including `img`, `picture`, `source`, `audio`, `video`, `track`, `iframe`, `object`, `embed`, `link`, `meta`, SVG resource features, and source/style/event/ping attributes. Keep existing safe anchors and Notion UUID rewriting. Do not regress code blocks, tables, or ordinary text.
+3. Stop rendering DOM-derived remote page icons as `<img src=...>`. Use a bounded emoji/text icon or packaged fallback. Do not load remote images merely because they are on a Notion hostname.
+4. Add explicit production extension-page CSP: packaged scripts/fonts/resources, no media/object/frame loads, and images restricted to packaged assets (add local blob support only if actually required). Enumerate connect destinations after inspecting OAuth discovery and upload contracts; do not use a broad default merely to hide violations. Inline styles may require an explicit style policy for the existing UI; never permit inline scripts or eval in production. Verify CRXJS development separately without weakening the production CSP.
+
+**01.2 — `fix(settings): hydrate research preference before enabling send`**
+
+1. Remove the model/effort/tier guard around `agentLoop.setOverrides` in `App.tsx`. Apply `webSearchEnabled: false` even when all model settings are default.
+2. Introduce a loaded/error readiness state at the existing startup boundary. Send and model turn setup must await settings hydration; a settings read failure shows retry/error instead of silently enabling research.
+3. UI and runtime consume the same effective setting. Changing model/effort/tier preserves Web research preference. Opening another panel does not reset it.
+
+**Regressions:** extend `tests/markdown.test.ts`, `tests/activity-ui.test.tsx`, `tests/setup-screen.test.tsx`, and `tests/codex/research.test.ts`. Cover Markdown/raw images, `srcset`, posters, SVG, CSS URL attempts, hostile icon metadata, history restoration, research-only false, delayed hydration, hydration failure, and model change. Verify ordinary links remain clickable and no source attribute survives sanitization.
+
+**Final tests:** EXT gate; browser C01 and C02 from section 11. **Must work:** sources remain readable/clickable, packaged fonts/icons render, setup still connects, remote images do not auto-load, and research stays off across restart. A DOM-only test is not enough to close H1's live evidence requirement.
+
+### Epoch 02 — one runtime owner for all mutations
+
+**Finding:** H4. **Depends on:** 01. **Outcome:** forward writes, uploads, and undo share an execution boundary; viewers cannot write even through direct calls.
+
+**Read/modify:** `extension/src/lib/history/panel.ts` (`claimWindowRole`), `extension/src/lib/agent/panel.ts`, `loop.ts`, `extension/src/lib/writes/gate.ts`, `journal.ts`, `undo.ts`, `extension/src/sidepanel/ChatPanel.tsx`, `ApprovalCards.tsx`, `MessageParts.tsx`.
+
+**02.1 — `fix(writes): enforce runtime ownership and serialize mutations`**
+
+1. Keep the existing long-lived `nox-agent-owner` Web Lock. Expose a read-only runtime lease/generation from the module holding the actual lock; do not trust a mutable Zustand role alone.
+2. Inject an ownership assertion and a small serial mutation runner into the gate. Use the same runner for forward writes, upload effects, and undo. Check lease, connection generation, and cancellation on admission and immediately before external dispatch.
+3. Serialize the critical interval encompassing final guard, durable intent, dispatch, response accounting, and journal update. Reads can retain scheduler concurrency. Do not hold an IndexedDB transaction open while awaiting network.
+4. Reject undo while a turn is active instead of queuing it to run unexpectedly later. Prevent a new turn while undo is active. A queued operation from an expired lease/turn fails without transport.
+5. Hold execution ownership until in-flight bookkeeping settles where possible. On panel loss, the next owner must reconcile unresolved journal intent before another conflicting effect; epoch 04 adds that durable check. A Web Lock cannot cancel a request already committed by the server.
+
+**02.2 — `fix(undo): coordinate undo entry points and restored controls`**
+
+1. Both `undoActivity` and `UndoBar.runUndo` use one runtime undo function. That function validates scope and status again from storage, rather than trusting a restored activity row.
+2. Remove enabled undo controls in viewer/pending role and while busy. Keep the reason visible. Guard duplicate clicks and direct `writeGate.handleUndo` calls as well.
+3. Fix `claimUndo` cleanup when reading storage throws: release the in-flight claim on every failure. Atomic undo status reservation is completed with epoch 04; do not treat a per-instance boolean as cross-window coordination.
+
+**Regressions:** `tests/viewer.test.tsx`, `tests/activity-ui.test.tsx`, `tests/writes/gate.test.ts`, `tests/history.test.ts`; add **new** `tests/writes/ownership.test.ts` if needed. Restore a reversible row into a viewer, directly invoke undo and write routes, race undo with a turn, double-click undo, expire a queued lease, and fail a journal read. Count external effects; viewer count must be zero, simultaneous writes at most one.
+
+**Final tests:** EXT gate; C03. **Must work:** owner chat remains usable, viewer history stays readable, and undo can be used once only when idle and safe. Until epoch 04, crash-time ambiguity remains an open blocker.
+
+### Epoch 03 — safe retries and atomic scheduler admission
+
+**Findings:** H5, M6. **Depends on:** 02. **Outcome:** one user mutation cannot silently become two; global and search budgets both apply.
+
+**Read/modify:** `extension/src/lib/mcp/scheduler.ts` (`acquire`, `schedule`, `retryDelayFor`), `client.ts` (`send`, `parseRetryAfter`), `extension/src/lib/notion/index.ts` (`scheduleCallTool`), `extension/src/lib/writes/gate.ts`.
+
+**03.1 — `fix(mcp): retry only operations with established retry safety`**
+
+1. Add an explicit retry-safety option to scheduling. Determine it from trusted known read classification at `scheduleCallTool`, not an argument the model supplies. Unknown effects and every mutation default to no retry.
+2. Search/fetch may retry transient failures under the existing bounded retry count. Mutations, upload tickets, blob POSTs, and undo must not retry 429, 5xx, RPC errors, lost replies, or parse errors without provider proof of non-execution. Initially implement no automatic mutation retry at all.
+3. Distinguish pre-dispatch failures from uncertain post-dispatch failures so epoch 04 can record honest outcomes. Count dispatch at actual fetch invocation, after token acquisition and final abort check. Do not classify a local missing-token error as an already-sent request.
+4. Cancellation after server commit is not “no changes made.” Propagate uncertainty to the gate and activity result. No reconnect path may replay the submitted mutation.
+
+**03.2 — `fix(scheduler): reserve concurrency and both rate budgets together`**
+
+1. Refill/recheck all needed token buckets and concurrency in one admission loop. Reserve all permits synchronously when all conditions hold. Search spends one global token and one search token.
+2. On every wakeup recheck concurrency and tokens; do not reserve concurrency while sleeping for tokens. Keep a bounded/fair waiting mechanism using existing primitives. Check abort before invocation and release exactly once in `finally`.
+3. Preserve the existing token-bucket burst capacities and document them; do not claim a strict rolling-window quota. Fake-clock tests measure production limits and `maxConcurrent: 1` with long tasks.
+4. Positive Retry-After seconds/date is a minimum, not capped at 30 seconds. Only locally generated exponential delay has the cap. If the remaining turn deadline is shorter, stop with a rate-limit/deadline explanation. Waiting does not keep a mutation guard valid.
+
+**Regressions:** `tests/scheduler.test.ts`, `tests/notion-facade.test.ts`, `tests/mcp-client.test.ts`, `tests/writes/gate.test.ts`. Simulate commit-then-503, lost creation response, partial bulk result, 429 after effect, plain read retry, zero dispatch on cancelled admission, shared search/global timestamps, three waiting slow tasks, 120-second/date Retry-After, deadline exhaustion, and permit release after exceptions.
+
+**Final tests:** EXT gate. **Must work:** reads still recover from temporary failures; uncertain mutations return a visible unresolved result with exactly one dispatch. Real ambiguous-failure tests belong to a controlled fixture, not artificial disruption of valuable writes.
+
+### Epoch 04 — durable mutation intent and honest recovery
+
+**Finding:** M4; closes the durable portion of H4/H5. **Depends on:** 02–03. **Outcome:** every dispatched effect has a durable identity; uncertain work survives restart without automatic replay.
+
+**Read/modify:** `extension/src/lib/writes/journal.ts`, `gate.ts`, `undo.ts`, `extension/src/lib/history/schema.ts`, `restore.ts`, `extension/src/lib/agent/activity.ts`, `panel.ts`, `extension/src/sidepanel/MessageParts.tsx`, `ApprovalCards.tsx`.
+
+**04.1 — `feat(journal): persist intent before external effects`**
+
+1. Evolve `JournalEntry` with operation scope, pending/unknown status, dispatch/outcome metadata, and optional linked original operation for undo. Preserve old rows and current indexes unless a demonstrated query needs another index.
+2. Replace post-success-only `record` usage in mutations with begin-intent and settle-outcome operations using the same ID. Capture thread/turn/workspace/generation synchronously when enqueuing, not inside the later promise callback.
+3. Persist needed pre-image and frozen execution payload before dispatch. If this fails, return a storage error and make zero external calls. A record containing only character count/hash is not a recoverable inverse.
+4. Persist applied immediately after a confirmed successful response, before optional verification reads. Then store verification and safe inverse information. If the success-record write fails, retain pending and show the session's known applied/recovery-warning state.
+5. Restrict default storage listing to thread/workspace scope using `by_thread`; direct lookup uses `get`. Do not scan every prior payload to assign a timestamp; keep IDs unique and a deterministic timestamp/ID tie-breaker.
+
+**04.2 — `fix(recovery): reconcile unresolved operations and journal undo`**
+
+1. Restore pending/unknown as prominent unresolved activity. Block conflicting mutations and undo until inspected/reconciled. Allow safe reads for investigation. Unknown creation under a parent conservatively conflicts with another matching creation there.
+2. Implement narrow readback for supported uniquely identifiable updates. Display evidence with an inspect link; do not automatically replay, infer authorship, or mark an unidentifiable creation absent.
+3. Undo creates its own durable intent linked to the original operation, reserves the original in one local transaction, and passes through ownership, no-retry, capability, and conflict checks. Mark the original undone only when undo is known applied. A crash cannot leave it safely clickable a second time.
+4. Cancelling before dispatch settles known failure/cancelled detail; after dispatch settles unknown unless response evidence establishes applied. Do not let an abort prevent local outcome bookkeeping.
+5. Keep partial assistant text and commentary during recovery merges. Add visible not-undoable reasons and a validated returned-object link where a supported creation response supplies one.
+
+**Regressions:** `tests/writes/gate.test.ts`, `tests/history.test.ts`, `tests/history-turns.test.ts`, `tests/activity.test.ts`, `tests/activity-ui.test.tsx`. Inject failures before intent, after intent/before dispatch, after server commit/before response, after success/before local update, during verification, and after undo/before status update. Restart with each record and assert no replay. Change active thread while a queued intent waits and assert original scope is retained. Verify legacy records still restore.
+
+**Final tests:** EXT gate; C04 and C09. **Wave A gate:** all High regressions addressed so far pass; rendering, ownership, retry and durable-outcome evidence exists. H2/H3 remain intentionally open until Wave B, so this is not public-release readiness.
+
+## 5. Wave B — make consent precise and usable
+
+### Epoch 05 — validated effects and complete reviewable payloads
+
+**Findings:** H3, M14; foundation for H2/M1. **Depends on:** 04. **Outcome:** malformed proposals never reach UI/transport, and the approved payload equals the executed payload.
+
+**Read/modify:** `extension/src/lib/writes/classify.ts`, **new if useful** `writes/effects.ts`, `approvals.ts`, `gate.ts`, `extension/src/lib/architect/plan.ts`, `tool.ts`, `plan-engine.ts`, `extension/src/sidepanel/ApprovalCards.tsx`, `PlanCards.tsx`.
+
+**05.1 — `refactor(writes): validate supported effects before consent`**
+
+1. Implement the small effect adapters from section 3. Inspect offered tool schemas and existing fixtures first. Support current known forms deliberately; reject shape mismatches with `UNSUPPORTED_EFFECT` or `INVALID_ARGUMENTS` before any approval or request.
+2. Parse every affected target and destination once. Use that parsed effect in approval, plan comparison, guard, journaling, and transport classification. Remove inconsistent `firstString`/any-ID authorization decisions after migrating callers.
+3. Reject model-supplied internal fields such as `__nox_expected_hash`; carry trusted undo hashes outside arguments. Do not advertise `injected_request` as a detector. Stripping a marker is not evidence that intent is safe.
+4. Bound canonical payloads before expensive cloning/rendering: start with 512 KiB UTF-8 per operation, depth 20, and 100 entries in any effect list; the tighter per-effect/plan limits still apply. Exceeding a bound returns a size-specific refusal, never truncation followed by execution. Verify normal supported operations fit; adjust a bound only with fixtures and tests.
+
+**05.2 — `fix(approvals): bind consent to a complete immutable payload`**
+
+1. Replace the 2,000-character `payloadJson` slice with the full bounded canonical JSON. Show a short human summary plus labelled collapsed full details. Long content wraps and scrolls within the panel; targets/counts/destructive flags stay outside the content preview.
+2. Keep a frozen private execution snapshot; components receive display data, not mutable authority. After awaiting consent, dispatch that snapshot and revalidate current scope. Editing the original request object cannot change what runs.
+3. Remove future approve-all authorization and its control. Reject stale/double decisions; cancel clears pending cards and grants. Label unsupported undo accurately before consent.
+4. Plan validation checks every object/array field, supported kind, real identifier type, nonempty bounded strings, duplicate operation IDs, and list count. Keep evidence at 1–20 and plan operations at 1–10, leaving room within 12 dynamic calls for the plan and retrieval; explain that reads/continuations also use the limit. Reject invalid consequences rather than quietly filtering them.
+5. Evidence UI says inspected only for Nox-recorded successful retrievals in the current scope. Unknown IDs are rejected as inspection evidence or explicitly shown as unverified claims that cannot satisfy required evidence. `evidence: [null]` and numeric targets return model-readable validation errors without a pending card.
+
+**Regressions:** `tests/writes/approvals.test.ts`, `tests/writes/classify.test.ts`, `tests/writes/gate.test.ts`, `tests/architect/plan-engine.test.ts`, `tests/plan-ui.test.tsx`; add **new** `tests/approval-ui.test.tsx`. Put long content before destructive flags and extra targets; expand full payload; mutate original args after requesting consent; submit null/primitive evidence, fabricated IDs, duplicate IDs, oversize lists, cyclic/non-JSON unit inputs, and unknown tool shapes. Assert no transport and no render crash on rejection.
+
+**Final tests:** EXT gate; C05. **Must work:** one small Ask edit presents one readable card with complete inspectability, and approving it executes exactly that action. Plan scope matching is completed next.
+
+### Epoch 06 — scoped plans, consistent Auto, and fewer interruptions
+
+**Findings:** H2, M1, M2; remaining M14 and future approve-all risk. **Depends on:** 05. **Outcome:** reads need no plans, small edits need at most one consent step, and approved transformations execute only their bounded operations.
+
+**Read/modify:** `extension/src/lib/architect/plan.ts`, `plan-engine.ts`, `tool.ts`, `extension/src/lib/writes/classify.ts`, `approvals.ts`, `gate.ts`, `extension/src/lib/agent/panel.ts`, `loop.ts`, `turn-access.ts`, `notion-architect.ts`, `instructions.ts`, `dynamic-tools.ts`, `extension/src/sidepanel/Composer.tsx`, `ChatPanel.tsx`, `PlanCards.tsx`.
+
+**06.1 — `fix(plans): replace self-approval with one-use exact operation grants`**
+
+1. Remove `request(args, mode === 'auto')` and the gate's Auto structural bypass. Explicit plan approval is required for substantial work in both modes.
+2. Extend `PlannedOperation` from `{tool,targetId?,summary}` to a unique local operation label plus complete validated arguments/effect. Bind the approved frozen plan to runtime workspace, connection generation, persisted thread, and turn. Scope expiry includes cancel, timeout, disconnect, sign-out, workspace change, and new turn.
+3. `authorize` must compare complete effects and return a reservation/operation identity, not a reusable Boolean from `.some`. Match all targets, all destinations, contents, schema fields, and counts. Never use omitted target as wildcard or accept one matching ID from a batch.
+4. Consume each approved operation at dispatch, including unknown outcomes. A repeat of the same payload requires a separately listed operation. Concurrent identical requests cannot reserve the same slot.
+5. For operations using IDs returned by a previous approved creation, support only a small explicit reference form, e.g. a reference to a preceding operation's validated created-object slot. Resolve via a tool-specific response adapter, not a model-provided ID or arbitrary JSON path. Reject forward/cyclic references, missing result IDs, and extra created objects. Show the relationship in the plan before consent. If a provider result shape is not verified, require a second concrete plan after creation instead of widening authorization.
+
+**06.2 — `fix(policy): separate material plans from action approval`**
+
+1. Implement the thresholds and exceptions in section 3.1. Reads/search/continuations bypass plan/action consent but keep capability/budget checks. Verify any newly added read classification such as meeting-note query before enabling it.
+2. One view-name-only change and one single-page move use ordinary action approval. Destructive/ambiguous view/schema changes remain explicitly reviewed; deletion of schema fields and broad moves require a plan.
+3. Track cumulative dispatched effects in turn access state; count each object and each repeated effect. At the sixth unplanned effect return an actionable plan-required error before dispatch. A plan containing the remaining explicit scope can authorize subsequent bounded work; do not demand reapproval of already applied effects.
+4. Implement the Auto small-edit composer control specified in 3.1. Capture normalized target list, grant, mode, and turn identity at Send. Reset the grant for the next turn. No settings persistence, inferred user-intent parser, or model-controlled Boolean.
+5. Fix provenance construction: an empty `prepareContext` callback is not evidence exposure; actual successful/partial Notion content is. Local plan receipts and internal status messages do not automatically taint the turn as workspace content. Preserve untrusted wrapping of real external content.
+6. After exact plan approval, covered actions skip only redundant ordinary consent. Capabilities, ownership, runtime scope, guard, scheduler, ledger, and cancellation still run. Changed effects return mismatch with a clear reason and new review path. Rejected operations are not silently reproposed as a different plan without a new user request.
+7. Update dynamic tool schemas, planner instructions, composer help, and architecture together. Do not leave prompts describing the deleted Auto bypass or broad approve-all behavior.
+
+**Regressions:** extend real assembly tests in `tests/agent/agent-modules.test.ts`, `tests/codex/loop-integration.test.ts`, `tests/agent/turn-access.test.ts`, `tests/writes/gate.test.ts`, `tests/architect/plan-engine.test.ts`, `tests/plan-ui.test.tsx`. Explicit cases: omitted target; same tool/target changed content/schema; changed parent; allowed+unallowed batch; reused operation; stale connection; untrusted proposal; simultaneous duplicate; failed result reference; no-mention/read-then-write/mentioned-content turns; analysis-only Auto without grant; bounded Auto with grant; out-of-scope Auto; five versus six cumulative effects; plan rejected; ten exact covered operations after one approval without extra cards.
+
+**Final tests:** EXT and BRIDGE gates; C06, C07, C08. **Must work:** ordinary reads have zero plan cards; small Ask edits one action card; explicitly granted small Auto edits zero redundant cards; one approved substantial plan covers its exact operations once. Count real dynamic calls in the ten-operation test so plan+reads do not accidentally exceed 12.
+
+### Epoch 07 — real read baselines and conservative conflicts
+
+**Finding:** M3; supports plan evidence and undo. **Depends on:** 06. **Outcome:** replacement cannot use stale/failed/partial context as a complete baseline.
+
+**Read/modify:** `extension/src/lib/writes/guard.ts`, `gate.ts`, `inverse.ts`, `extension/src/lib/agent/panel.ts` (`fetchPageMarkdown`, `fetchMentionContext`), `context.ts`, `extension/src/lib/notion/index.ts`; add a small **new** response-normalization module under `lib/notion/` if shared.
+
+**07.1 — `fix(guard): require successful complete baseline for content writes`**
+
+1. Capture redacted fixture shapes for plain, rich, partial, unavailable, and tool-error fetches. Preserve structural metadata needed to determine completeness. Do not treat every concatenated text envelope as page Markdown.
+2. Return structured retrieval records: normalized target, source/call identity, complete/partial/unavailable status, normalized content, hash, workspace and generation. Plan evidence uses these records. A guard-only read that the model never saw must not establish the model's edit baseline.
+3. Reject tool `isError`, unrecognized wrappers, omitted subtree content, and unknown completeness as destructive-replacement baselines. A partial read can support limited analysis, not a whole-page replacement or safe whole-page inverse.
+4. Require the model to re-fetch after resume/reconnect when no current valid baseline exists. Never silently bless two matching fresh guard reads against an old model proposal. Re-read and return a conflict with a new review requirement when the approved content was based on an older state.
+5. Bind the baseline hash to the approved operation. Inside epoch 02's serial mutation runner, after scheduler admission and immediately before dispatch, read/check the current page against it. Avoid deadlock by not holding the sole scheduler slot while scheduling the guard read; perform guards before the final mutation slot and recheck after a material admission delay, with a bounded loop/deadline. Do not leave an unbounded delay between final check and request.
+6. Retire the read hash after a write, unknown outcome, scope change, or incompatible new read. Guard failure emits no mutation. State the residual race: an external edit between final read and provider write cannot be atomically excluded without provider conditional-write support.
+
+**07.2 — `fix(undo): require verified lossless supported inverse`**
+
+1. Keep creations, properties, schema, views, moves, and unverified rich content not-undoable. Do not expand inverses from regex absence alone.
+2. Allow content inverse only for a positively recognized complete plain-content fixture shape and attributable post-write content. Confirm the expected post-hash before undo, using internal trusted metadata.
+3. Show precise conflict/not-undoable explanations and any real target link in activity and approval. Readback mismatch means applied but unverified where success was acknowledged, not a fabricated failed/no-change result.
+
+**Regressions:** `tests/writes/gate.test.ts`, `tests/agent/agent-modules.test.ts`, `tests/history.test.ts`, `tests/codex/loop-integration.test.ts`; add redacted **new** fixtures under `tests/fixtures/notion/`. Missing target, `isError`, wrapper mismatch, partial fetch, stale resume, external edit before final read, two concurrent writes, rate wait, and edited page before undo must be covered.
+
+**Final tests:** EXT gate; C09 and C10. **Must work:** a properly fetched small edit succeeds, stale replacement refuses with a useful reread path, safe supported undo works once, unsupported undo is visibly unavailable. Real provider normalization acceptance is mandatory before enabling replacement/undo for that shape.
+
+### Epoch 08 — deliberate file disclosure through verified destinations
+
+**Finding:** M5. **Depends on:** 04–07. **Outcome:** file selection alone never uploads bytes; ticket and upload outcomes use the same safety boundary.
+
+**Read/modify:** `extension/src/lib/attachments/upload-tool.ts`, `extension/src/lib/agent/panel.ts`, `dynamic-tools.ts`, `executor.ts`, `turn-access.ts`, `extension/src/lib/notion/capabilities.ts`, `extension/manifest.config.ts`, approval/journal UI.
+
+**08.1 — `fix(upload): require scoped consent and supported capability`**
+
+1. Advertise `nox-upload-local-file` only when the discovered tool list and capability gate positively support the underlying upload workflow. Recheck capability at execution; a stale advertised tool must fail safely.
+2. Keep current-turn selected attachment-ID validation. Validate file exists, size/type matches stored metadata, and identity belongs to the persisted turn. A model cannot name an arbitrary attachment in history.
+3. Route upload through the owner/serial effect path, exact consent, and durable journal. Show name, size, MIME type, provider/destination class, and lack of automatic remote deletion. Require explicit upload consent in Ask and Auto; approved exact upload operations may inherit it. A question about a file and even Auto small-edit permission do not authorize upload.
+4. Remove raw underlying ticket creation as an alternate advertised model route if it would bypass the same upload effect policy. Internal ticket creation still goes through capability/rate/no-retry checks.
+
+**08.2 — `fix(upload): validate provider ticket contract and refuse redirects`**
+
+1. Obtain an authoritative provider contract and synthetic/redacted live ticket/result fixture before enabling the workflow. Existing code guesses `upload_url`, `form_fields`, `field_name`, and `suggested_markdown`; do not preserve guessed fallback aliases without evidence.
+2. Validate ticket is not `isError`, required field types/lengths, exact approved HTTPS origins and permitted URL shape, and absence of URL credentials. Use URL parsing and exact host/origin comparison, never suffix-only matching or generic cloud-storage wildcards.
+3. Send with redirect rejection, cancellation, bounded response reading, and no Notion bearer token attached to a different upload origin. Form fields come only from the verified contract. Reject a redirect before bytes reach its destination; test this at transport level.
+4. One durable upload operation can record ticket-created/bytes-dispatched/upload-confirmed stages. Stop on cancellation between stages. Unknown POST outcome is not retried. Successful upload followed by failed page insertion stays visible as uploaded but not attached to a page.
+5. Add only verified required upload origins to host permissions/CSP as necessary. If the contract cannot be established, hide/disable upload with a clear unsupported reason and retain local attachment handling; do not claim the upload feature passed live acceptance.
+
+**Regressions:** `tests/attachment-upload.test.ts`, `tests/attachments.test.ts`, `tests/capabilities.test.ts`, `tests/agent/agent-modules.test.ts`, `tests/writes/gate.test.ts`. Selected-but-not-requested, cancelled/rejected consent, missing capability, stale file ID, wrong origin, URL credentials, redirect, tool-error ticket, oversize result, abort after ticket, commit-then-network-error, and uploaded-but-insertion-failed.
+
+**Final tests:** EXT gate; C11. **Wave B gate:** H2/H3 regressions and browser consent matrix pass; reads and small edits are smooth; every enabled effect has a verified adapter. Unsupported upload is an acceptable stated alpha limitation, not a passed upload test.
+
+## 6. Wave C — make recovery and deletion reliable
+
+### Epoch 09 — recoverable history and cooperative database lifecycle
+
+**Findings:** M9, M16. **Depends on:** 04, 08. **Outcome:** one failed partial save does not poison the final answer, and other panels do not silently prevent deletion forever.
+
+**Read/modify:** `extension/src/lib/history/schema.ts`, `turn.ts`, `panel.ts`, `repository.ts`, `restore.ts`, `extension/src/lib/writes/journal.ts`, `extension/src/sidepanel/ChatPanel.tsx`, `ApprovalCards.tsx`, `SettingsModal.tsx`.
+
+**09.1 — `fix(history): reuse database connections and coordinate deletion`**
+
+1. Cache one open promise/connection per panel. Reset on open rejection, termination, explicit close, and version change. Add `blocking` handling that closes promptly instead of retaining a strong set forever.
+2. Add a small extension-context deletion message or BroadcastChannel. Mark storage as deleting before close; other panels cancel turns, invalidate grants, close DB connections, and stop auto-reopening. Late streaming/journal callbacks cannot recreate a deleted database.
+3. Deletion state must survive a transient message miss for an already-open panel; use a shared deletion generation/tombstone or equivalent existing storage event, and test it. Do not use an unauthenticated webpage message.
+4. Clear credentials promptly through epoch 11's shared invalidation path; until that exists, wire a clearly named dependency rather than waiting on DB deletion. Show “Another Nox window is keeping storage open; close it to finish” when blocked. Preserve the pending request's real lifecycle; do not declare success on timeout or auto-open a fresh database while deletion is pending.
+5. Replace `UndoBar`'s every-three-second full-journal polling with updates after known journal changes and scoped hydration on thread change. Reuse `by_thread`; viewer refresh can use the same small message channel. Avoid maintaining another full copy of inverse payloads solely for a count.
+
+**09.2 — `fix(history): recover the persistence queue and preserve final saves`**
+
+1. In `startPersistedTurn`, give each save its own rejecting result while the internal serialization tail recovers for the next operation. Do not hide failures by returning an always-successful promise.
+2. Coalesce obsolete unsent partial snapshots: at most one in-flight save and one latest waiting partial. A final/outcome snapshot supersedes waiting partials and is always attempted after the current operation settles. Earlier partials cannot overwrite a final.
+3. Surface “History could not be saved” near the affected answer, with a retry of the full local snapshot and export/copy option. Do not rerun the model turn to retry persistence.
+4. Capture message/thread identities before async work. New chat/thread deletion must not redirect or resurrect old saves. Preserve interrupted/failed outcome, activity, and usage in the latest successful save.
+
+**Regressions:** `tests/db/db.test.ts`, `tests/history.test.ts`, `tests/history-turns.test.ts`, `tests/activity-ui.test.tsx`, `tests/viewer.test.tsx`. Repeated calls reuse open connection; two connections receive versionchange; blocked deletion is visible; late callbacks do not recreate DB; failed partial followed by successful final; final failure retry; rapid partials are bounded; switched thread remains isolated.
+
+**Final tests:** EXT gate; C12 and C13. **Must work:** reopened history matches the latest saved state, temporary failure recovers, and data deletion completes with cooperative viewers or shows a specific blocker.
+
+### Epoch 10 — attachment ownership and complete thread deletion
+
+**Finding:** M7. **Depends on:** 08–09. **Outcome:** removed draft files do not linger on disk, and deleting a thread removes its owned file bytes.
+
+**Read/modify:** `extension/src/sidepanel/Composer.tsx`, `ChatPanel.tsx`, `extension/src/shared/attachments.ts`, `extension/src/lib/history/attachments.ts`, `repository.ts`, `schema.ts`, `turn.ts`.
+
+**10.1 — `fix(attachments): keep drafts ephemeral and persist ownership on send`**
+
+1. Prefer keeping unsent `File` objects in composer memory; do not persist bytes on selection. Keep local IDs and metadata stable while editing the draft. Removing a chip/new chat releases the draft reference. On refresh, unsent files are intentionally discarded; say so if needed.
+2. Before starting Codex, persist the user message, selected attachment bytes, and thread/message ownership in one bounded IndexedDB transaction (thread creation included if necessary). The tool receives only IDs committed for that turn. If persistence fails, retain the local draft and make no upload/turn request.
+3. Bound selection to ten files, 20 MiB per file and 25 MiB total as initial local limits, tightened if the verified provider requires less. Display which files were rejected and why. Check aggregate size before reading all bytes; do not silently filter oversized files. Values are product limits, not assertions about provider maximums.
+4. Do not reuse one attachment row across threads. If existing history references a shared legacy file, either preserve it until all references are gone or copy ownership safely before deletion. Do not accidentally delete another retained message's data.
+
+**10.2 — `fix(history): delete thread-owned attachments atomically`**
+
+1. Add `attachments` to the thread deletion transaction. Read keys and delete messages/journal/attachments/metadata within the same transaction, under the deletion/busy coordination from epoch 09; avoid pre-reading children outside the transaction.
+2. Legacy orphan blobs cannot reliably be assigned to conversations from the current schema. Offer a clearly scoped cleanup of unlinked legacy attachments after checking retained references, or remove provably unreferenced rows in a documented migration. Never guess ownership by filename.
+3. Exports contain attachment metadata and explicitly exclude bytes unless a separately requested export feature is implemented. Do not put blob content, upload tickets, or tokens into ordinary Markdown exports.
+
+**Regressions:** `tests/attachments.test.ts`, `tests/history.test.ts`, `tests/history-turns.test.ts`, `tests/db/db.test.ts`. Remove before Send, new chat, reload draft, failed atomic send, multiple files/limits, sent file lookup, delete attached thread, retained reference, migration of legacy orphans, export disclosure.
+
+**Final tests:** EXT gate; C11 and C12. **Must work:** attachment chips behave predictably, failed send preserves the draft, local thread deletion removes its file bytes without touching unrelated conversations.
+
+### Epoch 11 — sign-out races and truthful connection recovery
+
+**Findings:** M8, L6; completes M9/M10 lifecycle. **Depends on:** 09–10. **Outcome:** sign-out cannot resurrect credentials, and a disconnected bridge has a working reconnect path without replay.
+
+**Read/modify:** `extension/src/lib/oauth/tokens.ts`, `discovery.ts`, `extension/src/lib/notion/index.ts`, `panel.ts`, `extension/src/lib/codex/panel.ts`, `client.ts`, `native.ts`, `extension/src/sidepanel/codex-connect.ts`, `notion-connect.ts`, `BridgeCard.tsx`, `ConnectionCard.tsx`, `App.tsx`, `store.ts`.
+
+**11.1 — `fix(auth): serialize credential lifecycle and invalidate late refreshes`**
+
+1. Scope refresh/login writes to a persisted credential generation and active authorization. Invalidate generation on sign-out, wipe, delete-all, workspace replacement, and start of a replacement login. Abort stale requests where possible.
+2. A generation check before an awaited storage write is insufficient: serialize final credential writes and clear operations under a shared browser Web Lock, and recheck persisted generation inside it. Only credential persistence uses this short lock; do not hold it across network or revocation. A stale response from another panel must not overwrite a newer login.
+3. Serialize refresh across permitted callers using a separate refresh lock plus a second expiry/token read after acquiring it. Scope old `invalid_grant` handling so it cannot wipe a new login. Prefer owner-only token use; direct second-instance tests still prove safety.
+4. On sign-out, capture the old revocation token, invalidate/cancel active turns and grants, clear local/session tokens promptly, and update UI. Revoke the captured token best-effort with a five-second timeout independently of local completion. Storage-clear failure is visible, not reported as complete sign-out.
+5. Pass validated discovered token endpoint metadata to refresh instead of the hardcoded `/token`. Preserve PKCE/state/issuer checks. Validate token response fields and expiry bounds. If rotation succeeds remotely but storage fails, show reauthentication required; do not promise atomic rotation.
+
+**11.2 — `fix(connection): propagate disconnect and enable explicit reconnect`**
+
+1. Subscribe once at the existing Codex panel assembly to native lifecycle events. Update connecting/connected/error/disconnected state from transport reality. Dispose subscriptions on teardown and ignore stale-generation events.
+2. Reconnect clears stale transport/client state and lists models again even if stale UI formerly said connected. Preserve visible history and stored Codex thread ID. Do not resubmit the failed turn; a user explicitly sends the next message.
+3. Avoid replacing a useful interrupted conversation with a blank setup screen after a connection loss. Reuse connection cards/banner within the existing layout, keeping the prior answer visible and Send disabled until ready. Initial onboarding still uses SetupScreen.
+4. Reapply effective research/model settings after reconnect, and expire all old plan/Auto/upload grants and baselines. Sign-out in one panel propagates to all panels.
+
+**Regressions:** `tests/token-store.test.ts`, `tests/notion-facade.test.ts`, `tests/codex-connect.test.ts`, `tests/setup-screen.test.tsx`, `tests/codex/client.test.ts`, `tests/codex/loop-integration.test.ts`. Late refresh after sign-out and during clear, new-login race, two stores refresh, old invalid_grant, hung revocation, storage failure after rotation, stale disconnect notification, active-turn crash, reconnect/new chat/resume, and research-off preservation.
+
+**Final tests:** EXT and BRIDGE gates; C02, C13, C14. **Wave C gate:** deletion, attachment ownership, final-save recovery, persistent sign-out, and non-replaying reconnect all work in two-panel browser tests.
+
+## 7. Wave D — harden boundaries
+
+### Epoch 12 — Unicode-safe, bounded, correlated protocols
+
+**Findings:** M11, M12. **Depends on:** 03–04, 11. **Outcome:** valid Unicode survives byte splits; malformed/unbounded provider traffic fails predictably without stale buffers or mutation replay.
+
+**Read/modify:** `bridge/nox-bridge.mjs`, `bridge/fixtures/fake-codex.mjs`, `bridge/test-bridge.mjs`, `bridge/PROTOCOL.md`, `extension/src/lib/codex/frame.ts`, `native.ts`, `client.ts`, `extension/src/lib/mcp/client.ts`, `sse.ts`, `jsonrpc.ts`.
+
+**12.1 — `fix(bridge): decode stdout as a stream and cap line framing`**
+
+1. Use `proc.stdout.setEncoding('utf8')` or Node `StringDecoder` once per child process before line framing. Reset decoder/buffer on restart and treat malformed/truncated final protocol data as an explicit failure.
+2. Bound pending decoded line data before concatenating unlimited chunks. Preserve the existing 32 MiB inbound native limit and Chrome's less-than-1-MiB output envelope requirement; document bytes versus UTF-16 character counts explicitly.
+3. Extend fake Codex to split two-, three-, and four-byte sequences inside both arguments and answer notifications. Include large non-ASCII frames, EOF midway through a sequence, restart, and overlong unterminated lines.
+
+**12.2 — `fix(native): validate envelopes and bounded chunk assembly`**
+
+1. Validate exact envelope discriminants and required types before dispatch. IDs must have the protocol's expected finite/integer form; unknown method/result IDs cannot settle unrelated promises. Do not coerce malformed values.
+2. Bound active assemblies, chunk count, per-chunk and aggregate memory, and age. Initial limits: 8 active assemblies, 256 chunks per assembly, 32 MiB aggregate buffered text measured conservatively in bytes, 30-second incomplete-assembly lifetime. Keep protocol-compatible total-character checks as well as byte budgets. Confirm host chunk sizes fit for multibyte content.
+3. Count actual chunks and compare `chunkEnd.chunks`. Reject unknown end, malformed frame, overflow, wrong total/count, and stale assembly; release memory immediately. Expiry must run even if no more frames arrive; dispose its timer on reset/disconnect.
+4. Reply with bounded correlated errors for malformed requests only when a valid request ID is available. Otherwise fail/reset the transport; never echo an entire attacker-supplied frame into an error/log.
+
+**12.3 — `fix(mcp): bound streaming bodies and match only requested responses`**
+
+1. Replace unconditional `response.text()` with bounded streaming reading. Check actual received bytes, including error bodies; Content-Length is only an early check. Initial MCP response/event budget is 8 MiB, with the turn deadline bounding idle streams. Oversize results fail honestly and cannot trigger a mutation retry.
+2. Parse SSE using response content type. Support CRLF/LF/CR line endings, comments, blank event delimiters, and multiline `data:` joined by newline, removing only the one optional space after colon. Ignore supported non-data fields; do not `.trim()` semantic data indiscriminately.
+3. Decode UTF-8 incrementally, including CR/LF and JSON tokens split across chunks. Validate JSON-RPC shape and `result` versus `error`; accept only the matching request ID. Notifications and another ID's error never complete this call.
+4. Stop and cancel the stream reader when the matching complete response arrives. Abort/reset readers on deadline/disconnect. Validate initialize/tool-list/tool-result shapes before using them; unsupported content parts remain bounded untrusted data rather than unsafe casts.
+5. Connect malformed-response-after-write to epoch 04's unknown status. Preserve transport diagnostics using bounded codes, not body dumps.
+
+**Regressions:** `tests/codex/native.test.ts`, `tests/codex/client.test.ts`, `tests/mcp-client.test.ts`, plus **new** `tests/codex/frame.test.ts` and `tests/mcp-sse.test.ts` if useful. Test exact limit and limit+1, wrong types, unknown IDs, missing EOF, all SSE separators, comments first, multiline data, never-ending stream, unrelated error preceding valid result, disconnect cleanup, and Unicode round trip.
+
+**Final tests:** EXT and BRIDGE gates. **Must work:** German/CJK/emoji titles, search text, content arguments, and large answers are byte-semantically preserved; oversized/malformed traffic yields a recoverable connection error with no automatic write replay.
+
+### Epoch 13 — narrow DNR, verified startup, and trusted-context storage
+
+**Findings:** M13, L3. **Depends on:** 01, 11–12. **Outcome:** Nox's Origin exception applies only to its own MCP requests; metadata cannot impersonate navigation or read credentials.
+
+**Read/modify:** `extension/src/background/dnr.ts`, `index.ts`, `extension/src/shared/messages.ts`, `extension/src/content/index.ts`, `extension/src/sidepanel/store.ts`, `notion-connect.ts`, `ConnectionCard.tsx`, `extension/src/lib/chrome-storage.ts`, `extension/src/lib/notion/index.ts`.
+
+**13.1 — `fix(dnr): retain initiator scope and distinguish installed from verified`**
+
+1. Delete variants lacking the extension initiator restriction. Scope the URL to the exact HTTPS MCP endpoint, including deliberate query handling; reject other paths, hosts, and suffix lookalikes. Keep resource type as narrow as verified Chrome permits.
+2. Inspect installed rule equality, not merely ID plus remove-Origin action. If unsupported installation fails, remove the known Nox rule and report compatibility failure. Do not broaden scope for availability.
+3. Fix the authentication/probe circularity explicitly: before OAuth, verify narrow rule installation only and show installed/unverified. Permit credential acquisition, then use a bounded authenticated read-only MCP initialization/probe from the owner to establish an accepted protocol response. Do not send tokens in runtime diagnostic messages or use an ordinary 401 as stripping evidence.
+4. Block normal workspace operation until the scoped connection's authenticated acceptance is established. 401, 403, 429, 5xx, redirect, malformed protocol, missing status, and lookup exceptions are not verification success. After failed validation remove the rule, retain an actionable retry state, and reinstall narrowly on retry.
+5. Describe this as endpoint compatibility acceptance, not direct observation of a removed header. Actual header scope is a supported-Chrome integration test. Require that evidence for each claimed supported Chrome family/version.
+
+**13.2 — `fix(messages): validate source metadata and restrict storage access`**
+
+1. Replace prefix-only `isNoxMessage` with exact discriminant and bounded field validation. Validate page UUID, title/icon string size, tab/window IDs, and URL format at receiving boundaries. Unknown message types are rejected.
+2. Background uses validated `sender.tab.url` and current navigation state for identity. Check sender extension ID/context, tab/frame as appropriate, and stale URL mismatch. Content script title/icon remain untrusted labels, never targets that authorize writes.
+3. Panel accepts current-page messages only from the expected extension background context and validates the full payload again. Control/deletion messages from epoch 09 have separate exact shapes and sender rules.
+4. Set local credential-bearing Chrome storage access to `TRUSTED_CONTEXTS` at background initialization before credential use; session access stays equally restricted. If API support is required but unavailable, give a compatibility error rather than silently relaxing. Test content script metadata still works without storage access.
+
+**Regressions:** `tests/dnr.test.ts`, `tests/notion-page.test.ts`, `tests/notion-facade.test.ts`, `tests/setup-screen.test.tsx`, `tests/live/connect-preflight.test.ts`; add **new** `tests/messages.test.ts`. Verify endpoint/suffix/path boundaries, foreign initiators, unknown probe results, cleanup, pre-OAuth versus post-auth stages, forged/stale metadata, oversized title/icon, and unknown discriminants.
+
+**Final tests:** EXT gate; C15 plus setup reconnect checks. **Must work:** supported Chrome connects through one narrow rule, unsupported cases explain the failure, viewers/content scripts cannot read refresh credentials, and current-page navigation still updates correctly.
+
+### Epoch 14 — private diagnostics and verified Codex boundary
+
+**Finding:** L2; live isolation and evidence limits. **Depends on:** 11–13. **Outcome:** default support logs omit content, and supported model claims identify actual tested capabilities.
+
+**Read/modify:** `extension/src/lib/log.ts`, `extension/src/lib/mcp/errors.ts`, `client.ts`, OAuth errors, `extension/src/sidepanel/ChatPanel.tsx`, `SettingsModal.tsx`, `extension/src/lib/codex/client.ts`, `research.ts`, `scripts/live/codex-smoke.mjs`, `docs/answer-quality-verification.md`.
+
+**14.1 — `fix(diagnostics): export useful metadata without private content`**
+
+1. Remove prompt-prefix logging. Log bounded event category, time/duration, safe status/error code, operation ID, and connection stage. Do not log arguments, inverse Markdown, page titles, upload URLs/form fields, bearer tokens, provider body strings, or full source queries by default.
+2. Console capture must not blindly retain arbitrary exceptions as strings. Convert known errors to safe structured metadata and unknown errors to a generic category. Redaction of common credential keys is defense in depth, not the primary strategy.
+3. Add “Review for private content before sharing” beside Copy logs. Copy is user-initiated; introduce no telemetry or automatic submission. Do not add detailed-diagnostics mode unless a real need appears.
+4. Tests seed unique prompt/token/workspace/upload sentinels through each error path and assert their absence in the exact exported text while hop/status codes remain useful.
+
+**14.2 — `test(codex): record versioned native-tool isolation evidence`**
+
+1. Use the existing real-Codex smoke harness with synthetic data. Record exact resolved executable/version, OS, model ID, settings, surfaced native tools, feature/MCP inspection result, and whether a turn was actually submitted.
+2. Verify disabled web research, no inherited MCP/connectors/plugins, shell/computer/browser/file/image/multi-agent restrictions, turn correlation, and no automatic replay for each model/version claimed supported. Do not infer tool isolation from writable temp cwd or read-only sandbox.
+3. If an unexpected powerful native surface remains, fail closed for that unsupported combination or narrow the advertised support matrix. Do not weaken config allowlists or send provider secrets to Chrome to inspect it.
+4. Record non-provable limits: observed native search may exceed the boundary in flight; no model can promise semantic instruction obedience. Keep a small matrix rather than building a statistical benchmark suite.
+
+**Final tests:** `tests/errors.test.ts`, `tests/codex/research.test.ts`, `tests/codex/client.test.ts`, `tests/codex/loop-integration.test.ts`, **new** `tests/log.test.ts`; EXT, BRIDGE and ROOT gates, then opt-in existing real-Codex harness after inspecting its documented invocation. Never invent CLI flags. C16 checks log export in UI.
+
+**Wave D gate:** strict protocol failures recover, DNR scope is verified in Chrome, content scripts cannot read credentials, diagnostics omit sentinels, and each supported model/version has actual boundary evidence or is explicitly unsupported.
+
+## 8. Wave E — demonstrate and distribute honestly
+
+### Epoch 15 — portable installation, patched tooling, complete archives
+
+**Findings:** M15, L1, L4, L5; retained OAuth-spike concern. **Depends on:** 14. **Outcome:** artifacts contain the right notices, installation respects paths, and CI tests the tooling it ships.
+
+**Read/modify:** `install.mjs`, `bridge/install.mjs`, `bridge/resolve-codex.mjs`, `scripts/release/install.mjs`, `scripts/release/README.md`, `scripts/package-release.mjs`, `scripts/release-smoke.mjs`, `.github/workflows/ci.yml`, `extension/package.json`, `extension/pnpm-lock.yaml`, font provenance/notices, retained OAuth spike under `spikes/` (locate its actual file before editing).
+
+**15.1 — `fix(install): resolve explicit binaries and escape supported paths`**
+
+1. Normalize every selected Codex executable to an absolute existing path, including PATH discovery. Cache successful discovery for the host lifetime. Support an explicit local binary override with a documented name and validation; do not silently ignore an invalid override and launch another version.
+2. Keep candidate version checking bounded. Record the selected path/version locally for diagnosis without leaking provider configuration. Do not equate newest installed with tested-compatible.
+3. Prefer `execFile`/argument arrays over shell strings. Where Windows batch/native wrappers are unavoidable, handle `%`, `&`, parentheses, quotes, and spaces according to the actual shell; Unix wrappers must safely quote quotes, dollar signs, and backticks. Do not use JSON escaping as shell escaping.
+4. Add generated-wrapper fixture assertions using sentinel fake executables in temporary directories. Never execute attack strings against the real installer/registry just to demonstrate quoting. Include missing Corepack/pnpm, no Codex, unsupported browser, moved checkout, and update selection cases.
+5. Provide explicit uninstall/update instructions for registrations and generated files. Keep user Codex login/history separate from Nox cleanup. Advertise only browser/OS combinations actually tested.
+6. For the retained OAuth spike, either remove it if unused with link cleanup or bind callback to loopback, bound requests/timeouts, handle invalid callbacks without killing valid flow, and write token files atomically with restrictive permissions appropriate to the platform. Use synthetic tokens in tests; keep it clearly outside production auth.
+
+**15.2 — `chore(test): update the vulnerable development dependency`**
+
+1. Recheck the maintainer advisory and currently supported patched Vitest version at implementation time. The review names GHSA-82fw-gwwq-j7x9 and 4.1.11; that is historical input, not a permanent latest-version instruction.
+2. Upgrade the smallest compatible patched dependency set with pnpm and regenerate the lockfile normally. Resolve real runner/API changes; do not skip tests or suppress dependency errors. Do not add a publicly reachable mocker/dev endpoint.
+3. Run full tests/typecheck/build and both full and production audit. Record actual advisories/severity and distinguish the single development advisory's multiple dependency paths.
+
+**15.3 — `fix(release): ship licenses and verify archive contents`**
+
+1. Include root `LICENSE` in both GitHub and extension-only ZIPs. Assemble applicable notices for shipped JS and fonts from installed package metadata and authoritative font source/version/license files; do not invent provenance from filenames.
+2. Package into a task-specific temporary staging directory. Do not delete unrelated `.release/` contents. Clean only verified paths owned by the packaging run; preserve source/build output.
+3. Add **new** `scripts/package-release.test.mjs` that builds/inspects isolated synthetic or real staged archives. Assert LICENSE/notices, needed runtime files, no credentials/machine-specific manifests/dev-token UI assets, and version agreement. Inspect contents, not only command exit.
+4. Establish one version source from existing package/manifest wiring. Chrome numeric version and optional alpha display/tag label must have a documented mapping; remove divergent hardcoded export/client/release labels or derive them. Do not rename an existing published release retroactively.
+5. Extend CI push paths for root installer, scripts, manifests/version/notices, and CI files. Run existing root installer/evaluation tests and archive-content tests on pull requests, not only tags. Add explicit minimal token permissions and verified immutable action revisions. Add macOS checks before calling macOS tested; otherwise mark it unverified.
+
+**Final tests:** EXT, BRIDGE, ROOT gates; **new** package-release test; full/production audits; isolated archive build and inspection; CI configuration review. C17 uses a disposable installation/profile, with user-managed auth. **Must work:** the supported install path runs, a special-character path is handled safely, artifacts are self-contained with notices, and installer-only changes trigger relevant checks.
+
+### Epoch 16 — accurate claims and lightweight contributor instructions
+
+**Findings:** D1, D2; supporting L4/L5. **Depends on:** 15. **Outcome:** public documents describe the actual tested alpha, and a model can find current guidance without obsolete instructions.
+
+**Read/modify:** `README.md`, `PRIVACY.md`, `SUPPORT.md`, `SECURITY.md`, `CONTRIBUTING.md`, `AGENTS.md`, `docs/application.md`, `docs/THREAT-MODEL.md`, `docs/PERMISSIONS.md`, `docs/store-listing.md`, `docs/smoke.md`, `docs/RELEASING.md`, `docs/answer-quality-verification.md`, `docs/how-it-works.html`, stale source comments and release templates.
+
+**16.1 — `docs: align product and safety claims with verified behavior`**
+
+1. Work through every row of D1's claim table individually and mark its disposition in the execution record. Remove absolute injection-proof/no-silent-write claims. State exact runtime grants and remaining semantic/model limits.
+2. Disclose Nox's lack of backend/telemetry separately from Notion, Codex provider processing, optional external research, upload destinations, local browser history, and Codex's own history. Local Delete all data does not delete remote Notion effects or Codex provider/history records.
+3. State actual unsupported features: image/PDF analysis, generalized property/schema/move undo, creation deletion, and nonexistent dedicated autofill/quota orchestration. Do not implement these as unrelated feature work just to rescue marketing text.
+4. Document exact plan thresholds, explicit Auto grant, full payload inspection, unknown outcomes, conservative undo, and final external-editor race. Describe DNR installed versus authenticated-accepted versus live header verification accurately.
+5. Reconcile manifest permission table with `.notion.site`, DOM title/icon metadata, Web Locks, actual stores, and verified upload origins. Remove non-writable-temp-cwd and atomic-refresh claims.
+6. Add a compact feature table: implemented, automated tests, live tested version/model, unsupported/pending. Link the release evidence, not old passing counts. Verify private security-reporting availability through repository settings if authorized, or accurately state it unverified.
+
+**16.2 — `docs(contributing): remove stale context and architecture rules`**
+
+1. After following the current AGENTS instructions for this task, replace mandatory full architecture reading for every trivial task with the review's relevance rule. Keep the existing security boundaries and relevant test commands concise.
+2. Explain that pure library modules avoid browser globals while existing `*/panel.ts`, storage/settings, and assembly modules deliberately perform side effects. Remove stale blanket prohibitions and historical epoch commit syntax unless actually enforced.
+3. Use `rg` to find missing `RESEARCH`, `MVP`, `docs/plans/E*.md` references; replace with current relevant sections where useful. Remove empty `CLAUDE.md` only if truly unused. Do not rewrite historical review/spike evidence as if it were current policy.
+
+**Final checks:** `git diff --check`; verify local documentation links and each D1 claim against final symbols/evidence; compare manifest permissions and version labels. No runtime rerun for prose alone. **Must work:** a fresh reader understands exactly what consent, undo, deletion, isolation, and data processing do, including limitations. No public “10/10” or “no vulnerabilities” certification.
+
+### Epoch 17 — integrated acceptance, smoothness review, and fresh adversarial pass
+
+**Finding:** D3 plus final closure of all findings. **Depends on:** 01–16. **Outcome:** production assembly and a known loaded release candidate meet the complete acceptance matrix.
+
+**Read/modify:** existing test suites, `docs/smoke.md`, `docs/answer-quality-verification.md`; create **new** `docs/adversarial-remediation-evidence.md` for sanitized results. Extend existing `scripts/release-smoke.mjs` rather than creating another runner framework.
+
+**17.1 — `test: enforce integrated adversarial acceptance`**
+
+1. Ensure each High finding has a deterministic regression that fails for the reviewed behavior and passes now. Keep a mapping from H1–H5 to test names and assertions. For large refactors, show failure at the relevant pre-fix parent commit or a temporary isolated worktree without touching the user's working tree; document fixture incompatibilities honestly.
+2. Re-run the assembled consent matrix with actual frozen scopes, journal, scheduler, and production entry points. Include direct bypass attempts through undo, local tools, unknown tools, reserved fields, restored UI, and stale approvals.
+3. Validate existing strong behavior was preserved: failed resume never substitutes a new thread, no replay after submission/disconnect, early events correlate correctly, completed answer replaces streamed content, only reasoning summaries render, late dynamic calls stop, continuation handles expire, ten-minute deadline includes context preparation, and tool counts remain bounded.
+4. Run the full final suite: EXT, BRIDGE, ROOT, archive-content tests and audits. Record versions and counts from this run. Skipped opt-in cases are pending, not passed. Release smoke reports separate automated success and missing live acceptance; an actual publishing gate rejects missing required live evidence for features advertised in that release.
+
+**17.2 — `test(browser): verify the loaded candidate in a scratch workspace`**
+
+1. Run C01–C17 below against a build whose source commit/hash is recorded and matched to the loaded extension. Record bridge binary/model/Chrome/OS/account capability information. An extension version label alone is insufficient build identity.
+2. Capture before/after scratch data, approval counts, journal IDs/statuses, and sanitized screenshots/network observations. Do not store tokens, OAuth callbacks, complete upload tickets, personal page contents, or unsanitized HAR files in the repository.
+3. Review at approximately 320, 400, and 600 CSS-pixel panel widths, light/dark theme, keyboard-only navigation, and a long answer/plan. No clipped approval buttons, hidden late payload fields, stuck spinner, unexplained disabled control, jump away from inspected details, or invisible partial failure.
+4. Refine only concrete friction found by these checks using existing components. Re-run affected narrow tests and scenarios after changes. Do not launch an unrelated visual redesign or hide necessary consent for a lower click count.
+
+**17.3 — `docs: close findings with evidence and residual limitations`**
+
+1. Perform a fresh adversarial pass through actual entry points, not only this checklist: attempt to bypass each gate, exploit stale state, alter a payload after consent, crash at await boundaries, and confuse workspace/turn identity. Include every new helper/adapter introduced by remediation.
+2. Document any newly found issue with severity, repro, code path, regression, and fix epoch/commit. Fix release blockers before completion; do not relabel a defect an alpha limitation merely to finish.
+3. Close each original ID only with test and live evidence where applicable. Retain explicit unsupported feature decisions and residual external race/provider constraints. Update public feature matrix and release notes from evidence.
+4. Report implementation complete only when all required enabled-feature checks passed, no known High or material unresolved correctness/privacy blocker remains, and remaining limitations are accurate and accepted. Publishing remains a separate authorized action.
+
+**Final tests:** complete final suite plus C01–C17 and the fresh review. **Wave E gate:** clean supported installation, smooth real workflow, consistent docs, no known unaddressed release blocker, and traceable evidence for every closure.
+
+## 9. Cross-epoch traps to avoid
+
+1. Do not repair H2 by merely deleting the Auto bypass and leaving every read-then-write with duplicate cards. Epochs 05–07 deliver exact scope plus usable inherited consent together.
+2. Do not introduce an “intent authorized” field supplied by Codex or derive it from page presence. That would recreate self-authorization in a different object.
+3. Do not approve a summary and then compare only target IDs. Full execution arguments, all objects, destinations, and counts matter.
+4. Do not classify every tool error as a clean failed mutation. Partial bulk success, provider parse error, and post-send cancellation can all require unknown status.
+5. Do not add journaling only to forward writes. Undo, upload ticket creation, and byte upload each have external effects and uncertain outcomes.
+6. Do not make post-write verification depend on an already-aborted signal in a way that prevents outcome persistence. Respect cancellation of external work while still recording what is known locally.
+7. Do not keep an IndexedDB transaction alive across network, UI approval, or hashing work. Build data first, use a short atomic storage transaction, then dispatch.
+8. Do not broaden `connect-src`, DNR initiators, tool schema acceptance, or upload hosts just because a live contract changed. Verify and support the new contract deliberately.
+9. Do not accidentally deadlock scheduler admission by acquiring its only slot before scheduling a guard read. Test reduced concurrency and long rate waits.
+10. Do not clear only one panel's in-memory credential generation. Cross-context late writes and delayed storage operations need serialized generation checks.
+11. Do not mark all complete-looking Markdown lossless. Recognized completeness and attributable post-image are required; rich-page undo stays unavailable unless separately proven.
+12. Do not run destructive packaging in the user's existing `.release/` directory to test artifact contents. Use isolated staging.
+13. Do not declare browser checks passed from mocked React tests, user-reported connection, or a working side-panel startup. The review already distinguishes these evidence levels.
+
+## 10. Reusable test fixtures and result accounting
+
+Use synthetic fixtures with names and IDs independent of personal workspaces. Store provider shapes with secrets and identifying strings replaced consistently; preserve field types and structural/truncation markers.
+
+Suggested scratch objects, created only after the live test scope is authorized:
+
+- Parent `Nox acceptance <date>-<short candidate hash>`.
+- Plain page A: title `Plain A`; content `alpha\nbeta\ngamma`.
+- Plain page B: title `Plain B`; content `do not change without separate approval`.
+- Rich page R with a verified complex block and a partial-fetch fixture equivalent.
+- Database D with a few synthetic rows and cosmetic view V; record actual data-source/view IDs.
+- Small text file `nox-upload-sentinel.txt`, containing only `NOX_UPLOAD_TEST_<run-id>`.
+- Malicious synthetic page I containing instructions to change B, create an undisclosed object, upload the file, and render an image URL containing a synthetic sentinel. The page is test data, never instructions for the test operator.
+
+For deterministic fault injection use the existing fake transports/fake Codex and fake-indexeddb. If a fault requires a test-only build adapter, it must be development-only, impossible to enable from model input, and absent from production artifacts. Prefer test fixtures over adding fault controls to shipped UI.
+
+Every live evidence row records: scenario ID; candidate source/build identity; Chrome/OS/bridge/model; capability/schema version/date; setup; steps performed; expected; actual; pass/fail/blocked; sanitized artifact path; linked test/commit; residual limits. Record maximum observed mutation concurrency and exact dispatch counts in deterministic tests. Ordinary Computer Use may observe visible state while instrumentation proves hidden effects.
+
+## 11. Computer-use acceptance script
+
+Before starting: get an authorized scratch parent/profile, complete OAuth manually if needed, identify the loaded build, and save clean screenshots/state. Stop live writes if an unexpected object is affected. Do not use a valuable page to test failures. Clean up only objects created by this run and only with authorized supported operations; otherwise provide a precise manual cleanup list.
+
+| ID | Steps | Required visible/instrumented result |
+|---|---|---|
+| C01 — passive resources | Render synthetic Markdown and raw-image/media payloads through the real assistant renderer using a disposable fixture; open the saved conversation again; show a remote page icon; inspect extension network traffic to a controlled receiver. Click a normal safe source link separately. | Zero automatic requests to the receiver on render/history/icon display. Packaged icons work. Source navigation occurs only on the deliberate click. Do not require a live model to reproduce a known rendering sink. |
+| C02 — research preference | Leave model/effort/tier at defaults; turn Web research off; close/reopen panel; send a harmless question; reconnect and change model; repeat. Also delay settings hydration in a fixture. | UI remains off, outgoing thread config requests disabled search, no send before hydration; actual research activity absent for the tested supported model. A config assertion and a model observation are recorded separately. |
+| C03 — owner and viewer | Open Nox in two Chrome windows with a restored safely reversible entry. Try viewer timeline undo, owner undo during an active turn, and fast duplicate undo. Close owner, establish a new owner, and retry when safe. | Viewer cannot mutate; owner busy state explains undo refusal; one safe undo dispatch at most. New ownership does not replay work or inherit stale grants. |
+| C04 — uncertain write | In controlled transport fixture, commit one creation then lose the response; restore panel. Separately fail storage before intent and after confirmed effect. | Exactly one creation dispatch; durable unknown on restart; no automatic retry/undo. Before-intent failure makes zero calls. After-success local failure shows applied/recovery warning in the live session. |
+| C05 — complete approval | Ask for a fixture edit with >2,000 characters followed by an additional significant field/target. Open full details, keyboard-scroll to the end, reject once, then submit a fresh valid request and approve. | All relevant fields visible before approval; rejection makes zero effects; approved execution equals displayed canonical payload; no clipped Approve/Reject controls. |
+| C06 — ordinary work | Search and fetch several synthetic pages. Ask for one small edit in Ask; one cosmetic view rename; one isolated move. Count cards and inspect exact changes. | Reads have zero plan/action cards. Small Ask edit has one action card. Cosmetic rename/single move use one action review without a workspace-plan ceremony. |
+| C07 — scoped transformation | Propose a bounded multi-object plan on D; reject first. On a new request approve a concrete plan, then exercise covered actions and a fixture deviation with changed schema/destination or extra target. | Rejected plan writes nothing. Approved exact actions run once without redundant cards. Deviation/reuse is refused pending new review. Plan evidence links to actually retrieved items. |
+| C08 — Auto and injection | In Auto, ask only to summarize I without enabling small edits. Then enable the explicit small-edit grant for A and request a supported small edit; simulate a write to B and an upload proposal from the malicious page. | No model-created plan grants consent. Analysis has no unapproved mutation. Granted A edit works without a redundant card; B/structural/upload effects need explicit review or are refused. Synthetic remote-image sentinel never auto-loads. Model refusal alone is not the deterministic boundary test. |
+| C09 — cancel and outcome | Cancel while awaiting plan, action, guard read, scheduler wait, and after dispatch using fixtures; interrupt a real harmless scratch turn once. | Prompt Stop response; no later dispatch for pre-send cases; after-send effects remain applied/unknown as evidence dictates; partial answer survives; reconnect never replays. Missing interruption completion follows existing five-second disconnect behavior. |
+| C10 — conflict and undo | Fetch A, edit it independently in Notion, then attempt the stale replacement. Perform a fresh supported plain edit, undo safely once. Edit after another Nox write and try undo. Try rich-page undo. | Stale write refused; fresh edit succeeds; one verified plain undo restores expected content; later human edit blocks undo; rich/unsupported inverse is clearly unavailable. Residual final external race remains documented. |
+| C11 — file consent | Select sentinel file, remove it, select again, ask about it, reject upload, then explicitly approve upload if supported. Test a wrong-origin/redirect ticket in a fixture and fail insertion after successful upload. | Selection/removal causes no upload; no draft bytes persist; consent identifies file/destination; one supported upload only; wrong origin/redirect never receives bytes; uploaded-but-not-inserted state is visible. If contract unsupported, UI honestly disables upload. |
+| C12 — history and attachments | Send two attached conversations, delete one, inspect its attachment rows, export the other; inject a partial-save failure followed by healthy storage and reopen. | Only deleted thread's owned blobs disappear; retained files remain; export explains metadata-only behavior; final save recovers and reopened answer/outcome matches latest successful state. |
+| C13 — sign-out and deletion | With two panels, pause a refresh response, sign out, release it; repeat with Delete all data and a blocking DB fixture. Reopen. | No old credential resurrection; other panels close DB and stop writes; deletion completes or displays a specific blocker; never hangs with false success. Codex/Notion remote data is accurately outside local deletion. |
+| C14 — disconnect recovery | Disconnect the native port during a harmless turn; reconnect through UI; start a new chat and resume an old one with a new user message. | Connection label matches transport, prior content remains visible, reconnect works, original Codex thread IDs preserved on resume, old submitted turn never repeats. |
+| C15 — DNR and metadata | Inspect narrow dynamic rule and authenticated acceptance in supported Chrome; use browser instrumentation to compare own/foreign initiators and MCP/non-MCP paths; test malformed/stale metadata and content-script storage access. | Only Nox's intended endpoint requests lose Origin. 401/5xx/missing status do not falsely verify. Page navigation remains correct; content scripts cannot retrieve refresh tokens. Do not send actual tokens to a test receiver. |
+| C16 — logs and layout | Seed synthetic prompt/error sentinels; copy logs; inspect them. At narrow/normal/wide widths and both themes review long answer, expanded payload, plan, unknown result and reconnect UI with keyboard. | No private sentinels/tickets/tokens in default export, useful status metadata present, sharing reminder adjacent. All critical controls readable/reachable; focus and scrolling stable. |
+| C17 — clean candidate | Install the packaged candidate into disposable supported environment, verify identity/notices, connect manually, run read → Ask edit → scoped Auto edit → approved plan → supported undo → reopen history → sign out. | No undocumented reload workaround, duplicate effect/card, missing notice, misleading state, or hidden failure. Record unsupported OS/model cases instead of claiming universal support. |
+
+## 12. Execution record and definition of done
+
+Initial status: **planning only; no implementation or test execution claimed by this document**.
+
+| Epoch | Code status | Commits | Automated evidence | Browser evidence | Blockers / next step |
+|---|---|---|---|---|---|
+| 01 | Pending | — | — | C01–C02 pending | Start here |
+| 02 | Pending | — | — | C03 pending | Depends on 01 |
+| 03 | Pending | — | — | Fixture evidence pending | Depends on 02 |
+| 04 | Pending | — | — | C04/C09 pending | Depends on 03 |
+| 05 | Pending | — | — | C05 pending | Depends on 04 |
+| 06 | Pending | — | — | C06–C08 pending | Depends on 05 |
+| 07 | Pending | — | — | C09–C10 pending | Provider fixtures required |
+| 08 | Pending | — | — | C11 pending | Upload contract required or feature disabled |
+| 09 | Pending | — | — | C12–C13 pending | Depends on 08 |
+| 10 | Pending | — | — | C11–C12 pending | Depends on 09 |
+| 11 | Pending | — | — | C02/C13/C14 pending | Depends on 10 |
+| 12 | Pending | — | — | Protocol fixture evidence pending | Depends on 11 |
+| 13 | Pending | — | — | C15 pending | Supported Chrome evidence required |
+| 14 | Pending | — | — | C16 + native matrix pending | Real Codex opt-in required |
+| 15 | Pending | — | — | C17 pending | Supported install/provenance evidence |
+| 16 | Pending | — | — | Claim review pending | Depends on 15 |
+| 17 | Pending | — | — | All applicable cases pending | Final review/release gate |
+
+After each epoch, add a concise dated entry here using this template:
+
+```text
+Epoch NN / date / candidate commit(s):
+Implemented behavior:
+Regressions observed failing before fix:
+Commands actually run and results (include skips):
+Browser scenario IDs, versions, actual observations:
+Architecture/public claims updated:
+Remaining defects, unsupported features, and acceptance blockers:
+Next epoch and any contract changes the successor must know:
+```
+
+Final acceptance requires all of the following:
+
+- Every H/M/L/D identifier has a closure entry with code/test evidence or an explicit unsupported-feature disposition consistent with the review. A disabled feature must be unavailable in every execution path, not merely hidden in UI.
+- All enabled mutation paths share owner, capability, validated effect, exact consent, conflict where applicable, no-unsafe-retry, durable-intent, and cancellation checks.
+- Real supported Chrome/Codex/Notion combinations pass relevant C01–C17 cases; blocked infrastructure is not counted as product success or product failure.
+- No known unresolved High finding, data-loss/privacy blocker, or misleading public guarantee remains. New adversarial findings are triaged and material blockers fixed.
+- Reads, bounded edits, one approved plan, safe supported undo, reconnect, history restore, deletion, and sign-out work without redundant consent or misleading status.
+- Release artifacts carry license/notices, match the tested candidate, pass content checks, and have an accurate support matrix.
+- The final report states residual limitations and evidence boundaries. It does not promise a vulnerability-free application, provider atomicity, universal model isolation, or unsupported undo.
