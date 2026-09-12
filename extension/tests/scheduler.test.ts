@@ -70,6 +70,55 @@ describe('Scheduler', () => {
     expect(calls).toBe(1)
   })
 
+  it('spends one global token per search alongside the search token', async () => {
+    const { clock, scheduler } = makeScheduler({ globalRps: 1, searchRps: 10 })
+    await scheduler.schedule('global', ok) // drains the single global token
+    const start = clock.t
+    await scheduler.schedule('search', ok)
+    // The search bucket is full, but the spent global token takes ~1 s to refill.
+    expect(clock.t - start).toBeGreaterThanOrEqual(900)
+  })
+
+  it('spends the search token alongside the global budget', async () => {
+    const { clock, scheduler } = makeScheduler({ globalRps: 100, searchRps: 0.5 })
+    await scheduler.schedule('search', ok) // consumes the single pre-loaded search token
+    const start = clock.t
+    await scheduler.schedule('search', ok)
+    // Global is plentiful, but the next search token arrives in ~2 s.
+    expect(clock.t - start).toBeGreaterThanOrEqual(1900)
+  })
+
+  it('serializes three waiting slow tasks at maxConcurrent 1', async () => {
+    const { scheduler } = makeScheduler({ maxConcurrent: 1 })
+    let running = 0
+    let peak = 0
+    const gates: Array<() => void> = []
+    const task = () =>
+      scheduler.schedule('global', async () => {
+        running++
+        peak = Math.max(peak, running)
+        await new Promise<void>((resolve) => { gates.push(resolve) })
+        running--
+        return null
+      })
+    const pending = [task(), task(), task()]
+    await new Promise((r) => setTimeout(r, 0))
+    await new Promise((r) => setTimeout(r, 0))
+    expect(peak).toBe(1)
+    expect(gates.length).toBe(1)
+    gates.shift()!()
+    await new Promise((r) => setTimeout(r, 0))
+    await new Promise((r) => setTimeout(r, 0))
+    expect(peak).toBe(1)
+    gates.shift()!()
+    await new Promise((r) => setTimeout(r, 0))
+    await new Promise((r) => setTimeout(r, 0))
+    expect(peak).toBe(1)
+    gates.shift()!()
+    await Promise.all(pending)
+    expect(peak).toBe(1)
+  })
+
   it('caps concurrency and drains waiters on release', async () => {
     const { scheduler } = makeScheduler({ maxConcurrent: 2 })
     let running = 0
@@ -219,6 +268,41 @@ describe('Scheduler', () => {
     expect(sleeps[0]).toBeLessThanOrEqual(4500)
   })
 
+  it('honors a 120-second Retry-After minimum instead of capping at 30 s', async () => {
+    const { scheduler, sleeps } = makeScheduler()
+    let calls = 0
+    const out = await scheduler.schedule('global', () => {
+      calls++
+      if (calls === 1) throw new McpHttpError(429, 'slow down', 120)
+      return Promise.resolve('after-retry')
+    }, undefined, { retryable: true })
+    expect(out).toBe('after-retry')
+    expect(calls).toBe(2)
+    expect(sleeps[0]).toBeGreaterThanOrEqual(120_000)
+  })
+
+  it('stops admission waits past the turn deadline with zero dispatches', async () => {
+    const { clock, scheduler } = makeScheduler({ globalRps: 1 })
+    await scheduler.schedule('global', ok) // drains the single token
+    let calls = 0
+    await expect(scheduler.schedule('global', async () => {
+      calls++
+      return ok()
+    }, undefined, { deadline: clock.t + 100 })).rejects.toThrow(/DEADLINE_EXCEEDED/)
+    expect(calls).toBe(0)
+  })
+
+  it('stops retry waits past the turn deadline instead of sleeping through it', async () => {
+    const { clock, scheduler, sleeps } = makeScheduler()
+    let calls = 0
+    await expect(scheduler.schedule('global', () => {
+      calls++
+      throw new McpHttpError(429, 'slow down', 120)
+    }, undefined, { retryable: true, deadline: clock.t + 1000 })).rejects.toThrow(/DEADLINE_EXCEEDED/)
+    expect(calls).toBe(1)
+    expect(sleeps).toHaveLength(0)
+  })
+
   it('retries JSON-RPC -32001 overload', async () => {
     const { scheduler } = makeScheduler()
     let calls = 0
@@ -267,5 +351,10 @@ describe('retryDelayFor', () => {
 
   it('caps backoff at 30 s', () => {
     expect(retryDelayFor(new McpRpcError(-32001, 'overloaded'), 30)).toBeLessThanOrEqual(30_000)
+  })
+
+  it('leaves an explicit 120-second Retry-After minimum uncapped', () => {
+    vi.spyOn(Math, 'random').mockReturnValue(0)
+    expect(retryDelayFor(new McpHttpError(429, 'slow down', 120), 0)).toBe(120_100)
   })
 })

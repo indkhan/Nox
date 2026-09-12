@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { McpClient, McpHttpError, McpRpcError, McpUnauthenticatedError } from '../src/lib/mcp/client'
+import { McpClient, McpHttpError, McpRpcError, McpUnauthenticatedError, parseRetryAfter } from '../src/lib/mcp/client'
 import { parseSseOrJson, pickResponse } from '../src/lib/mcp/sse'
 import { resetRequestIds } from '../src/lib/mcp/jsonrpc'
 
@@ -189,6 +189,23 @@ describe('McpClient', () => {
     controller.abort()
     await expect(client.callTool('notion-search', {}, controller.signal)).rejects.toMatchObject({ name: 'AbortError' })
     expect(fetchCalls).toHaveLength(0)
+  })
+
+  describe('parseRetryAfter', () => {
+    it('parses seconds', () => {
+      expect(parseRetryAfter('7')).toBe(7)
+      expect(parseRetryAfter('0')).toBe(0)
+    })
+
+    it('parses HTTP-date values relative to now', () => {
+      vi.spyOn(Date, 'now').mockReturnValue(Date.parse('2026-08-24T12:00:00Z'))
+      expect(parseRetryAfter('Mon, 24 Aug 2026 12:02:00 GMT')).toBe(120)
+    })
+
+    it('rejects missing and malformed values', () => {
+      expect(parseRetryAfter(null)).toBeNull()
+      expect(parseRetryAfter('not-a-date')).toBeNull()
+    })
   })
 
   it('sends bearer auth and dual accept headers on every call', async () => {

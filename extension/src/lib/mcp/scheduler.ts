@@ -46,6 +46,28 @@ export interface ScheduleOptions {
    * tickets, blob POSTs, undo, and unknown effects default to no retry.
    */
   retryable?: boolean
+  /**
+   * Absolute timestamp (scheduler clock) bounding every wait: a token or
+   * backoff wait that would run past it throws SchedulerDeadlineError
+   * instead of sleeping through the turn deadline.
+   */
+  deadline?: number
+}
+
+/**
+ * A rate-limit wait would run past the turn deadline, so the scheduler stops
+ * instead of sleeping through it. Admission waits throw before (re)dispatch;
+ * a mutation guard does not stay valid across a wait.
+ */
+export class SchedulerDeadlineError extends Error {
+  constructor(waitMs: number, remainingMs: number) {
+    super(
+      `DEADLINE_EXCEEDED: a ${Math.ceil(waitMs)}ms rate-limit cooldown exceeds the ` +
+        `${Math.max(0, Math.ceil(remainingMs))}ms left before the turn deadline; ` +
+        'stopping instead of waiting past the deadline.',
+    )
+    this.name = 'SchedulerDeadlineError'
+  }
 }
 
 interface BucketState {
@@ -88,8 +110,9 @@ export class Scheduler {
   }
 
   private emptyBucket(ratePerSecond: number): BucketState {
-    // Burst capacity is a whole number ≥ 1 so a single token is always
-    // reachable even for sub-1-rps buckets like search (0.5 rps).
+    // Token-bucket burst capacities (not a strict rolling-window quota):
+    // global holds 3 tokens at 3 rps; search holds 1 token at 0.5 rps, with
+    // a floor of 1 so a single token is always reachable.
     return { capacity: Math.max(1, ratePerSecond), tokens: Math.max(1, ratePerSecond), lastRefill: this.now() }
   }
 
@@ -101,9 +124,33 @@ export class Scheduler {
     bucket.lastRefill = t
   }
 
-  private async acquire(bucketName: Bucket, signal?: AbortSignal): Promise<void> {
-    // Concurrency gate first: never more than MAX_CONCURRENT calls in flight.
-    while (this.inFlight >= this.maxConcurrent) {
+  private async acquire(bucketName: Bucket, signal?: AbortSignal, deadline?: number): Promise<void> {
+    // A search call spends one token from each budget; everything else
+    // spends the global budget only.
+    const needed: Bucket[] = bucketName === 'search' ? ['global', 'search'] : ['global']
+    for (;;) {
+      signal?.throwIfAborted()
+      for (const name of needed) this.refill(this.bucketState(name), this.rates[name])
+      const lacking = needed.filter((name) => this.bucketState(name).tokens < 1)
+      if (lacking.length === 0 && this.inFlight < this.maxConcurrent) {
+        // Reserve every permit synchronously: a call runs only when
+        // concurrency and all rate budgets hold together.
+        for (const name of needed) this.bucketState(name).tokens -= 1
+        this.inFlight += 1
+        return
+      }
+      if (lacking.length > 0) {
+        // Sleep for the longest token deficit without holding a concurrency
+        // slot: nothing is reserved while waiting for tokens.
+        const waitMs = Math.max(...lacking.map((name) =>
+          Math.max(10, Math.ceil(((1 - this.bucketState(name).tokens) / this.rates[name]) * 1000)),
+        ))
+        this.throwIfPastDeadline(waitMs, deadline)
+        await abortable(this.sleep(waitMs), signal)
+        continue
+      }
+      // Tokens are ready but every concurrency slot is busy: queue fairly
+      // for the next release, then recheck everything on wakeup.
       await new Promise<void>((resolve, reject) => {
         const ready = () => { cleanup(); resolve() }
         const aborted = () => {
@@ -118,16 +165,17 @@ export class Scheduler {
         if (signal?.aborted) aborted()
       })
     }
-    for (;;) {
-      const bucket = bucketName === 'search' ? this.search : this.global
-      this.refill(bucket, this.rates[bucketName])
-      if (bucket.tokens >= 1) {
-        bucket.tokens -= 1
-        this.inFlight += 1
-        return
-      }
-      const deficitMs = ((1 - bucket.tokens) / this.rates[bucketName]) * 1000
-      await abortable(this.sleep(Math.max(10, Math.ceil(deficitMs))), signal)
+  }
+
+  private bucketState(bucket: Bucket): BucketState {
+    return bucket === 'search' ? this.search : this.global
+  }
+
+  private throwIfPastDeadline(waitMs: number, deadline?: number): void {
+    if (deadline == null) return
+    const remainingMs = deadline - this.now()
+    if (waitMs > remainingMs) {
+      throw new SchedulerDeadlineError(waitMs, remainingMs)
     }
   }
 
@@ -148,7 +196,7 @@ export class Scheduler {
     let attempt = 0
     for (;;) {
       signal?.throwIfAborted()
-      await this.acquire(bucket, signal)
+      await this.acquire(bucket, signal, opts.deadline)
       // Abort between admission and invocation: the function never ran, so
       // no dispatch can be blamed on this call.
       signal?.throwIfAborted()
@@ -169,6 +217,7 @@ export class Scheduler {
       } finally {
         this.release()
       }
+      this.throwIfPastDeadline(delay, opts.deadline)
       await abortable(this.sleep(delay), signal)
     }
   }
@@ -226,8 +275,10 @@ export function retryDelayFor(
   const retryable = status === 429 || (status != null && status >= 500) || rpcCode === -32001
   if (!retryable) return null
 
-  if (retryAfterSeconds != null && Number.isFinite(retryAfterSeconds)) {
-    return clampBackoff(retryAfterSeconds * 1000 + jitter())
+  if (retryAfterSeconds != null && Number.isFinite(retryAfterSeconds) && retryAfterSeconds >= 0) {
+    // An explicit server cooldown is a minimum: honor it in full instead of
+    // capping it like locally generated backoff.
+    return retryAfterSeconds * 1000 + jitter()
   }
   const exponential = Math.min(MAX_BACKOFF_MS, INITIAL_BACKOFF_MS * 2 ** attempt)
   return clampBackoff(exponential + jitter())

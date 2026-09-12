@@ -226,4 +226,16 @@ describe('Notion facade', () => {
     const result = await notion.scheduleCallTool('notion-fetch', { id: 'self' })
     expect(McpClient.resultText(result)).toContain('Acme')
   })
+
+  it('stops scheduled waits past a caller deadline without dispatching', async () => {
+    standardServer()
+    await notion.importToken({ access_token: 'at', refresh_token: 'rt', expires_in: 3600 })
+    await notion.scheduleCallTool('notion-fetch', { id: 'a' })
+    await notion.scheduleCallTool('notion-fetch', { id: 'b' })
+    // Identity plus two reads drain the three global tokens; the next wait
+    // exceeds an already-past deadline instead of sleeping through it.
+    await expect(
+      notion.scheduleCallTool('notion-fetch', { id: 'c' }, undefined, { deadline: Date.now() - 1 }),
+    ).rejects.toThrow(/DEADLINE_EXCEEDED/)
+  })
 })

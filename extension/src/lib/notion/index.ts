@@ -151,11 +151,11 @@ export class Notion {
    * transient failures, while unknown effects and every mutation run once —
    * an ambiguous failure surfaces as an uncertain outcome, not a replay.
    */
-  scheduleCallTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<McpCallResult> {
+  scheduleCallTool(name: string, args: Record<string, unknown>, signal?: AbortSignal, opts?: { deadline?: number }): Promise<McpCallResult> {
     // Search has its own slower bucket; everything else rides the global one.
     const bucket = name === 'notion-search' ? 'search' : 'global'
     const retryable = !classifyToolCall(name, args).mutates
-    return this.scheduler.schedule(bucket, () => this.client.callTool(name, args, signal), signal, { retryable })
+    return this.scheduler.schedule(bucket, () => this.client.callTool(name, args, signal), signal, { retryable, deadline: opts?.deadline })
   }
 
   /** Classified failure helper for UI surfaces that catch directly. */

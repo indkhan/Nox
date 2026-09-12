@@ -124,6 +124,9 @@ once, limits general traffic to 3 requests/second and search to 0.5 requests/sec
 retries temporary failures with `Retry-After` support for trusted known reads only.
 Mutations, upload tickets, and unknown tools run exactly once: an ambiguous failure
 after dispatch surfaces as an uncertain outcome instead of a silent replay.
+Search spends both the global and search budgets; admission reserves concurrency
+and every applicable budget together. An explicit server `Retry-After` is honored
+as a minimum, and any wait that would run past the turn deadline stops instead.
 
 Chrome adds an extension `Origin` header that Notion MCP rejects. The background worker
 therefore installs one narrow declarativeNetRequest rule that removes that header only

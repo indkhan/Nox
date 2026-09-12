@@ -144,7 +144,7 @@ export class McpClient {
   }
 }
 
-function parseRetryAfter(value: string | null): number | null {
+export function parseRetryAfter(value: string | null): number | null {
   if (value == null) return null
   const seconds = Number(value)
   if (Number.isFinite(seconds) && seconds >= 0) return seconds
