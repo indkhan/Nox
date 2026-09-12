@@ -121,7 +121,9 @@ capability gate.
 All workspace calls go to `https://mcp.notion.com/mcp` using MCP protocol `2025-06-18`.
 Responses may be JSON or server-sent events. The scheduler allows at most three calls at
 once, limits general traffic to 3 requests/second and search to 0.5 requests/second, and
-retries temporary failures with `Retry-After` support.
+retries temporary failures with `Retry-After` support for trusted known reads only.
+Mutations, upload tickets, and unknown tools run exactly once: an ambiguous failure
+after dispatch surfaces as an uncertain outcome instead of a silent replay.
 
 Chrome adds an extension `Origin` header that Notion MCP rejects. The background worker
 therefore installs one narrow declarativeNetRequest rule that removes that header only

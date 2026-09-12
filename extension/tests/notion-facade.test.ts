@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { Notion } from '../src/lib/notion'
+import { McpClient } from '../src/lib/mcp/client'
 import { memoryStore } from '../src/lib/storage'
 
 const PRM = { resource: 'https://mcp.notion.com/mcp', authorization_servers: ['https://mcp.notion.com'] }
@@ -147,5 +148,82 @@ describe('Notion facade', () => {
   it('explain() exposes the classifier for UI callers', () => {
     standardServer()
     expect(notion.explain(new Error('Failed to fetch')).kind).toBe('transient')
+  })
+
+  it('never retries a mutation after a transient 503: exactly one dispatch', async () => {
+    let mutationCalls = 0
+    scripted((url, body) => {
+      if (url.includes('protected-resource')) return jsonRes(PRM)
+      if (url.includes('oauth-authorization-server')) return jsonRes(AS)
+      if (url.endsWith('/register')) return jsonRes({ client_id: 'cid-1' }, 201)
+      if (url.endsWith('/token')) return jsonRes({ access_token: 'at-1', refresh_token: 'rt-1', expires_in: 3600 })
+      if (typeof body.method === 'string') {
+        if (body.method === 'initialize') return jsonRes({ jsonrpc: '2.0', id: body.id as number, result: {} }, 200, { 'mcp-session-id': 's1' })
+        if (body.method === 'tools/call') {
+          const params = body.params as { name: string }
+          if (params.name === 'notion-fetch') {
+            return rpcResult(body.id as number, { content: [{ type: 'text', text: SELF_TEXT }] })
+          }
+          mutationCalls++
+          return new Response('downstream failure after commit', { status: 503 })
+        }
+        if (body.method?.startsWith('notifications/')) return new Response(null, { status: 202 })
+      }
+      throw new Error(`unexpected ${url}`)
+    })
+    await notion.importToken({ access_token: 'at', refresh_token: 'rt', expires_in: 3600 })
+    await expect(notion.scheduleCallTool('notion-update-page', { page_id: 'p1' })).rejects.toThrow(/UNCERTAIN_OUTCOME/)
+    expect(mutationCalls).toBe(1)
+  })
+
+  it('does not replay a 429-after-effect mutation', async () => {
+    let mutationCalls = 0
+    scripted((url, body) => {
+      if (url.includes('protected-resource')) return jsonRes(PRM)
+      if (url.includes('oauth-authorization-server')) return jsonRes(AS)
+      if (url.endsWith('/register')) return jsonRes({ client_id: 'cid-1' }, 201)
+      if (url.endsWith('/token')) return jsonRes({ access_token: 'at-1', refresh_token: 'rt-1', expires_in: 3600 })
+      if (typeof body.method === 'string') {
+        if (body.method === 'initialize') return jsonRes({ jsonrpc: '2.0', id: body.id as number, result: {} }, 200, { 'mcp-session-id': 's1' })
+        if (body.method === 'tools/call') {
+          const params = body.params as { name: string }
+          if (params.name === 'notion-fetch') {
+            return rpcResult(body.id as number, { content: [{ type: 'text', text: SELF_TEXT }] })
+          }
+          mutationCalls++
+          return new Response('slow down', { status: 429 })
+        }
+        if (body.method?.startsWith('notifications/')) return new Response(null, { status: 202 })
+      }
+      throw new Error(`unexpected ${url}`)
+    })
+    await notion.importToken({ access_token: 'at', refresh_token: 'rt', expires_in: 3600 })
+    await expect(notion.scheduleCallTool('notion-create-pages', { pages: [] })).rejects.toThrow(/UNCERTAIN_OUTCOME/)
+    expect(mutationCalls).toBe(1)
+  })
+
+  it('recovers reads after a transient failure', async () => {
+    let fetchCalls = 0
+    scripted((url, body) => {
+      if (url.includes('protected-resource')) return jsonRes(PRM)
+      if (url.includes('oauth-authorization-server')) return jsonRes(AS)
+      if (url.endsWith('/register')) return jsonRes({ client_id: 'cid-1' }, 201)
+      if (url.endsWith('/token')) return jsonRes({ access_token: 'at-1', refresh_token: 'rt-1', expires_in: 3600 })
+      if (typeof body.method === 'string') {
+        if (body.method === 'initialize') return jsonRes({ jsonrpc: '2.0', id: body.id as number, result: {} }, 200, { 'mcp-session-id': 's1' })
+        if (body.method === 'tools/call') {
+          const params = body.params as { name: string }
+          if (params.name === 'notion-fetch' && ++fetchCalls === 1) {
+            return new Response('brief outage', { status: 503 })
+          }
+          return rpcResult(body.id as number, { content: [{ type: 'text', text: SELF_TEXT }] })
+        }
+        if (body.method?.startsWith('notifications/')) return new Response(null, { status: 202 })
+      }
+      throw new Error(`unexpected ${url}`)
+    })
+    await notion.importToken({ access_token: 'at', refresh_token: 'rt', expires_in: 3600 })
+    const result = await notion.scheduleCallTool('notion-fetch', { id: 'self' })
+    expect(McpClient.resultText(result)).toContain('Acme')
   })
 })

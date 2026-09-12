@@ -7,6 +7,7 @@ import { TokenStore } from '../oauth/tokens'
 import type { KeyValueStore } from '../storage'
 import { McpClient, type McpCallResult, type McpTool } from '../mcp/client'
 import { Scheduler } from '../mcp/scheduler'
+import { classifyToolCall } from '../writes/classify'
 import { classifyError } from '../mcp/errors'
 import { CapabilityGate, parseSelfResult, type SelfInfo } from './capabilities'
 
@@ -141,14 +142,20 @@ export class Notion {
   }
 
   async listTools(): Promise<McpTool[]> {
-    return this.scheduler.schedule('global', () => this.client.listTools())
+    return this.scheduler.schedule('global', () => this.client.listTools(), undefined, { retryable: true })
   }
 
-  /** Scheduled tool call; transient failures retry inside the scheduler. */
+  /**
+   * Scheduled tool call. Retry safety comes from the trusted local taxonomy,
+   * never from a model-supplied argument: known reads may recover from
+   * transient failures, while unknown effects and every mutation run once —
+   * an ambiguous failure surfaces as an uncertain outcome, not a replay.
+   */
   scheduleCallTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<McpCallResult> {
     // Search has its own slower bucket; everything else rides the global one.
     const bucket = name === 'notion-search' ? 'search' : 'global'
-    return this.scheduler.schedule(bucket, () => this.client.callTool(name, args, signal), signal)
+    const retryable = !classifyToolCall(name, args).mutates
+    return this.scheduler.schedule(bucket, () => this.client.callTool(name, args, signal), signal, { retryable })
   }
 
   /** Classified failure helper for UI surfaces that catch directly. */

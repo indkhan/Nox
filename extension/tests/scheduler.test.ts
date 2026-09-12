@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
-import { retryDelayFor, Scheduler, SEARCH_RPS } from '../src/lib/mcp/scheduler'
-import { McpHttpError, McpRpcError } from '../src/lib/mcp/client'
+import {
+  retryDelayFor,
+  Scheduler,
+  SEARCH_RPS,
+  UncertainDispatchError,
+} from '../src/lib/mcp/scheduler'
+import { McpHttpError, McpRpcError, McpUnauthenticatedError } from '../src/lib/mcp/client'
 
 class FakeClock {
   t = 0
@@ -101,7 +106,7 @@ describe('Scheduler', () => {
       calls++
       if (calls < 3) throw new McpHttpError(503, 'down')
       return Promise.resolve('recovered')
-    })
+    }, undefined, { retryable: true })
     expect(result).toBe('recovered')
     expect(calls).toBe(3)
     expect(sleeps.length).toBe(2)
@@ -113,8 +118,52 @@ describe('Scheduler', () => {
     await expect(scheduler.schedule('global', async () => {
       calls++
       throw new McpHttpError(503, 'still down')
-    })).rejects.toThrow('still down')
+    }, undefined, { retryable: true })).rejects.toThrow('still down')
     expect(calls).toBe(4)
+  })
+
+  it('never retries transient failures without established retry safety', async () => {
+    const { scheduler, sleeps } = makeScheduler()
+    let calls = 0
+    await expect(scheduler.schedule('global', async () => {
+      calls++
+      throw new McpHttpError(503, 'still down')
+    })).rejects.toBeInstanceOf(UncertainDispatchError)
+    expect(calls).toBe(1)
+    expect(sleeps).toHaveLength(0)
+  })
+
+  it('marks a committed-then-failed mutation uncertain with exactly one dispatch', async () => {
+    const { scheduler } = makeScheduler()
+    let commits = 0
+    const failure = scheduler.schedule('global', async () => {
+      commits++
+      throw new McpHttpError(503, 'committed before failing')
+    })
+    await expect(failure).rejects.toThrow(/UNCERTAIN_OUTCOME/)
+    await expect(failure).rejects.toBeInstanceOf(UncertainDispatchError)
+    expect(commits).toBe(1)
+  })
+
+  it('passes local pre-dispatch failures through unwrapped', async () => {
+    const { scheduler } = makeScheduler()
+    const missingToken = new McpUnauthenticatedError()
+    let calls = 0
+    const failure = scheduler.schedule('global', async () => {
+      calls++
+      throw missingToken
+    })
+    await expect(failure).rejects.toBe(missingToken)
+    expect(calls).toBe(1)
+  })
+
+  it('does not leak permits after failures', async () => {
+    const { scheduler } = makeScheduler({ maxConcurrent: 1 })
+    await expect(scheduler.schedule('global', async () => {
+      throw new McpHttpError(503, 'down')
+    })).rejects.toBeInstanceOf(UncertainDispatchError)
+    const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('permit leaked: second call never admitted')), 1000))
+    await expect(Promise.race([scheduler.schedule('global', ok), timeout])).resolves.toBe('ok')
   })
 
   it('releases concurrency capacity while backing off', async () => {
@@ -125,18 +174,23 @@ describe('Scheduler', () => {
     const retrying = scheduler.schedule('global', async () => {
       if (calls++ === 0) throw new McpHttpError(503, 'retry')
       return 'done'
-    })
+    }, undefined, { retryable: true })
     await vi.waitFor(() => expect(calls).toBe(1))
     await expect(scheduler.schedule('global', async () => 'second')).resolves.toBe('second')
     resumeSleep()
     await expect(retrying).resolves.toBe('done')
   })
 
-  it('honors an already-aborted signal', async () => {
+  it('honors an already-aborted signal with zero dispatches', async () => {
     const { scheduler } = makeScheduler()
     const controller = new AbortController()
     controller.abort()
-    await expect(scheduler.schedule('global', ok, controller.signal)).rejects.toMatchObject({ name: 'AbortError' })
+    let calls = 0
+    await expect(scheduler.schedule('global', async () => {
+      calls++
+      return ok()
+    }, controller.signal)).rejects.toMatchObject({ name: 'AbortError' })
+    expect(calls).toBe(0)
   })
 
   it('aborts promptly during retry backoff', async () => {
@@ -146,7 +200,7 @@ describe('Scheduler', () => {
     const pending = scheduler.schedule('global', async () => {
       calls++
       throw new McpHttpError(503, 'down')
-    }, controller.signal)
+    }, controller.signal, { retryable: true })
     await vi.waitFor(() => expect(calls).toBe(1))
     controller.abort()
     await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
@@ -159,7 +213,7 @@ describe('Scheduler', () => {
       calls++
       if (calls === 1) throw new McpHttpError(429, 'slow down', 4)
       return Promise.resolve('after-retry')
-    })
+    }, undefined, { retryable: true })
     expect(out).toBe('after-retry')
     expect(sleeps[0]).toBeGreaterThanOrEqual(3500) // ~4 s ± jitter, not 500 ms
     expect(sleeps[0]).toBeLessThanOrEqual(4500)
@@ -172,7 +226,7 @@ describe('Scheduler', () => {
       calls++
       if (calls === 1) throw new McpRpcError(-32001, 'Server overloaded; retry later')
       return Promise.resolve('done')
-    })
+    }, undefined, { retryable: true })
     expect(out).toBe('done')
     expect(calls).toBe(2)
   })

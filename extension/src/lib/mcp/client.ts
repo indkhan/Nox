@@ -114,6 +114,9 @@ export class McpClient {
   private async send(body: string, signal?: AbortSignal): Promise<Response> {
     const token = await this.deps.getAccessToken()
     if (!token) throw new McpUnauthenticatedError()
+    // Final abort check after token acquisition: dispatch is counted at
+    // actual fetch invocation below, never for a local missing-token error.
+    signal?.throwIfAborted()
     const headers: Record<string, string> = {
       'content-type': 'application/json',
       accept: 'application/json, text/event-stream',
@@ -165,6 +168,17 @@ export class McpUnauthenticatedError extends Error {
     super('not authenticated — connect Notion first')
     this.name = 'McpUnauthenticatedError'
   }
+}
+
+/**
+ * True for failures that provably happened before fetchImpl ran, so callers
+ * can record them as clean non-dispatches instead of unknown outcomes.
+ * Currently only the local missing-token error qualifies: it is thrown
+ * after token acquisition is attempted and before the final abort check
+ * and fetch invocation.
+ */
+export function isPreDispatchFailure(error: unknown): boolean {
+  return error instanceof McpUnauthenticatedError
 }
 
 function toRpcError(error: JsonRpcErrorObject): McpRpcError {

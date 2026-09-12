@@ -176,8 +176,19 @@ describe('McpClient', () => {
   })
 
   it('refuses to send without an access token', async () => {
-    const client = new McpClient({ fetchImpl: vi.fn(), getAccessToken: async () => null })
+    const fetchSpy = vi.fn()
+    const client = new McpClient({ fetchImpl: fetchSpy, getAccessToken: async () => null })
     await expect(client.listTools()).rejects.toBeInstanceOf(McpUnauthenticatedError)
+    // A local missing-token error is a pre-dispatch failure: nothing was sent.
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('never invokes fetch when aborted before dispatch', async () => {
+    const client = makeClient()
+    const controller = new AbortController()
+    controller.abort()
+    await expect(client.callTool('notion-search', {}, controller.signal)).rejects.toMatchObject({ name: 'AbortError' })
+    expect(fetchCalls).toHaveLength(0)
   })
 
   it('sends bearer auth and dual accept headers on every call', async () => {

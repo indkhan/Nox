@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { WriteGate } from '../../src/lib/writes/gate'
+import { UncertainDispatchError } from '../../src/lib/mcp/scheduler'
+import { McpUnauthenticatedError } from '../../src/lib/mcp/client'
 import { MutationJournal } from '../../src/lib/writes/journal'
 import { GuardViolation } from '../../src/lib/writes/guard'
 import { undoEntry, undoNewest } from '../../src/lib/writes/undo'
@@ -301,6 +303,72 @@ describe('WriteGate', () => {
     const entry = (await journal.undoable())[0]
     markdown = '# Later human edit'
     await expect(gate.handleUndo(entry.inverse!.tool, entry.inverse!.args)).rejects.toThrow(/changed after Nox/i)
+  })
+
+  it('propagates uncertain dispatch failures without journaling them as applied', async () => {
+    const uncertain = new UncertainDispatchError('mcp http 503: committed before failing')
+    let dispatches = 0
+    const { gate, journal } = makeGate({
+      mode: 'auto',
+      callTool: async () => {
+        dispatches++
+        throw uncertain
+      },
+    })
+    await expect(gate.handle({
+      rid: 30,
+      tool: 'notion-update-page',
+      args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: {} } },
+      namespace: null,
+    })).rejects.toBe(uncertain)
+    expect(dispatches).toBe(1)
+    expect(await journal.newestFirst()).toHaveLength(0)
+  })
+
+  it('propagates authentication failures unchanged without journaling', async () => {
+    const missingToken = new McpUnauthenticatedError()
+    let dispatches = 0
+    const { gate, journal } = makeGate({
+      mode: 'auto',
+      callTool: async () => {
+        dispatches++
+        throw missingToken
+      },
+    })
+    // Pre-dispatch failures must surface as-is: no uncertainty wrapper from
+    // the gate, no journal entry, and no internal retry.
+    await expect(gate.handle({
+      rid: 31,
+      tool: 'notion-update-page',
+      args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: {} } },
+      namespace: null,
+    })).rejects.toBe(missingToken)
+    expect(dispatches).toBe(1)
+    expect(await journal.newestFirst()).toHaveLength(0)
+  })
+
+  it('makes zero dispatches when cancelled before admission', async () => {
+    let dispatches = 0
+    const { gate } = makeGate({
+      mode: 'auto',
+      callTool: async (_name, _args, signal?: AbortSignal) => {
+        signal?.throwIfAborted()
+        dispatches++
+        return { content: [] }
+      },
+    })
+    const controller = new AbortController()
+    controller.abort()
+    const out = await gate.handle({
+      rid: 32,
+      tool: 'notion-update-page',
+      args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: {} } },
+      namespace: null,
+      signal: controller.signal,
+    }) as { isError?: boolean; content: Array<{ text?: string }> }
+    expect(out.isError).toBe(true)
+    expect(out.content[0].text).toMatch(/abort/i)
+    expect(dispatches).toBe(0)
   })
 })
 

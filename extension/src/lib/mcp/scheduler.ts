@@ -1,4 +1,4 @@
-import { McpHttpError, McpRpcError } from './client'
+import { isPreDispatchFailure, McpHttpError, McpRpcError } from './client'
 
 export type Bucket = 'global' | 'search'
 
@@ -11,6 +11,25 @@ export const MAX_RETRIES = 3
 const INITIAL_BACKOFF_MS = 500
 const MAX_BACKOFF_MS = 30_000
 
+/**
+ * A non-retryable call failed after its function was invoked: exactly one
+ * attempt ran, so a committed-then-failed mutation is indistinguishable
+ * from a clean failure at this layer. The original failure is preserved as
+ * `cause`. Reconciling (durable intent) must happen before any resubmission;
+ * nothing here may replay the call.
+ */
+export class UncertainDispatchError extends Error {
+  constructor(failure: unknown) {
+    super(
+      `UNCERTAIN_OUTCOME: ${failure instanceof Error ? failure.message : String(failure)} ` +
+        'The request was attempted once and the result is unknown. ' +
+        'Do not retry automatically; reconcile before resubmitting.',
+      { cause: failure },
+    )
+    this.name = 'UncertainDispatchError'
+  }
+}
+
 export interface SchedulerOptions {
   globalRps?: number
   searchRps?: number
@@ -18,6 +37,15 @@ export interface SchedulerOptions {
   now?: () => number
   sleep?: (ms: number) => Promise<void>
   maxRetries?: number
+}
+
+export interface ScheduleOptions {
+  /**
+   * Retry transient failures (HTTP 429/5xx, RPC -32001) with bounded
+   * backoff. Established only for trusted known reads; mutations, upload
+   * tickets, blob POSTs, undo, and unknown effects default to no retry.
+   */
+  retryable?: boolean
 }
 
 interface BucketState {
@@ -28,8 +56,10 @@ interface BucketState {
 
 /**
  * One queue for every MCP call (MVP §4): token buckets per class, a shared
- * concurrency cap, and jittered exponential backoff on 429/5xx/-32001 that
- * honors Retry-After.
+ * concurrency cap, and — only for calls with established retry safety —
+ * jittered exponential backoff on 429/5xx/-32001 that honors Retry-After.
+ * Anything else runs exactly once; an ambiguous post-dispatch failure
+ * surfaces as UncertainDispatchError instead of a silent replay.
  */
 export class Scheduler {
   private readonly global: BucketState
@@ -108,19 +138,32 @@ export class Scheduler {
   }
 
   /**
-   * Runs `fn` under the scheduler with retries for transient failures.
-   * Retryable: HTTP 429 / 5xx and JSON-RPC -32001 ("Server overloaded").
-   * Everything else propagates immediately.
+   * Runs `fn` under the scheduler. Retryable (known reads only): HTTP 429 /
+   * 5xx and JSON-RPC -32001 ("Server overloaded") retry with bounded
+   * backoff. Everything else runs exactly once — a post-dispatch failure
+   * throws UncertainDispatchError, never a replay.
    */
-  async schedule<T>(bucket: Bucket, fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  async schedule<T>(bucket: Bucket, fn: () => Promise<T>, signal?: AbortSignal, opts: ScheduleOptions = {}): Promise<T> {
+    const retryable = opts.retryable ?? false
     let attempt = 0
     for (;;) {
       signal?.throwIfAborted()
       await this.acquire(bucket, signal)
+      // Abort between admission and invocation: the function never ran, so
+      // no dispatch can be blamed on this call.
+      signal?.throwIfAborted()
       let delay: number | null = null
       try {
         return await fn()
       } catch (e) {
+        if (!retryable) {
+          // Exactly one attempt ran. A local pre-dispatch failure proves
+          // nothing was sent; an ambiguous failure leaves the outcome
+          // unknown. Declared provider rejections propagate as-is.
+          if (isPreDispatchFailure(e)) throw e
+          if (isAmbiguousFailure(e)) throw new UncertainDispatchError(e)
+          throw e
+        }
         delay = retryDelayFor(e, attempt)
         if (delay == null || attempt++ >= this.maxRetries) throw e
       } finally {
@@ -143,6 +186,23 @@ function abortable<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
       (error) => { cleanup(); reject(error) },
     )
   })
+}
+
+/**
+ * True when a post-dispatch failure leaves the outcome unknown. Transient
+ * HTTP/RPC failures may follow a server-side commit; network loss, lost
+ * replies, parse errors, and post-dispatch aborts prove nothing either way.
+ * Declared provider rejections (other HTTP statuses, malformed-request RPC
+ * codes) prove refusal and propagate as-is instead.
+ */
+function isAmbiguousFailure(error: unknown): boolean {
+  if (error instanceof McpHttpError) {
+    return error.status === 429 || error.status >= 500
+  }
+  if (error instanceof McpRpcError) {
+    return error.code === -32001 || error.code === -32603 || (error.code <= -32000 && error.code >= -32099)
+  }
+  return true
 }
 
 /** Milliseconds to back off, or null when the error must propagate. */
