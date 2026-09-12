@@ -8,6 +8,34 @@ export type WindowRole = 'owner' | 'viewer' | 'pending'
 let releaseWebLock: (() => void) | null = null
 
 /**
+ * Read-only runtime lease for the `nox-agent-owner` Web Lock. The mutation
+ * gate reads this — never a mutable UI role — before dispatching any write,
+ * upload effect, or undo. A fresh generation is minted on every acquisition
+ * so an operation queued under an expired lease fails without transport.
+ */
+let currentRole: WindowRole = 'pending'
+let ownerGeneration: string | null = null
+
+export function getWindowRole(): WindowRole {
+  return currentRole
+}
+
+export function getOwnerGeneration(): string | null {
+  return ownerGeneration
+}
+
+export function isOwnerActive(): boolean {
+  return currentRole === 'owner' && ownerGeneration != null
+}
+
+/** Test-only reset for the module lease state (no lock is held in tests). */
+export function __resetWindowRoleForTests(): void {
+  currentRole = 'pending'
+  ownerGeneration = null
+  releaseWebLock = null
+}
+
+/**
  * Claims ownership for this window. Viewer windows still render history but
  * never start turns (MVP §8).
  */
@@ -21,12 +49,19 @@ export async function claimWindowRole(): Promise<WindowRole> {
     })
     const owner = await acquired
     if (owner) {
+      currentRole = 'owner'
+      ownerGeneration = crypto.randomUUID()
       window.addEventListener('pagehide', () => { releaseWebLock?.(); releaseWebLock = null }, { once: true })
+    } else {
+      currentRole = 'viewer'
+      ownerGeneration = null
     }
     return owner ? 'owner' : 'viewer'
   }
   // Unsupported browsers stay read-only rather than risking two owners via
   // a non-atomic storage fallback.
+  currentRole = 'viewer'
+  ownerGeneration = null
   return 'viewer'
 }
 

@@ -7,6 +7,7 @@ import { toDynamicTools } from './dynamic-tools'
 import { WriteGate } from '../writes/gate'
 import { MutationJournal, idbJournalStore } from '../writes/journal'
 import { openNoxDB } from '../history/schema'
+import { getOwnerGeneration, getWindowRole } from '../history/panel'
 import type { Mode } from '../writes/approvals'
 import type { MentionRef } from '../../shared/notion-page'
 import { createTurnAccessState } from './turn-access'
@@ -45,6 +46,11 @@ export const writeGate = new WriteGate({
   journal: new MutationJournal(idbJournalStore(openNoxDB)),
   onApproval: (approval) => useNoxStore.getState().addApproval(approval),
   authorizeStructuralChange: (name, args) => planEngine.authorize(name, args),
+  ownership: {
+    isOwner: () => getWindowRole() === 'owner',
+    getOwnerGeneration: () => getOwnerGeneration(),
+    getConnectionGeneration: () => notion.connectionGeneration,
+  },
 })
 
 /** Production assembly: real Notion facade + real Codex client behind the gate. */
@@ -62,11 +68,13 @@ export const agentLoop = new AgentLoop({
         if (!turnAccess.attachments().has(id)) throw new Error('ATTACHMENT_UNAVAILABLE: select this file in the current turn first.')
         const attachment = await attachments.get(id)
         if (!attachment) throw new Error('ATTACHMENT_UNAVAILABLE: local file was not found.')
-        const markdown = await uploadLocalAttachment(attachment, {
+        // Upload ticket + bytes share the serial mutation boundary with
+        // forward writes and undo, under the same owner lease.
+        const markdown = await writeGate.runEffectExclusive(() => uploadLocalAttachment(attachment, {
           createTicket: () => notion.scheduleCallTool('notion-create-file-upload', { filename: attachment.name, content_type: attachment.mimeType }, signal),
           fetchImpl: fetch,
           signal,
-        })
+        }), signal)
         return { content: [{ type: 'text', text: `UPLOAD_COMPLETE: insert this exact native block markdown into the requested page:\n${markdown}` }] }
       }
       const result = (await writeGate.handle({ rid: 0, tool: name, args, namespace: null, signal, provenance })) as {
@@ -89,6 +97,10 @@ export const agentLoop = new AgentLoop({
     writeGate.beginTurn()
     planEngine.beginTurn(crypto.randomUUID())
   },
+  endTurn: () => {
+    writeGate.endTurn()
+  },
+  isUndoActive: () => writeGate.isUndoActive(),
   cancelPending: () => {
     writeGate.approvals.rejectAllPending()
     planEngine.rejectPending()

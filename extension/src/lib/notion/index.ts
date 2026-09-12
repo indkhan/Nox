@@ -23,6 +23,13 @@ export class Notion {
   private tokenStore: TokenStore
   private gate: CapabilityGate = new CapabilityGate()
   private selfInfo: SelfInfo | null = null
+  /**
+   * Connection generation: minted per instance and bumped on every
+   * (re)connect, identity refresh, and sign-out. The write gate captures it
+   * on admission and refuses a queued mutation if it changed before
+   * dispatch, so work queued under a stale connection never runs silently.
+   */
+  private connectionGenerationValue = crypto.randomUUID()
 
   constructor(
     private readonly deps: {
@@ -56,6 +63,10 @@ export class Notion {
 
   get identity(): SelfInfo['identity'] | null {
     return this.selfInfo?.identity ?? null
+  }
+
+  get connectionGeneration(): string {
+    return this.connectionGenerationValue
   }
 
   async loadMetadata(): Promise<AuthorizationServerMetadata> {
@@ -104,6 +115,7 @@ export class Notion {
       }),
     )
     await this.tokenStore.saveFromTokenResponse(tokenResponse)
+    this.connectionGenerationValue = crypto.randomUUID()
     return stage('initialize+identity', () => this.refreshIdentity())
   }
 
@@ -124,6 +136,7 @@ export class Notion {
     const text = McpClient.resultText(self)
     this.selfInfo = parseSelfResult(text)
     this.gate = new CapabilityGate(this.selfInfo.access)
+    this.connectionGenerationValue = crypto.randomUUID()
     return this.selfInfo
   }
 
@@ -148,6 +161,7 @@ export class Notion {
     await this.tokenStore.signOut(metadata ?? {})
     this.gate = new CapabilityGate()
     this.selfInfo = null
+    this.connectionGenerationValue = crypto.randomUUID()
     this.client = new McpClient({
       fetchImpl: this.deps.fetchImpl,
       getAccessToken: () => this.tokenStore.getAccessToken(),

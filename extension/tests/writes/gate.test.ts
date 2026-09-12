@@ -33,11 +33,40 @@ function makeGate(over: {
     getContextSet: () => over.contextSet ?? new Set([PAGE]),
     journal,
     authorizeStructuralChange: over.authorizeStructuralChange ?? (() => ({ allowed: true })),
+    // Existing suites exercise owner-panel behavior; viewer refusal is
+    // pinned by tests/writes/ownership.test.ts and the default-deny test.
+    ownership: {
+      isOwner: () => true,
+      getOwnerGeneration: () => 'test-owner-gen',
+      getConnectionGeneration: () => 'test-conn-gen',
+    },
   })
   return { gate, journal, calls, setAnswer: (a: 'approve' | 'reject') => void (answer = a), getAnswer: () => answer }
 }
 
 describe('WriteGate', () => {
+  it('refuses mutations without ownership wiring (deny by default)', async () => {
+    let dispatched = false
+    const gate = new WriteGate({
+      callTool: async () => {
+        dispatched = true
+        return { content: [{ type: 'text', text: 'ok' }] }
+      },
+      fetchPageMarkdown: async () => '# page',
+      getMode: () => 'auto',
+      getContextSet: () => new Set([PAGE]),
+    })
+    const out = await gate.handle({
+      rid: 1,
+      tool: 'notion-update-page',
+      args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: {} } },
+      namespace: null,
+    }) as { isError?: boolean; content: Array<{ text?: string }> }
+    expect(out.isError).toBe(true)
+    expect(out.content[0].text).toMatch(/NOT_OWNER/)
+    expect(dispatched).toBe(false)
+  })
+
   it('blocks structural writes without plan authorization', async () => {
     const { gate, calls } = makeGate({
       mode: 'auto',
@@ -233,6 +262,11 @@ describe('WriteGate', () => {
       getMode: () => 'auto',
       getContextSet: () => new Set([PAGE]),
       journal,
+      ownership: {
+        isOwner: () => true,
+        getOwnerGeneration: () => 'test-owner-gen',
+        getConnectionGeneration: () => 'test-conn-gen',
+      },
     })
     const out = await gate.handle({
       rid: 9,

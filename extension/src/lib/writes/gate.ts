@@ -1,11 +1,46 @@
 import type { ToolCallRequest } from '../codex/client'
-import { classifyToolCall, detectRichPage, requiresWorkspacePlan } from './classify'
+import { classifyToolCall, detectRichPage, requiresWorkspacePlan, type CallClassification } from './classify'
 import { buildInverse, type PreImage } from './inverse'
 import { capturePageSnapshot, assertUnchanged, GuardViolation, type PageSnapshot } from './guard'
 import { ApprovalEngine, evaluateApproval, type Mode } from './approvals'
 import { MutationJournal } from './journal'
 import { hashMarkdown } from './guard'
 import { normalizeId } from '../../shared/notion-page'
+
+export type MutationRejectionCode =
+  | 'NOT_OWNER'
+  | 'LEASE_EXPIRED'
+  | 'CONNECTION_CHANGED'
+  | 'TURN_ACTIVE'
+  | 'UNDO_IN_PROGRESS'
+  | 'NOT_UNDOABLE'
+
+/** Typed refusal for a mutation that must not reach the transport. */
+export class MutationRejectedError extends Error {
+  readonly code: MutationRejectionCode
+  constructor(code: MutationRejectionCode, message: string) {
+    super(`${code}: ${message}`)
+    this.name = 'MutationRejectedError'
+    this.code = code
+  }
+}
+
+/**
+ * Runtime ownership consulted by the gate before every external effect.
+ * Production wires this to the `nox-agent-owner` Web Lock lease plus the
+ * Notion connection generation; tests substitute fakes. There is no
+ * allow-by-default: a missing lease refuses the mutation.
+ */
+export interface MutationOwnership {
+  isOwner: () => boolean
+  getOwnerGeneration: () => string | null
+  getConnectionGeneration?: () => string | null
+}
+
+interface OwnershipSnapshot {
+  ownerGeneration: string
+  connectionGeneration: string | null
+}
 
 export interface WriteGateDeps {
   callTool: (name: string, args: Record<string, unknown>, signal?: AbortSignal) => Promise<{ content: Array<{ type: string; text?: string }> }>
@@ -15,6 +50,7 @@ export interface WriteGateDeps {
   journal?: MutationJournal
   onApproval?: ApprovalEngine['notify']
   authorizeStructuralChange?: (name: string, args: Record<string, unknown>) => { allowed: boolean; reason?: string }
+  ownership?: MutationOwnership
 }
 
 const CONTENT_WRITE_KINDS = new Set(['content-replace', 'content-update'])
@@ -27,6 +63,16 @@ export class WriteGate {
   readonly approvals: ApprovalEngine
   readonly journal: MutationJournal
   private readonly readHashes = new Map<string, string>()
+  /**
+   * Serial mutation runner. Forward writes, upload effects, and undo all
+   * share this chain so at most one critical interval (final guard →
+   * dispatch → journal update) is in flight. Reads bypass it entirely.
+   * Per-panel-instance only: cross-window atomicity arrives with the durable
+   * intent work, so a second owner must still reconcile before writing.
+   */
+  private mutationTail: Promise<void> = Promise.resolve()
+  private turnActive = false
+  private undoActive = false
 
   constructor(private readonly deps: WriteGateDeps) {
     this.journal = deps.journal ?? new MutationJournal()
@@ -35,6 +81,19 @@ export class WriteGate {
 
   beginTurn(): void {
     this.approvals.beginTurn()
+    this.turnActive = true
+  }
+
+  endTurn(): void {
+    this.turnActive = false
+  }
+
+  isTurnActive(): boolean {
+    return this.turnActive
+  }
+
+  isUndoActive(): boolean {
+    return this.undoActive
   }
 
   async rememberPageRead(pageId: string, markdown: string): Promise<void> {
@@ -45,10 +104,106 @@ export class WriteGate {
     return this.handleRequest(req, false, true)
   }
 
-  async handleUndo(tool: string, args: Record<string, unknown>): Promise<unknown> {
-    const result = await this.handleRequest({ rid: 0, tool, args, namespace: null, provenance: 'user-only' }, true, false)
-    if (isErrorResult(result)) throw new Error(result.content.map((part) => part.text ?? '').join('\n'))
-    return result
+  /**
+   * Undo entry through the same ownership + serial boundary as forward
+   * writes. Rejects while a turn is active (never queues for later) and
+   * re-validates the journal entry from storage inside the exclusive section
+   * so a restored row cannot authorize a stale or repeated undo.
+   */
+  async handleUndo(tool: string, args: Record<string, unknown>, opts: { journalId?: string; signal?: AbortSignal } = {}): Promise<unknown> {
+    const snapshot = this.admitMutation(opts.signal)
+    if (this.turnActive) {
+      throw new MutationRejectedError('TURN_ACTIVE', 'Nox is working — wait for the turn to finish before undoing. No changes were made.')
+    }
+    return this.runExclusive(async () => {
+      this.reassertMutation(snapshot, opts.signal)
+      if (this.turnActive) {
+        throw new MutationRejectedError('TURN_ACTIVE', 'a turn started while this undo was queued — the undo was refused. No changes were made.')
+      }
+      if (opts.journalId) await this.revalidateUndoEntry(opts.journalId, tool, args)
+      this.undoActive = true
+      try {
+        const result = await this.executeMutation(
+          { rid: 0, tool, args, namespace: null, provenance: 'user-only', signal: opts.signal },
+          classifyToolCall(tool, args),
+          false,
+        )
+        if (isErrorResult(result)) throw new Error(result.content.map((part) => part.text ?? '').join('\n'))
+        if (opts.journalId) {
+          try {
+            await this.journal.setStatus(opts.journalId, 'undone')
+          } catch (e) {
+            console.error('[nox] undo applied but journal status update failed', e)
+          }
+        }
+        return result
+      } finally {
+        this.undoActive = false
+      }
+    })
+  }
+
+  /**
+   * Shared serial boundary for external effects that do not flow through
+   * handle() (currently the upload ticket + byte upload). Enforces the same
+   * owner lease and undo exclusion as forward writes.
+   */
+  async runEffectExclusive<T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    if (this.undoActive) {
+      throw new MutationRejectedError('UNDO_IN_PROGRESS', 'an undo is running — wait for it to finish. No changes were made.')
+    }
+    const snapshot = this.admitMutation(signal)
+    return this.runExclusive(async () => {
+      this.reassertMutation(snapshot, signal)
+      return fn()
+    })
+  }
+
+  private runExclusive<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.mutationTail.then(fn, fn)
+    this.mutationTail = run.then(() => undefined, () => undefined)
+    return run
+  }
+
+  /** Ownership + lease admission; throws before any approval UI or transport. */
+  private admitMutation(signal?: AbortSignal): OwnershipSnapshot {
+    const ownership = this.deps.ownership
+    if (!ownership?.isOwner()) {
+      throw new MutationRejectedError('NOT_OWNER', 'this window does not hold the agent lock — only the owner panel may mutate. No changes were made.')
+    }
+    const ownerGeneration = ownership.getOwnerGeneration()
+    if (!ownerGeneration) {
+      throw new MutationRejectedError('NOT_OWNER', 'there is no valid owner lease for this window. No changes were made.')
+    }
+    signal?.throwIfAborted()
+    return { ownerGeneration, connectionGeneration: ownership.getConnectionGeneration?.() ?? null }
+  }
+
+  /** Re-check immediately before external dispatch; a queued operation from an expired lease/turn fails without transport. */
+  private reassertMutation(snapshot: OwnershipSnapshot, signal?: AbortSignal): void {
+    const ownership = this.deps.ownership
+    if (!ownership?.isOwner()) {
+      throw new MutationRejectedError('NOT_OWNER', 'owner lease lost while this operation was queued. No changes were made.')
+    }
+    if (ownership.getOwnerGeneration() !== snapshot.ownerGeneration) {
+      throw new MutationRejectedError('LEASE_EXPIRED', 'ownership changed while this operation was queued. No changes were made.')
+    }
+    if ((ownership.getConnectionGeneration?.() ?? null) !== snapshot.connectionGeneration) {
+      throw new MutationRejectedError('CONNECTION_CHANGED', 'the Notion connection changed while this operation was queued. No changes were made.')
+    }
+    signal?.throwIfAborted()
+  }
+
+  /** Fresh storage read so a restored activity row cannot replay a stale undo. */
+  private async revalidateUndoEntry(journalId: string, tool: string, args: Record<string, unknown>): Promise<void> {
+    const entries = await this.journal.newestFirst()
+    const entry = entries.find((candidate) => candidate.id === journalId)
+    if (!entry || entry.status !== 'applied' || !entry.inverse) {
+      throw new MutationRejectedError('NOT_UNDOABLE', 'this change is no longer available to undo.')
+    }
+    if (entry.inverse.tool !== tool || JSON.stringify(entry.inverse.args) !== JSON.stringify(args)) {
+      throw new MutationRejectedError('NOT_UNDOABLE', 'the stored undo no longer matches this change. No changes were made.')
+    }
   }
 
   private async handleRequest(req: ToolCallRequest, approved: boolean, record: boolean): Promise<unknown> {
@@ -61,6 +216,18 @@ export class WriteGate {
         await this.rememberPageRead(pageId, markdown)
       }
       return result
+    }
+
+    // Owner admission precedes approval UI: viewers fail fast with zero
+    // transport and no pending cards.
+    let snapshot: OwnershipSnapshot
+    try {
+      if (this.undoActive) {
+        throw new MutationRejectedError('UNDO_IN_PROGRESS', 'an undo is running — wait for it to finish before writing. No changes were made.')
+      }
+      snapshot = this.admitMutation(req.signal)
+    } catch (e) {
+      return textResult(e instanceof Error ? e.message : String(e))
     }
 
     const needsWorkspacePlan = requiresWorkspacePlan(classification, req.args)
@@ -88,6 +255,21 @@ export class WriteGate {
       }
     }
 
+    return this.runExclusive(async () => {
+      try {
+        this.reassertMutation(snapshot, req.signal)
+      } catch (e) {
+        return textResult(e instanceof Error ? e.message : String(e))
+      }
+      return this.executeMutation(req, classification, record)
+    })
+  }
+
+  /**
+   * Final guard → dispatch → journal update. Runs only inside the serial
+   * runner; no IndexedDB transaction is held across the network await.
+   */
+  private async executeMutation(req: ToolCallRequest, classification: CallClassification, record: boolean): Promise<unknown> {
     // Pre-image + guard for content writes; snapshot config/properties/moves otherwise.
     let snapshot: PageSnapshot | null = null
     let preImage: PreImage = { kind: classification.kind }

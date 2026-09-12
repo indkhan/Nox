@@ -231,6 +231,13 @@ carried by the call (for example, either the database or data-source ID of a vie
 All Notion calls are classified. Known reads pass through; unknown tools are treated as
 structural changes, which is the safer default.
 
+Forward writes, upload effects, and undo share one serial mutation runner in
+the panel holding the `nox-agent-owner` Web Lock lease. The gate refuses
+mutations from viewer windows, re-checks the owner lease, the Notion
+connection generation, and cancellation immediately before dispatch, and
+rejects undo while a turn is active (new turns likewise wait while undo
+holds the runner).
+
 ```text
 change requested
       │

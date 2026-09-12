@@ -15,7 +15,10 @@ export interface AgentLoopDeps {
   getDynamicTools: () => Promise<unknown[]>
   developerInstructions: string | ((settings: ThreadSettings) => string)
   beginTurn?: () => void
+  endTurn?: () => void
   cancelPending?: () => void
+  /** True while an undo holds the serial mutation boundary: new turns wait. */
+  isUndoActive?: () => boolean
 }
 
 export type TurnListener = (event: CodexEvent | { kind: 'bridge-reconnecting' }) => void
@@ -119,6 +122,9 @@ export class AgentLoop {
     opts: { currentPage?: CurrentPage; mentions?: PageContext[]; attachments?: LocalAttachment[]; signal?: AbortSignal; prepareContext?: (signal: AbortSignal) => Promise<PageContext[]>; timeoutMs?: number } = {},
   ): Promise<{ text: string; interrupted: boolean }> {
     if (this.turnRunning) throw new Error('turn already running')
+    if (this.deps.isUndoActive?.()) {
+      throw new Error('UNDO_IN_PROGRESS: an undo is running — wait for it to finish before sending. No changes were made.')
+    }
     this.turnRunning = true
     try {
       return await this.runUserMessage(text, opts)
@@ -162,6 +168,7 @@ export class AgentLoop {
       opts.signal?.removeEventListener('abort', cancel)
       abort.abort()
       this.deps.executor.endTurn()
+      this.deps.endTurn?.()
       this.deps.cancelPending?.()
       this.turnAbort = null
     }
