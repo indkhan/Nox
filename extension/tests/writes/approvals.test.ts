@@ -2,9 +2,12 @@
 import { describe, expect, it } from 'vitest'
 import { evaluateApproval, ApprovalEngine, BULK_CONFIRM_ROWS } from '../../src/lib/writes/approvals'
 
-const READ_CALL = { name: 'notion-search', mutates: false, kind: 'read' as const, args: {}, targets: [] as string[], parents: [] as string[], affectedCount: 0 }
-const WRITE_CALL = { name: 'notion-update-page', mutates: true, kind: 'content-replace' as const, args: { data: { page_id: 'p1' } }, targets: ['p1'], parents: [] as string[], affectedCount: 1 }
-const MOVE_CALL = { name: 'notion-move-pages', mutates: true, kind: 'move' as const, args: {}, targets: ['p1'], parents: [] as string[], affectedCount: 1 }
+const NO_GRANT = { allowed: false, pages: [] as string[] }
+const GRANT_P1 = { allowed: true, pages: ['p1'] }
+const READ_CALL = { name: 'notion-search', mutates: false, kind: 'read' as const, args: {}, targets: [] as string[], parents: [] as string[], affectedCount: 0, grant: NO_GRANT }
+const WRITE_CALL = { name: 'notion-update-page', mutates: true, kind: 'content-replace' as const, args: { data: { page_id: 'p1' } }, targets: ['p1'], parents: [] as string[], affectedCount: 1, grant: NO_GRANT }
+const PROPS_CALL = { name: 'notion-update-page', mutates: true, kind: 'properties' as const, args: { data: { page_id: 'p1' } }, targets: ['p1'], parents: [] as string[], affectedCount: 1, grant: GRANT_P1 }
+const MOVE_CALL = { name: 'notion-move-pages', mutates: true, kind: 'move' as const, args: {}, targets: ['p1'], parents: [] as string[], affectedCount: 1, grant: NO_GRANT }
 
 describe('evaluateApproval', () => {
   it('allows reads in every mode', () => {
@@ -17,8 +20,34 @@ describe('evaluateApproval', () => {
   })
 
   it('auto mode allows in-context writes without escalation', () => {
-    const verdict = evaluateApproval(WRITE_CALL, { mode: 'auto', contextSet: new Set(['p1']) })
+    const verdict = evaluateApproval(PROPS_CALL, { mode: 'auto', contextSet: new Set(['p1']) })
     expect(verdict.action).toBe('allow')
+  })
+
+  it('auto without the small-edit grant requests ordinary consent', () => {
+    const verdict = evaluateApproval({ ...PROPS_CALL, grant: NO_GRANT }, { mode: 'auto', contextSet: new Set(['p1']) })
+    expect(verdict.action).toBe('require-approval')
+    expect((verdict as { reasons: string[] }).reasons.join()).toMatch(/grant/i)
+  })
+
+  it('grant cannot authorize replacements outside its scope', () => {
+    const granted = { ...WRITE_CALL, grant: GRANT_P1 }
+    const verdict = evaluateApproval(granted, { mode: 'auto', contextSet: new Set(['p1']) })
+    expect(verdict.action).toBe('require-approval')
+  })
+
+  it('grant cannot reach pages outside its listed targets', () => {
+    const verdict = evaluateApproval(
+      { ...PROPS_CALL, targets: ['p2'], args: { data: { page_id: 'p2' } } },
+      { mode: 'auto', contextSet: new Set(['p1', 'p2']) },
+    )
+    expect(verdict.action).toBe('require-approval')
+  })
+
+  it('grant cannot broaden untrusted exposure', () => {
+    const verdict = evaluateApproval({ ...PROPS_CALL, provenance: 'untrusted-context' }, { mode: 'auto', contextSet: new Set(['p1']) })
+    expect(verdict.action).toBe('require-approval')
+    expect((verdict as { reasons: string[] }).reasons.join()).toMatch(/untrusted/)
   })
 
   it('auto still escalates out-of-context targets', () => {
@@ -31,7 +60,7 @@ describe('evaluateApproval', () => {
     const undashed = 'A1B2C3D4E5F64789ABCDEF0123456789'
     const dashed = 'a1b2c3d4-e5f6-4789-abcd-ef0123456789'
     const verdict = evaluateApproval(
-      { ...WRITE_CALL, args: { data: { page_id: undashed } }, targets: [undashed] },
+      { ...PROPS_CALL, args: { data: { page_id: undashed } }, targets: [undashed], grant: { allowed: true, pages: [dashed] } },
       { mode: 'auto', contextSet: new Set([dashed]) },
     )
     expect(verdict.action).toBe('allow')
@@ -39,7 +68,7 @@ describe('evaluateApproval', () => {
 
   it('always confirms unknown tools', () => {
     const verdict = evaluateApproval(
-      { name: 'notion-something-new', mutates: true, kind: 'unknown', args: {}, targets: [], parents: [] as string[], affectedCount: 0 },
+      { name: 'notion-something-new', mutates: true, kind: 'unknown', args: {}, targets: [], parents: [] as string[], affectedCount: 0, grant: NO_GRANT },
       { mode: 'auto', contextSet: new Set() },
     )
     expect(verdict.action).toBe('require-approval')
@@ -58,7 +87,7 @@ describe('evaluateApproval', () => {
   })
 
   it('does not trust model-supplied provenance flags', () => {
-    const verdict = evaluateApproval({ ...WRITE_CALL, args: { ...WRITE_CALL.args, injected_request: true } }, { mode: 'auto', contextSet: new Set(['p1']) })
+    const verdict = evaluateApproval({ ...PROPS_CALL, args: { ...PROPS_CALL.args, injected_request: true } }, { mode: 'auto', contextSet: new Set(['p1']) })
     expect(verdict.action).toBe('allow')
   })
 
@@ -68,7 +97,7 @@ describe('evaluateApproval', () => {
   })
 
   it('schema/view changes to existing databases escalate', () => {
-    const schema = { name: 'notion-update-data-source', mutates: true, kind: 'schema' as const, args: { data_source_id: 'ds_123456789012345678901234567890aa' }, targets: ['ds_123456789012345678901234567890aa'], parents: [] as string[], affectedCount: 1 }
+    const schema = { name: 'notion-update-data-source', mutates: true, kind: 'schema' as const, args: { data_source_id: 'ds_123456789012345678901234567890aa' }, targets: ['ds_123456789012345678901234567890aa'], parents: [] as string[], affectedCount: 1, grant: NO_GRANT }
     expect(evaluateApproval(schema, { mode: 'auto', contextSet: new Set() }).action).toBe('require-approval')
   })
 })
@@ -110,7 +139,7 @@ describe('ApprovalEngine cards', () => {
     let notified: unknown = null
     const engine = new ApprovalEngine((approval) => { notified = approval })
     const pending = engine.request(
-      { name: 'notion-update-page', mutates: true, kind: 'content-update', args: { page_id: 'abc123' }, targets: ['abc123'], parents: [] as string[], affectedCount: 1 },
+      { name: 'notion-update-page', mutates: true, kind: 'content-update', args: { page_id: 'abc123' }, targets: ['abc123'], parents: [] as string[], affectedCount: 1, grant: NO_GRANT },
       { action: 'require-approval', reasons: ['ask mode'] },
     )
     await Promise.resolve()
@@ -134,6 +163,7 @@ describe('ApprovalEngine cards', () => {
         targets: ['p1'],
         parents: [] as string[],
         affectedCount: 1,
+        grant: NO_GRANT,
       },
       { action: 'require-approval', reasons: ['ask mode'] },
     )

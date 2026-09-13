@@ -107,7 +107,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
 
   const scrollToEnd = () => requestAnimationFrame(() => scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }))
 
-  async function send(text: string, mentions: MentionRef[] = [], attachments: LocalAttachment[] = []) {
+  async function send(text: string, mentions: MentionRef[] = [], attachments: LocalAttachment[] = [], allowSmallEdits = false) {
     if (busyRef.current || readOnly) return
     historyRestoreCancelledRef.current = true
     historyGenerationRef.current++
@@ -120,7 +120,12 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
     sendAbortRef.current = sendAbort
     const deadline = setTimeout(() => { sendAbort.abort(); agentLoop.cancel() }, 10 * 60 * 1000)
     lastUsageRef.current = null
-    prepareAgentTurn(useNoxStore.getState().mode, [...mentions.map((mention) => mention.pageId), ...(currentPage ? [currentPage.pageId] : [])], attachments.map((attachment) => attachment.id))
+    const mode = useNoxStore.getState().mode
+    const turnPageIds = [...mentions.map((mention) => mention.pageId), ...(currentPage ? [currentPage.pageId] : [])]
+    // The small-edit grant is captured here at Send — normalized targets,
+    // grant flag, mode, and turn binding — and reset for the next turn. Only
+    // Auto with an explicit grant permits silent small edits.
+    prepareAgentTurn(mode, turnPageIds, attachments.map((attachment) => attachment.id), mode === 'auto' && allowSmallEdits ? { allowed: true, pages: turnPageIds } : undefined)
     busyRef.current = true
     setAgentBusy(true)
     setBusy(true)
@@ -304,7 +309,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
       <Composer
         busy={busy}
         readOnly={readOnly}
-        onSend={(t, mentions, attachments) => void send(t, mentions, attachments)}
+        onSend={(t, mentions, attachments, allowSmallEdits) => void send(t, mentions, attachments, allowSmallEdits)}
         onCancel={() => { sendAbortRef.current?.abort(); agentLoop.cancel() }}
       />
       </>}

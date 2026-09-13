@@ -109,13 +109,14 @@ export function Composer({
 }: {
   busy: boolean
   readOnly?: boolean
-  onSend: (text: string, mentions: MentionRef[], attachments: LocalAttachment[]) => void
+  onSend: (text: string, mentions: MentionRef[], attachments: LocalAttachment[], allowSmallEdits?: boolean) => void
   onCancel: () => void
 }) {
   const editorRef = useRef<HTMLDivElement>(null)
   const [value, setValue] = useState('')
   const [mentions, setMentions] = useState<PickerItem[]>([])
   const [attachments, setAttachments] = useState<LocalAttachment[]>([])
+  const [allowSmallEdits, setAllowSmallEdits] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const mentionCache = useRef(new Map<string, PickerItem>())
   const mentionSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -293,12 +294,15 @@ export function Composer({
     if (!el || busy || readOnly) return
     const text = editorText(el).trim()
     if (!text && attachments.length === 0) return
-    onSend(text || 'Attach these files to the appropriate Notion page.', mentions.map(({ pageId, title, iconEmoji, iconUrl }) => ({ pageId, title, iconEmoji, iconUrl })), attachments)
+    onSend(text || 'Attach these files to the appropriate Notion page.', mentions.map(({ pageId, title, iconEmoji, iconUrl }) => ({ pageId, title, iconEmoji, iconUrl })), attachments, allowSmallEdits)
     el.innerHTML = ''
     setMentions([])
     setAttachments([])
     setValue('')
+    setAllowSmallEdits(false)
   }
+
+  const grantTargets = [...mentions, ...(currentPage && !mentions.some((m) => m.pageId === currentPage.pageId) ? [currentPage] : [])]
 
   return (
     <div className="p-2.5" data-testid="composer-root">
@@ -408,6 +412,19 @@ export function Composer({
           <button onClick={() => fileInputRef.current?.click()} disabled={readOnly || busy} aria-label="Attach file" title="Attach file" className="rounded-md px-1.5 py-1 text-[11px] text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300 disabled:opacity-40">File</button>
           <ModelControls disabled={readOnly} />
           <span className="flex-1" />
+          {mode === 'auto' && !readOnly && (
+            <label className="mr-1 flex cursor-pointer items-center gap-1 text-[11px] text-zinc-500 hover:text-zinc-300" title="Allow up to five small property updates or text additions on the listed pages this turn. Replacements, moves, creations, uploads, and other pages still ask.">
+              <input
+                type="checkbox"
+                checked={allowSmallEdits}
+                disabled={busy}
+                onChange={(e) => setAllowSmallEdits(e.target.checked)}
+                data-testid="allow-small-edits"
+                className="h-3 w-3 accent-sky-500"
+              />
+              Allow small edits
+            </label>
+          )}
           {busy && (
             <span aria-hidden="true" className="mr-1 text-zinc-500">
               <SignalBarsIcon />
@@ -416,7 +433,7 @@ export function Composer({
           <select
             disabled={readOnly}
             value={mode}
-            onChange={(e) => setMode(e.target.value as Mode)}
+            onChange={(e) => { setMode(e.target.value as Mode); setAllowSmallEdits(false) }}
             aria-label="Change mode"
             data-testid="mode-selector"
             className="cursor-pointer appearance-none rounded-md px-1 py-0.5 text-xs text-zinc-300 outline-none hover:bg-zinc-800"
@@ -445,6 +462,12 @@ export function Composer({
             </button>
           )}
         </div>
+        {mode === 'auto' && !readOnly && grantTargets.length > 0 && (
+          <p className="px-1 pb-1 text-[10px] leading-relaxed text-zinc-600" data-testid="small-edit-scope">
+            Small edits apply to: {grantTargets.map((target) => target.title ?? target.pageId.slice(0, 8)).join(', ')}. Up to five
+            property updates or text additions — replacements, moves, creations, uploads, and other pages still ask.
+          </p>
+        )}
       </div>
     </div>
   )

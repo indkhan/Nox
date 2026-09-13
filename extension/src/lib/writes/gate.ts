@@ -2,7 +2,7 @@ import type { ToolCallRequest } from '../codex/client'
 import { classifyToolCall, detectRichPage, requiresWorkspacePlan, type CallClassification } from './classify'
 import { buildInverse, type PreImage } from './inverse'
 import { capturePageSnapshot, assertUnchanged, GuardViolation, type PageSnapshot } from './guard'
-import { ApprovalEngine, evaluateApproval, type Mode } from './approvals'
+import { ApprovalEngine, evaluateApproval, type Mode, type SmallEditGrant } from './approvals'
 import { MutationJournal, type IntentScope, type JournalEntry } from './journal'
 import { hashMarkdown } from './guard'
 import { normalizeId } from '../../shared/notion-page'
@@ -73,6 +73,10 @@ export interface WriteGateDeps {
   getWorkspaceId?: () => string | null
   /** Capability check for inverse tools, which bypass the executor pre-check. */
   assertToolAllowed?: (tool: string) => void
+  /** Explicit per-turn small-edit grant captured at Send. */
+  getSmallEditGrant?: () => SmallEditGrant
+  /** Reserve unplanned-effect budget, counted by objects. Absent means uncapped (tests). */
+  recordUnplannedEffects?: (count: number) => boolean
 }
 
 const CONTENT_WRITE_KINDS = new Set(['content-replace', 'content-update'])
@@ -493,7 +497,10 @@ export class WriteGate {
       return textResult(e instanceof Error ? e.message : String(e))
     }
 
-    const needsWorkspacePlan = requiresWorkspacePlan(classification, effect.args)
+    const needsWorkspacePlan = requiresWorkspacePlan(classification, req.tool, effect.args) &&
+      // A single-page move uses ordinary action approval (which it always
+      // needs); broad moves still require a plan.
+      !(classification.kind === 'move' && effect.count === 1)
     // Plan-covered operations skip only redundant ordinary consent: every
     // other check still runs, and the reservation is revalidated before
     // dispatch and consumed at dispatch, whatever the outcome.
@@ -516,8 +523,19 @@ export class WriteGate {
     // Plan-covered operations skip only redundant ordinary consent: the plan
     // card was the consent step, and every other check still runs below.
     let frozenArgs = effect.args
+    let grantPath = false
     if (reservationId === undefined) {
-      const verdict = evaluateApproval({ ...classification, name: req.tool, args: effect.args, provenance: req.provenance, targets: effect.targets, parents: effect.parents, affectedCount: effect.count }, {
+      const approvalCall = {
+        ...classification,
+        name: req.tool,
+        args: effect.args,
+        provenance: req.provenance,
+        targets: effect.targets,
+        parents: effect.parents,
+        affectedCount: effect.count,
+        grant: this.deps.getSmallEditGrant?.() ?? { allowed: false, pages: [] },
+      }
+      const verdict = evaluateApproval(approvalCall, {
         mode,
         contextSet: this.deps.getContextSet(),
       })
@@ -528,14 +546,14 @@ export class WriteGate {
       // the same snapshot for dispatch, so later edits of the request object
       // cannot change what runs.
       if (verdict.action === 'require-approval' && !approved) {
-        const decision = await this.approvals.request(
-          { ...classification, name: req.tool, args: effect.args, targets: effect.targets, parents: effect.parents, affectedCount: effect.count },
-          verdict,
-        )
+        const decision = await this.approvals.request(approvalCall, verdict)
         if (!decision.approved) {
           return textResult('REJECTED_BY_USER: the user declined this change. Do not retry it without asking.')
         }
         frozenArgs = decision.frozenArgs
+      } else {
+        // Silent only via the explicit grant path (Auto); Ask never allows.
+        grantPath = verdict.action === 'allow'
       }
     }
 
@@ -547,6 +565,15 @@ export class WriteGate {
       }
       if (reservationId !== undefined && this.deps.checkPlanReservation && !this.deps.checkPlanReservation(reservationId, planScope)) {
         return textResult('PLAN_MISMATCH: the approved operation is no longer valid for this turn — request a fresh review. No changes were made.')
+      }
+      if (grantPath) {
+        // Reserve the unplanned-effect budget synchronously before dispatch,
+        // counted by objects. Past the cap, demand a workspace plan first.
+        // Reservations are never released — not even after ambiguous dispatch.
+        const reserved = this.deps.recordUnplannedEffects?.(effect.count) ?? true
+        if (!reserved) {
+          return textResult('PLAN_REQUIRED: this turn already used its five unplanned small edits — propose a workspace plan for the remaining work. No changes were made.')
+        }
       }
       return this.executeMutation(req, classification, scope, effect, frozenArgs, reservationId)
     })

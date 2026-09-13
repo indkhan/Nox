@@ -110,8 +110,15 @@ describe('truncateResult / context preamble', () => {
     const instructions = buildDeveloperInstructions()
     expect(instructions).toMatch(/never ask.*type.*approv/i)
     expect(instructions).toMatch(/do not claim.*card.*if.*fail/i)
-    expect(instructions).toMatch(/Auto mode.*without.*click/i)
+    expect(instructions).not.toMatch(/Auto mode.*without.*click/i)
+    expect(instructions).toMatch(/approval card and waits in both Ask and Auto modes/i)
     expect(instructions).not.toContain('propose a plan, and wait for approval')
+  })
+
+  it('describes the explicit per-turn small-edit grant without inferring authorization', () => {
+    const instructions = buildDeveloperInstructions()
+    expect(instructions).toMatch(/small-edit grant/i)
+    expect(instructions).toMatch(/at most five/i)
   })
 
   it('requires complete evidence and operations in plan tool calls', () => {

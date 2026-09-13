@@ -175,6 +175,48 @@ describe('viewer mode', () => {
     useNoxStore.setState({ currentPage: null })
   })
 
+  it('hides the small-edit grant outside Auto mode', async () => {
+    useNoxStore.setState({ mode: 'ask' })
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    await act(async () => root.render(<Composer busy={false} onSend={vi.fn()} onCancel={vi.fn()} />))
+    expect(container.querySelector('[data-testid=allow-small-edits]')).toBeNull()
+    await act(async () => root.unmount())
+    container.remove()
+  })
+
+  it('captures the small-edit grant at send and resets it', async () => {
+    const onSend = vi.fn()
+    useNoxStore.setState({
+      mode: 'auto',
+      currentPage: { pageId: 'p1', url: 'https://app.notion.com/p/Second-Brain-p1', title: 'Second Brain' },
+    })
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    try {
+      await act(async () => root.render(<Composer busy={false} onSend={onSend} onCancel={vi.fn()} />))
+      const checkbox = container.querySelector('[data-testid=allow-small-edits]') as HTMLInputElement
+      expect(checkbox).not.toBeNull()
+      expect(checkbox.disabled).toBe(false)
+      expect(container.textContent).toContain('Second Brain')
+      const editor = container.querySelector('[data-testid=composer]') as HTMLDivElement
+      editor.textContent = 'fix a typo'
+      await act(async () => editor.dispatchEvent(new InputEvent('input', { bubbles: true })))
+      await act(async () => checkbox.click())
+      expect(checkbox.checked).toBe(true)
+      await act(async () => { (container.querySelector('[data-testid=send]') as HTMLButtonElement).click() })
+      expect(onSend).toHaveBeenCalledOnce()
+      expect(onSend.mock.calls[0][3]).toBe(true)
+      expect((container.querySelector('[data-testid=allow-small-edits]') as HTMLInputElement).checked).toBe(false)
+    } finally {
+      await act(async () => root.unmount())
+      container.remove()
+      useNoxStore.setState({ mode: 'ask', currentPage: null })
+    }
+  })
+
   it('loads MCP JSON results after typing a mention query', async () => {
     vi.useFakeTimers()
     vi.mocked(notion.scheduleCallTool).mockClear().mockResolvedValueOnce({

@@ -45,8 +45,21 @@ describe('classifyToolCall', () => {
   })
 
   it('escalates bulk page creation without penalizing a small explicit create', () => {
-    expect(requiresWorkspacePlan(classifyToolCall('notion-create-pages'), { pages: [{}, {}] })).toBe(false)
-    expect(requiresWorkspacePlan(classifyToolCall('notion-create-pages'), { pages: Array.from({ length: 6 }, () => ({})) })).toBe(true)
+    expect(requiresWorkspacePlan(classifyToolCall('notion-create-pages'), 'notion-create-pages', { pages: [{}, {}] })).toBe(false)
+    expect(requiresWorkspacePlan(classifyToolCall('notion-create-pages'), 'notion-create-pages', { pages: Array.from({ length: 6 }, () => ({})) })).toBe(true)
+  })
+
+  it('lets a single cosmetic view rename use ordinary action approval', () => {
+    const rename = { view_id: 'view-1', name: 'History' }
+    expect(requiresWorkspacePlan(classifyToolCall('notion-update-view', rename), 'notion-update-view', rename)).toBe(false)
+    const reshaped = { view_id: 'view-1', name: 'History', sorts: [{ property: 'Name' }] }
+    expect(requiresWorkspacePlan(classifyToolCall('notion-update-view', reshaped), 'notion-update-view', reshaped)).toBe(true)
+    expect(requiresWorkspacePlan(classifyToolCall('notion-create-view'), 'notion-create-view', { database_id: 'db-1', name: 'New' })).toBe(true)
+    expect(requiresWorkspacePlan(classifyToolCall('notion-update-data-source'), 'notion-update-data-source', {})).toBe(true)
+  })
+
+  it('keeps unverified meeting-note queries out of the read surface', () => {
+    expect(classifyToolCall('notion-query-meeting-notes')).toMatchObject({ mutates: true, kind: 'unknown' })
   })
 })
 

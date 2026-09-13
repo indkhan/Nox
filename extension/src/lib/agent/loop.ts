@@ -1,5 +1,6 @@
 import type { CodexClient, CodexEvent, ThreadSettings } from '../codex/client'
 import type { NativeBridge } from '../codex/native'
+import { WORKSPACE_PLAN_TOOL_NAME } from '../architect/tool'
 import { ToolExecutor } from './executor'
 import { buildContextPreamble, type PageContext } from './context'
 import type { CurrentPage } from '../../shared/notion-page'
@@ -43,7 +44,9 @@ export class AgentLoop {
         ...req,
         provenance: this.untrustedContextThisTurn ? 'untrusted-context' : 'user-only',
       })
-      this.untrustedContextThisTurn = true
+      // Local plan receipts are Nox-internal status, not workspace content:
+      // only real tool exposure taints the turn.
+      if (req.tool !== WORKSPACE_PLAN_TOOL_NAME) this.untrustedContextThisTurn = true
       return {
         success: outcome.success,
         contentItems: outcome.contentItems,
@@ -138,7 +141,9 @@ export class AgentLoop {
     opts: { currentPage?: CurrentPage; mentions?: PageContext[]; attachments?: LocalAttachment[]; signal?: AbortSignal; prepareContext?: (signal: AbortSignal) => Promise<PageContext[]>; timeoutMs?: number },
   ): Promise<{ text: string; interrupted: boolean }> {
     this.cancelled = false
-    this.untrustedContextThisTurn = (opts.mentions?.length ?? 0) > 0 || !!opts.prepareContext
+    // Provenance is actual exposure, not callback presence: an empty
+    // preparation callback taints nothing by itself.
+    this.untrustedContextThisTurn = opts.mentions?.some((mention) => mention.markdown != null) ?? false
     const abort = new AbortController()
     this.turnAbort = abort
     const cancel = () => this.cancel()
@@ -151,6 +156,7 @@ export class AgentLoop {
       if (opts.signal?.aborted) this.cancel()
       abort.signal.throwIfAborted()
       const mentions = opts.prepareContext ? await abortable(opts.prepareContext(abort.signal), abort.signal) : opts.mentions
+      if (mentions?.some((mention) => mention.markdown != null)) this.untrustedContextThisTurn = true
       await abortable(this.ensureThread(undefined, abort.signal), abort.signal)
       abort.signal.throwIfAborted()
       if (this.deps.codex.researchLimitation) this.listeners.forEach(l => l({ kind: 'commentary', id: 'research-limitation', text: this.deps.codex.researchLimitation! }))

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { WriteGate } from '../../src/lib/writes/gate'
 import { MutationJournal } from '../../src/lib/writes/journal'
 import { requestRuntimeUndo } from '../../src/lib/writes/undo'
+import { createTurnAccessState } from '../../src/lib/agent/turn-access'
 import type { Mode } from '../../src/lib/writes/approvals'
 
 const PAGE = 'b'.repeat(32)
@@ -24,15 +25,19 @@ function makeGate(opts: {
   const calls: Array<{ name: string; args: Record<string, unknown> }> = []
   const journal = opts.journal ?? new MutationJournal()
   journal.setThread('thread-owner')
+  const access = createTurnAccessState()
+  access.begin(opts.mode ?? 'auto', [PAGE], [], { allowed: true, pages: [PAGE] })
   const gate = new WriteGate({
     callTool: opts.transport ?? (async (name, args) => {
       calls.push({ name, args })
       return { content: [{ type: 'text', text: 'ok' }] }
     }),
     fetchPageMarkdown: async () => '# Simple\noriginal text',
-    getMode: () => opts.mode ?? 'auto',
-    getContextSet: () => new Set([PAGE]),
+    getMode: () => access.mode(),
+    getContextSet: () => access.contextPages(),
     journal,
+    getSmallEditGrant: () => access.smallEditGrant(),
+    recordUnplannedEffects: (count) => access.recordUnplannedEffects(count),
     ownership: {
       isOwner: () => owner,
       getOwnerGeneration: opts.onOwnerGen ?? (() => ownerGen),

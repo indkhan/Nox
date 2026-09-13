@@ -76,7 +76,7 @@ export function validateEffect(tool: string, args: Record<string, unknown>): Val
     parents: parsed.parents,
     count: parsed.count,
     risk: classification.impact ?? 'medium',
-    needsPlan: requiresWorkspacePlan(classification, canonical),
+    needsPlan: requiresWorkspacePlan(classification, tool, canonical),
     needsBaseline: classification.kind === 'content-replace' || classification.kind === 'content-update',
   }
 }

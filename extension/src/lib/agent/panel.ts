@@ -31,8 +31,8 @@ export const planEngine = new PlanEngine(
   (id) => useNoxStore.getState().removePlan(id),
 )
 const attachments = attachmentRepository(openNoxDB)
-export function prepareAgentTurn(mode: Mode, pageIds: string[], attachmentIds: string[] = []): void {
-  turnAccess.begin(mode, pageIds, attachmentIds)
+export function prepareAgentTurn(mode: Mode, pageIds: string[], attachmentIds: string[] = [], grant?: { allowed: boolean; pages: string[] }): void {
+  turnAccess.begin(mode, pageIds, attachmentIds, grant)
 }
 
 export const writeGate = new WriteGate({
@@ -54,6 +54,8 @@ export const writeGate = new WriteGate({
     getConnectionGeneration: () => notion.connectionGeneration,
   },
   getWorkspaceId: () => notion.identity?.workspaceId ?? null,
+  getSmallEditGrant: () => turnAccess.smallEditGrant(),
+  recordUnplannedEffects: (count) => turnAccess.recordUnplannedEffects(count),
   assertToolAllowed: (tool) => {
     const verdict = notion.capabilities.can(tool)
     if (!verdict.allowed) throw new Error(`"${tool}" ${verdict.reason ?? 'is unavailable'}`)

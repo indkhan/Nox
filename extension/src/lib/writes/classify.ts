@@ -74,11 +74,23 @@ function classified(mutates: boolean, kind: MutationKind, impact: CallClassifica
   return { mutates, kind, impact, requiresWorkspacePlan: impact === 'structural' }
 }
 
-export function requiresWorkspacePlan(call: CallClassification, args: Record<string, unknown> = {}): boolean {
-  if (call.requiresWorkspacePlan) return true
+export function requiresWorkspacePlan(call: CallClassification, tool: string, args: Record<string, unknown> = {}): boolean {
+  if (call.requiresWorkspacePlan) {
+    // A single cosmetic view rename uses ordinary action approval; anything
+    // more structural still needs a plan. Schema changes always need one —
+    // field deletions cannot be told apart without a verified schema contract.
+    if (call.kind === 'view' && tool === 'notion-update-view' && isViewNameOnlyChange(args)) return false
+    return true
+  }
   if (call.kind !== 'create-page') return false
   const pages = args.pages ?? args.data
   return Array.isArray(pages) && pages.length > 5
+}
+
+/** True for an update-view carrying only a new name alongside id context. */
+function isViewNameOnlyChange(args: Record<string, unknown>): boolean {
+  if (typeof args.name !== 'string' || !args.name.trim()) return false
+  return Object.keys(args).every((key) => key === 'view_id' || key === 'database_id' || key === 'data_source_id' || key === 'name')
 }
 
 /** Property types whose previous values can be faithfully restored (MVP §6.5). */

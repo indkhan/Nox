@@ -7,6 +7,7 @@ import { GuardViolation } from '../../src/lib/writes/guard'
 import { requestRuntimeUndo, undoEntry, undoNewest } from '../../src/lib/writes/undo'
 import { buildInverse } from '../../src/lib/writes/inverse'
 import { normalizeId } from '../../src/shared/notion-page'
+import { createTurnAccessState } from '../../src/lib/agent/turn-access'
 import type { ValidatedEffect } from '../../src/lib/writes/effects'
 import type { PlanScope } from '../../src/lib/architect/plan-engine'
 import type { Mode } from '../../src/lib/writes/approvals'
@@ -18,6 +19,7 @@ function makeGate(over: {
   markdown?: () => string
   callTool?: (name: string, args: Record<string, unknown>) => Promise<{ content: Array<{ type: string; text?: string }>; isError?: boolean }>
   contextSet?: Set<string>
+  grant?: { allowed: boolean; pages: string[] }
   authorizeStructuralChange?: (effect: ValidatedEffect, scope: PlanScope) => { allowed: boolean; reason?: string; reservationId?: string }
   checkPlanReservation?: (reservationId: string, scope: PlanScope) => boolean
   consumePlanReservation?: (reservationId: string, resultText?: string) => void
@@ -29,6 +31,8 @@ function makeGate(over: {
   let simulatedMarkdown = '# Simple\noriginal text'
   const calls: Array<{ name: string; args: Record<string, unknown> }> = []
   const journal = over.journal ?? new MutationJournal()
+  const access = createTurnAccessState()
+  access.begin(over.mode ?? 'ask', [...(over.contextSet ?? new Set([PAGE]))], [], over.grant ?? { allowed: true, pages: [PAGE] })
   const gate = new WriteGate({
     callTool:
       over.callTool ??
@@ -39,9 +43,11 @@ function makeGate(over: {
         return { content: [{ type: 'text', text: `ran ${name}` }] }
       }),
     fetchPageMarkdown: async () => over.markdown?.() ?? simulatedMarkdown,
-    getMode: () => over.mode ?? 'ask',
-    getContextSet: () => over.contextSet ?? new Set([PAGE]),
+    getMode: () => access.mode(),
+    getContextSet: () => access.contextPages(),
     journal,
+    getSmallEditGrant: () => access.smallEditGrant(),
+    recordUnplannedEffects: (count) => access.recordUnplannedEffects(count),
     authorizeStructuralChange: over.authorizeStructuralChange ?? (() => ({ allowed: true })),
     checkPlanReservation: over.checkPlanReservation,
     consumePlanReservation: over.consumePlanReservation,
@@ -258,7 +264,10 @@ describe('WriteGate', () => {
     const { gate, journal } = makeGate({ mode: 'auto', callTool: async () => ({
       content: [{ type: 'text', text: 'write failed' }], isError: true,
     }) })
-    const result = await gate.handle({ rid: 20, tool: 'notion-update-page', args: { page_id: PAGE }, namespace: null }) as { isError?: boolean }
+    const pending = gate.handle({ rid: 20, tool: 'notion-update-page', args: { page_id: PAGE }, namespace: null })
+    await new Promise((r) => setTimeout(r, 10))
+    gate.approvals.answer(gate.approvals.pendingIds[0], 'approve')
+    const result = await pending as { isError?: boolean }
     expect(result.isError).toBe(true)
     const entries = await journal.newestFirst()
     expect(entries).toHaveLength(1)
@@ -281,12 +290,15 @@ describe('WriteGate', () => {
     })
     await gate.handle({ rid: 1, tool: 'notion-fetch', args: { id: PAGE }, namespace: null })
     markdown = '# Human edit'
-    const out = (await gate.handle({
+    const pending = gate.handle({
       rid: 2,
       tool: 'notion-update-page',
       args: { data: { page_id: PAGE }, command: { type: 'replace_content', content: '# Agent edit' } },
       namespace: null,
-    })) as { isError?: boolean; content: Array<{ text: string }> }
+    })
+    await new Promise((r) => setTimeout(r, 10))
+    gate.approvals.answer(gate.approvals.pendingIds[0], 'approve')
+    const out = (await pending) as { isError?: boolean; content: Array<{ text: string }> }
     expect(out.isError).toBe(true)
     expect(out.content[0].text).toContain('PAGE_CHANGED_SINCE_READ')
     expect(writes).toBe(0)
@@ -317,12 +329,16 @@ describe('WriteGate', () => {
         return { content: [] }
       },
     })
-    await gate.handle({
+    const pending = gate.handle({
       rid: 7,
       tool: 'notion-create-pages',
       args: { injected_request: true },
       namespace: null,
     })
+    await new Promise((r) => setTimeout(r, 10))
+    expect(gate.approvals.pendingCount).toBe(1)
+    gate.approvals.answer(gate.approvals.pendingIds[0], 'approve')
+    await pending
     expect(received).toEqual({})
   })
 
@@ -347,6 +363,8 @@ describe('WriteGate', () => {
         getConnectionGeneration: () => 'test-conn-gen',
       },
       getWorkspaceId: () => 'workspace-1',
+      getSmallEditGrant: () => ({ allowed: true, pages: [PAGE] }),
+      recordUnplannedEffects: () => true,
     })
     journal.setThread('thread-test')
     const out = await gate.handle({
@@ -379,9 +397,12 @@ describe('WriteGate', () => {
       markdown: () => markdown,
       callTool: async () => { markdown = '# Nox edit'; return { content: [] } },
     })
-    await gate.handle({ rid: 21, tool: 'notion-update-page', args: {
+    const pending = gate.handle({ rid: 21, tool: 'notion-update-page', args: {
       data: { page_id: PAGE }, command: { type: 'replace_content', content: '# Nox edit' },
     }, namespace: null })
+    await new Promise((r) => setTimeout(r, 10))
+    gate.approvals.answer(gate.approvals.pendingIds[0], 'approve')
+    await pending
     const entry = (await journal.undoable())[0]
     markdown = '# Later human edit'
     await expect(gate.handleUndo(entry.inverse!.tool, entry.inverse!.args)).rejects.toThrow(/changed after Nox/i)
@@ -789,6 +810,157 @@ describe('WriteGate effect validation (Epoch 05)', () => {
       data: { page_id: PAGE },
       command: { type: 'update_properties', properties: { keep: 1 } },
     })
+  })
+})
+
+describe('WriteGate Auto grant and material plans (Epoch 06)', () => {
+  it('auto without the grant requests ordinary consent instead of silent edits', async () => {
+    const { gate, calls } = makeGate({ mode: 'auto', grant: { allowed: false, pages: [] } })
+    const pending = gate.handle(autoProperties(70))
+    await new Promise((r) => setTimeout(r, 10))
+    expect(gate.approvals.pendingCount).toBe(1)
+    gate.approvals.answer(gate.approvals.pendingIds[0], 'approve')
+    await pending
+    expect(calls).toHaveLength(1)
+  })
+
+  it('granted small edits on listed pages skip redundant cards', async () => {
+    const { gate, calls } = makeGate({ mode: 'auto', grant: { allowed: true, pages: [PAGE] } })
+    const out = (await gate.handle(autoProperties(71))) as { content: Array<{ text: string }> }
+    expect(out.content[0].text).toContain('ran notion-update-page')
+    expect(calls).toHaveLength(1)
+    expect(gate.approvals.pendingCount).toBe(0)
+  })
+
+  it('grant stays silent only inside its listed pages', async () => {
+    const { gate, calls } = makeGate({ mode: 'auto', grant: { allowed: true, pages: ['other-page'] } })
+    const pending = gate.handle(autoProperties(72))
+    await new Promise((r) => setTimeout(r, 10))
+    expect(gate.approvals.pendingCount).toBe(1)
+    gate.approvals.answer(gate.approvals.pendingIds[0], 'approve')
+    await pending
+    expect(calls).toHaveLength(1)
+  })
+
+  it('grant never covers replacements, moves, or untrusted content', async () => {
+    const granted: { mode: Mode; grant: { allowed: boolean; pages: string[] } } = { mode: 'auto', grant: { allowed: true, pages: [PAGE] } }
+    for (const req of [
+      { rid: 73, tool: 'notion-update-page', args: { data: { page_id: PAGE }, command: { type: 'replace_content', content: 'x' } }, namespace: null },
+      { rid: 74, tool: 'notion-move-pages', args: { page_ids: [PAGE] }, namespace: null },
+    ]) {
+      const { gate } = makeGate(granted)
+      const pending = gate.handle(req)
+      await new Promise((r) => setTimeout(r, 10))
+      expect(gate.approvals.pendingCount).toBe(1)
+      gate.approvals.answer(gate.approvals.pendingIds[0], 'reject')
+      await pending
+    }
+    const { gate: untrustedGate } = makeGate(granted)
+    const pending = untrustedGate.handle({ ...autoProperties(75), provenance: 'untrusted-context' })
+    await new Promise((r) => setTimeout(r, 10))
+    expect(untrustedGate.approvals.pendingCount).toBe(1)
+    untrustedGate.approvals.rejectAllPending()
+    await pending
+  })
+
+  it('refuses the sixth unplanned effect with a plan-required error', async () => {
+    const { gate, calls } = makeGate({ mode: 'auto', grant: { allowed: true, pages: [PAGE] } })
+    for (let rid = 80; rid < 85; rid++) {
+      await gate.handle(autoProperties(rid))
+    }
+    expect(calls).toHaveLength(5)
+    const out = (await gate.handle(autoProperties(85))) as { isError?: boolean; content: Array<{ text?: string }> }
+    expect(out.isError).toBe(true)
+    expect(out.content[0].text).toMatch(/PLAN_REQUIRED/)
+    expect(calls).toHaveLength(5)
+  })
+
+  it('reads and search bypass plan and action consent', async () => {
+    const { gate, journal, calls } = makeGate({ mode: 'auto', grant: { allowed: false, pages: [] } })
+    const out = (await gate.handle({ rid: 86, tool: 'notion-search', args: { query: 'x' }, namespace: null })) as {
+      content: Array<{ text: string }>
+    }
+    expect(out.content[0].text).toContain('ran notion-search')
+    expect(calls).toHaveLength(1)
+    expect(gate.approvals.pendingCount).toBe(0)
+    expect(await journal.newestFirst()).toHaveLength(0)
+  })
+
+  it('routes a single cosmetic view rename through ordinary approval', async () => {
+    let planChecks = 0
+    const { gate, calls } = makeGate({
+      mode: 'ask',
+      authorizeStructuralChange: () => {
+        planChecks++
+        return { allowed: true }
+      },
+    })
+    const pending = gate.handle({ rid: 87, tool: 'notion-update-view', args: { view_id: 'view-1', name: 'History' }, namespace: null })
+    await new Promise((r) => setTimeout(r, 10))
+    expect(planChecks).toBe(0)
+    expect(gate.approvals.pendingCount).toBe(1)
+    gate.approvals.answer(gate.approvals.pendingIds[0], 'approve')
+    await pending
+    expect(calls).toHaveLength(1)
+  })
+
+  it('routes broader view changes through plan authorization', async () => {
+    let planChecks = 0
+    const { gate, calls } = makeGate({
+      mode: 'ask',
+      authorizeStructuralChange: () => {
+        planChecks++
+        return { allowed: true }
+      },
+    })
+    const pending = gate.handle({
+      rid: 88,
+      tool: 'notion-update-view',
+      args: { view_id: 'view-1', name: 'History', sorts: [{ property: 'Name' }] },
+      namespace: null,
+    })
+    await new Promise((r) => setTimeout(r, 10))
+    expect(planChecks).toBe(1)
+    expect(gate.approvals.pendingCount).toBe(1)
+    gate.approvals.answer(gate.approvals.pendingIds[0], 'approve')
+    await pending
+    expect(calls).toHaveLength(1)
+  })
+
+  it('routes a single-page move through ordinary approval', async () => {
+    let planChecks = 0
+    const { gate, calls } = makeGate({
+      mode: 'ask',
+      authorizeStructuralChange: () => {
+        planChecks++
+        return { allowed: true }
+      },
+    })
+    const pending = gate.handle({ rid: 89, tool: 'notion-move-pages', args: { page_ids: [PAGE] }, namespace: null })
+    await new Promise((r) => setTimeout(r, 10))
+    expect(planChecks).toBe(0)
+    expect(gate.approvals.pendingCount).toBe(1)
+    gate.approvals.answer(gate.approvals.pendingIds[0], 'approve')
+    await pending
+    expect(calls).toHaveLength(1)
+  })
+
+  it('routes broad moves through plan authorization', async () => {
+    let planChecks = 0
+    const { gate, calls } = makeGate({
+      mode: 'ask',
+      authorizeStructuralChange: () => {
+        planChecks++
+        return { allowed: true }
+      },
+    })
+    const pending = gate.handle({ rid: 90, tool: 'notion-move-pages', args: { page_ids: [PAGE, 'other-page'] }, namespace: null })
+    await new Promise((r) => setTimeout(r, 10))
+    expect(planChecks).toBe(1)
+    expect(gate.approvals.pendingCount).toBe(1)
+    gate.approvals.answer(gate.approvals.pendingIds[0], 'approve')
+    await pending
+    expect(calls).toHaveLength(1)
   })
 })
 

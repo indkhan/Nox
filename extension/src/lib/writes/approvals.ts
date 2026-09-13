@@ -5,6 +5,17 @@ import { isDestructiveKind } from './effects'
 
 export type Mode = 'ask' | 'auto'
 
+/**
+ * Explicit per-turn small-edit grant captured from the composer at Send.
+ * Available only in Auto, off by default, never set by model tools: silent
+ * edits may only touch listed pages, and only for fixture-verified
+ * non-destructive property updates and targeted text additions.
+ */
+export interface SmallEditGrant {
+  allowed: boolean
+  pages: string[]
+}
+
 export interface ApprovalContext {
   mode: Mode
   /** Page ids the user explicitly referenced this turn. */
@@ -29,11 +40,16 @@ export interface ApprovalCall extends CallClassification {
   parents: string[]
   /** Affected-object count from the validated effect (creations count even with no existing targets). */
   affectedCount: number
+  /** Explicit per-turn grant; Auto without it requests ordinary consent. */
+  grant: SmallEditGrant
 }
 
 /**
  * Decides whether a mutation may run immediately (MVP §6.3). Ask-before-changes
- * is the default; Auto still gates the escalation list.
+ * is the default. In Auto, silence requires the explicit per-turn small-edit
+ * grant for an eligible effect — anything else takes the ordinary action card.
+ * The grant never waives other escalations: schema, moves, out-of-context
+ * targets, and untrusted exposure still need review.
  */
 export function evaluateApproval(call: ApprovalCall, ctx: ApprovalContext): ApprovalVerdict {
   if (!call.mutates) return { action: 'allow' }
@@ -42,6 +58,8 @@ export function evaluateApproval(call: ApprovalCall, ctx: ApprovalContext): Appr
 
   if (ctx.mode === 'ask') {
     reasons.push('ask-before-changes mode is on')
+  } else if (!isGrantEligible(call)) {
+    reasons.push(grantRefusalReason(call))
   }
 
   const scoped = [...ctx.contextSet].map((id) => normalizeId(id) ?? id)
@@ -61,6 +79,31 @@ export function evaluateApproval(call: ApprovalCall, ctx: ApprovalContext): Appr
   }
   if (reasons.length > 0) return { action: 'require-approval', reasons }
   return { action: 'allow' }
+}
+
+/**
+ * Grant-eligible effects: fixture-verified non-destructive single-object
+ * property updates and targeted text additions on listed pages only.
+ * Excludes replacement, deletion, creation, moves, schema/view changes,
+ * upload, unknown effects, and out-of-grant targets.
+ */
+function isGrantEligible(call: ApprovalCall): boolean {
+  if (!call.grant.allowed) return false
+  if (call.kind !== 'properties' && call.kind !== 'content-update') return false
+  const pages = new Set(call.grant.pages.map((id) => normalizeId(id) ?? id))
+  const scopeIds = [...call.targets, ...call.parents].map((id) => normalizeId(id) ?? id)
+  if (scopeIds.length === 0) return false
+  return scopeIds.every((id) => pages.has(id))
+}
+
+function grantRefusalReason(call: ApprovalCall): string {
+  if (!call.grant.allowed) {
+    return 'Auto mode needs the “Allow small edits this turn” grant for silent edits — approve each change instead'
+  }
+  if (call.kind !== 'properties' && call.kind !== 'content-update') {
+    return 'the small-edit grant covers only property updates and small text additions on the listed pages'
+  }
+  return 'the change targets pages outside the granted small-edit pages'
 }
 
 /**

@@ -242,7 +242,12 @@ rather than stripped silently. Substantial work needs an explicit workspace
 plan with complete operation arguments in both Ask and Auto modes: approval
 covers exactly the listed operations once each, bound to the current
 workspace, connection, thread, and turn, and later creations are referenced
-only by operation label until a second concrete plan supplies their ids. Approval cards show the complete canonical
+only by operation label until a second concrete plan supplies their ids.
+Reads never need plans or approval. A single cosmetic view rename or
+single-page move uses an ordinary approval card; anything structural needs a
+plan. In Auto, silent edits happen only under the user's explicit per-turn
+small-edit grant for listed pages — property updates and small text additions
+up to five effects — while analysis without the grant authorizes nothing. Approval cards show the complete canonical
 payload with targets, object count, and destructive flags outside the
 collapsible details; approving dispatches the frozen snapshot, never the live
 request object, and there is no approve-all. Workspace plans validate every
