@@ -16,7 +16,7 @@ test results alone.
 - [ ] Request a new database: Nox inspects likely existing structures and shows a plan before mutation.
 - [ ] Reject the plan: no structural tool runs.
 - [ ] Approve a plan, then attempt a different target: Nox returns `PLAN_MISMATCH` and makes no change.
-- [ ] Attach a file: Nox uploads it and inserts Notion's returned native block Markdown.
+- [ ] Attach a file: Nox states that upload into Notion is unavailable in this alpha and keeps the file local-only (no bytes leave the browser).
 - [ ] Request an unsupported embed or bookmark: Nox states the limitation instead of claiming a plain link is native.
 
 Automated coverage is unit/integration level; these steps need a real browser,

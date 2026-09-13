@@ -88,8 +88,8 @@ duplicate agents writing into the same thread.
 The UI is React with a single Zustand store. Model output is rendered through `marked`
 and DOMPurify without automatic media/resource sinks: Markdown images become ordinary
 clickable links, raw resource tags are removed, and page icon URLs use a local fallback.
-Extension-page CSP permits packaged assets and only the verified Notion MCP/upload
-connections. Valid dashed or undashed Notion UUID links become HTTPS page links;
+Extension-page CSP permits packaged assets and only the verified Notion MCP
+connection. Valid dashed or undashed Notion UUID links become HTTPS page links;
 web sources use Markdown links with safe new-tab behavior. Search activity preserves
 item IDs, queries and available open/find actions, with expandable details. Commentary
 and documented reasoning summaries are shown as progress, separate from the answer;
@@ -103,7 +103,7 @@ turn setup; a failed settings read is retryable and does not silently enable res
 Workspace claims require workspace evidence;
 current external facts require available web research. Discussion/research does not
 authorize changes, including in Auto mode. Incomplete evidence and failed work must
-be disclosed, and selected files are described as upload inputs. The composer supports the current page, explicit `@` page mentions, local
+be disclosed, and selected files are described as local-only inputs. The composer supports the current page, explicit `@` page mentions, local
 attachments, Ask/Auto mode, model, reasoning effort, and service tier.
 
 ### Notion connection
@@ -153,7 +153,7 @@ account, and starts or resumes a persistent thread with:
 - `sandbox: "read-only"`
 - `approvalPolicy: "never"`
 - Notion tools converted at runtime to Codex dynamic tools
-- Nox's workspace-plan and local-file-upload tools
+- Nox's workspace-plan tool (the local-file-upload tool stays hidden until its ticket contract is verified)
 - Nox safety instructions
 
 `approvalPolicy: "never"` applies to Codex's own computer actions. Notion changes still
@@ -197,7 +197,7 @@ opaque continuation handles; `nox-read-continuation` reads already-fetched text 
 the same 12-call limit and source capability check. Its memory is ephemeral, capped at
 one million characters per turn, and cleared on completion. Remote Notion truncation
 requires fetching the returned omitted subtree IDs or using supported targeted tools.
-Attachments remain upload inputs; their metadata does not provide PDF/image contents.
+Attachments remain local-only inputs; their metadata does not provide PDF/image contents.
 
 Failed resume never starts a replacement thread. Only a recoverable connection failure
 is retried once against the same thread, before any turn is sent. Codex events are
@@ -318,6 +318,17 @@ and upload calls fail closed with `UPLOAD_UNSUPPORTED` before ticket creation,
 transport, or journaling. Selection still binds files to the current turn with
 stored-metadata integrity checks, the raw ticket tool is never advertised and
 is refused as an unsupported effect, and local attachment handling is unchanged.
+Ticket validation is fail-closed against the verified file-upload contract
+(create → upload_url → multipart send → file_upload-id attach, with no
+form_fields / field_name / suggested_markdown aliases): error tickets, wrong
+origins (exact-origin comparison, never suffix matching), embedded URL
+credentials, unexpected URL shapes, oversize bodies, redirects (never followed,
+rejected before bytes reach the target), and unconfirmed or misattributed
+results all refuse without retry, with no bearer token attached outside the MCP
+endpoint. A confirmed upload reports uploaded-but-unattached, since attachment
+is a separate step. The extension-page CSP therefore allowlists only the
+verified MCP endpoint — no upload origin is listed until a live ticket fixture
+verifies one.
 
 ## Local data
 

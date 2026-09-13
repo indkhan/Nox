@@ -10,7 +10,7 @@ export default defineManifest({
   description: 'Open-source Notion AI-style assistant powered by your local Codex login.',
   key: PUBLIC_KEY,
   content_security_policy: {
-    extension_pages: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; font-src 'self'; connect-src https://mcp.notion.com https://uploads.notion.com; media-src 'none'; object-src 'none'; frame-src 'none'",
+    extension_pages: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; font-src 'self'; connect-src https://mcp.notion.com; media-src 'none'; object-src 'none'; frame-src 'none'",
   },
   permissions: [
     'sidePanel',
