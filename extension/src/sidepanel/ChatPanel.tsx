@@ -332,6 +332,17 @@ function attachJournalEntries(items: ActivityItem[], entries: Awaited<ReturnType
     if (entry.status === 'pending' || entry.status === 'unknown' || (entry.status === 'applied' && entry.reservedByUndoOpId != null)) {
       return markUnresolvedRow(item, entry)
     }
+    // Applied but not safely reversible: say exactly why, with the real
+    // target link, instead of silently omitting the undo control.
+    if (entry.status === 'applied' && entry.inverse == null && entry.notUndoableReason) {
+      return {
+        ...item,
+        journalId: entry.id,
+        undoable: false,
+        notUndoableReason: entry.notUndoableReason,
+        inspectUrl: entry.targetPageId ? inspectUrlForPage(entry.targetPageId) : undefined,
+      }
+    }
     return { ...item, journalId: entry.id, undoable: entry.status === 'applied' && entry.inverse != null }
   })
 }

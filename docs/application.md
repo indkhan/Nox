@@ -304,7 +304,12 @@ journal ───► store an inverse when the change can be restored safely
 
 Undo is deliberately conservative. Creating an object cannot be undone because the MCP
 surface has no delete tool. Rich-page replacement is not considered safely reversible
-because Notion's Markdown round-trip can lose structure. Nox labels such changes as not
+because Notion's Markdown round-trip can lose structure. Content inverses additionally
+require a verified complete plain baseline plus attributable post-write state, with the
+expected post-hash confirmed from trusted internal metadata before undo; a later edit
+blocks undo to protect the newer content. Applied but not-undoable changes show the
+precise reason with the real target link, and readback that cannot verify reports
+applied-but-unverified rather than a fabricated failure. Nox labels such changes as not
 undoable rather than promising a partial restore.
 
 ## Local data

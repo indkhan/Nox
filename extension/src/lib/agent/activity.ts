@@ -15,6 +15,8 @@ export type ActivityItem =
       undoable?: boolean
       undoError?: string
       undone?: boolean
+      /** Precise reason an applied change cannot be undone (with inspectUrl). */
+      notUndoableReason?: string
       /** Set when the journal outcome is pending/unknown: no replayable undo. */
       unresolvedDetail?: string
       /** Notion target for manual inspection of an unresolved change. */

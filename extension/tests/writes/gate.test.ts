@@ -1032,6 +1032,23 @@ describe('MutationJournal undo ordering', () => {
     expect(buildInverse({ kind: 'view' }).kind).toBe('not-undoable')
   })
 
+  it('requires a verified complete baseline for content inverses', () => {
+    // Regex absence alone (no rich markers) is not a positive baseline.
+    expect(buildInverse({ kind: 'content-replace', markdown: 'plain text', pageId: PAGE })).toMatchObject({
+      kind: 'not-undoable',
+    })
+    expect(
+      buildInverse({ kind: 'content-replace', markdown: 'plain text', pageId: PAGE }).reason,
+    ).toMatch(/baseline/)
+    expect(
+      buildInverse({ kind: 'content-update', markdown: 'plain text', pageId: PAGE, baselineComplete: true }),
+    ).toMatchObject({ kind: 'execute-tool', tool: 'notion-update-page' })
+    // A complete baseline on a rich page still refuses the whole-page inverse.
+    expect(
+      buildInverse({ kind: 'content-replace', markdown: 'synced_block here', pageId: PAGE, baselineComplete: true }).kind,
+    ).toBe('not-undoable')
+  })
+
   it('exposes GuardViolation as a typed error', () => {
     expect(new GuardViolation('changed')).toBeInstanceOf(Error)
   })

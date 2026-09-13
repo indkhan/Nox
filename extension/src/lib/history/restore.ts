@@ -52,6 +52,10 @@ export function restoreTurns(messages: MessageRow[], journal: JournalEntry[] = [
         status: entry.status === 'failed' ? 'failed' as const : 'completed' as const,
         journalId: entry.id,
         undoable: entry.status === 'applied' && entry.inverse != null,
+        // Applied but not safely reversible: keep the precise reason and the
+        // real target link on the restored row instead of dropping them.
+        notUndoableReason: entry.status === 'applied' && entry.inverse == null ? entry.notUndoableReason : undefined,
+        inspectUrl: entry.status === 'applied' && entry.inverse == null && entry.targetPageId ? inspectUrlForPage(entry.targetPageId) : undefined,
       }))
     const activity = [...interrupted.view.activity]
     for (const item of recovered) {

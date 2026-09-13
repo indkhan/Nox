@@ -84,6 +84,12 @@ function ActivityRow({ item, onUndo, undoUnavailableReason, onMarkReviewed, onCh
         {item.undoable && item.journalId && !onUndo && undoUnavailableReason && (
           <span className="mt-1 block text-[11px] text-zinc-600">{undoUnavailableReason}</span>
         )}
+        {!item.undoable && !item.undone && item.notUndoableReason && (
+          <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">Undo unavailable: {item.notUndoableReason}</p>
+        )}
+        {!item.undoable && !item.undone && item.notUndoableReason && item.inspectUrl && (
+          <a href={item.inspectUrl} target="_blank" rel="noreferrer" className="nox-active mt-1 inline-block text-[11px] underline-offset-2 hover:underline">Open in Notion</a>
+        )}
         {item.undoError && <p className="nox-danger mt-1 text-[11px]" role="alert">Undo failed: {item.undoError}</p>}
       </div>
       {item.durationMs != null && <span className="tabular-nums text-zinc-600">{formatDuration(item.durationMs)}</span>}

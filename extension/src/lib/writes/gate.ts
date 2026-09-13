@@ -912,6 +912,7 @@ export class WriteGate {
             pageId,
             markdown: snapshot.markdown,
             richPage: detectRichPage(snapshot.markdown),
+            baselineComplete: true,
           }
         }
         if (snapshot) {

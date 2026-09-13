@@ -13,6 +13,12 @@ export interface PreImage {
   pageId?: string
   markdown?: string
   richPage?: boolean
+  /**
+   * True only when the pre-image came from a positively recognized complete
+   * plain-content baseline (Epoch 07). Partial, unavailable, and
+   * unrecognized reads never authorize a whole-page inverse.
+   */
+  baselineComplete?: boolean
 }
 
 /**
@@ -32,6 +38,12 @@ export function buildInverse(preImage: PreImage): InversePlan {
     case 'content-replace':
     case 'content-update': {
       if (!preImage.markdown) return { kind: 'not-undoable', reason: 'the prior content was never captured' }
+      if (preImage.baselineComplete !== true) {
+        return {
+          kind: 'not-undoable',
+          reason: 'the prior read was not a verified complete baseline, so a safe restore cannot be confirmed',
+        }
+      }
       if (preImage.richPage || detectRichPage(preImage.markdown)) {
         return {
           kind: 'not-undoable',

@@ -117,6 +117,18 @@ it('restores legacy rows without invented scope or inverses', () => {
   })])
 })
 
+it('keeps precise not-undoable reasons with the real target link on restore', () => {
+  const turns = restoreTurns([row({ role: 'user', text: 'Update it', ts: 1 })], [{
+    id: 'journal-2', ts: 2, threadId: 'thread-1', turnId: 'turn-latest', status: 'applied',
+    tool: 'notion-update-page', args: { page_id: 'p1' }, kind: 'content-replace',
+    targetPageId: 'p1', notUndoableReason: 'this page has structural blocks Notion cannot round-trip safely',
+  }])
+  const item = turns[0].view.activity.find((entry) => entry.kind === 'tool')
+  expect(item).toMatchObject({ journalId: 'journal-2', status: 'completed', undoable: false })
+  expect(item).toHaveProperty('notUndoableReason', expect.stringMatching(/round-trip/))
+  expect(item).toHaveProperty('inspectUrl', expect.stringContaining('notion.so/p1'))
+})
+
 it('marks reviewed unknowns as reviewed without changing their status', () => {
   const turns = restoreTurns([row({ role: 'user', text: 'Edit', ts: 1 })], [{
     id: 'op-4', callId: 'call-4', ts: 2, threadId: 'thread-1', turnId: 't1',
