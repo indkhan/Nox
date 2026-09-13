@@ -6,6 +6,7 @@ import { openNoxDB, closeNoxDBConnections, DB_VERSION, __resetConnectionCacheFor
 import type { MessageRow } from '../src/lib/history/schema'
 import { __resetDeletionStateForTests, type DeletionMark, type DeletionStore } from '../src/lib/history/deletion'
 import { deleteAllData } from '../src/lib/history/panel'
+import { attachmentRepository } from '../src/lib/history/attachments'
 import { threadRepository, type ThreadRepository } from '../src/lib/history/repository'
 import { MutationJournal, idbJournalStore, type JournalEntry } from '../src/lib/writes/journal'
 import { startPersistedTurn } from '../src/lib/history/turn'
@@ -401,6 +402,76 @@ describe('ThreadRepository', () => {
     expect(markdown).toContain('# Export me')
     expect(markdown).toContain('**You:** question one')
     expect(markdown).toContain('**Nox:** **answer** one')
+  })
+})
+
+describe('thread-owned attachments (Epoch 10 / M7)', () => {
+  let repo: ThreadRepository
+
+  beforeEach(async () => {
+    const { IDBFactory } = await import('fake-indexeddb')
+    new IDBFactory()
+    __resetConnectionCacheForTests()
+    __resetDeletionStateForTests()
+    repo = threadRepository(openNoxDB)
+  })
+
+  afterEach(() => {
+    closeNoxDBConnections()
+  })
+
+  function owned(id: string, name: string, text: string) {
+    const bytes = new TextEncoder().encode(text).buffer as ArrayBuffer
+    return { id, name, mimeType: 'text/plain', size: bytes.byteLength, bytes }
+  }
+
+  it('deletes thread-owned file bytes with the thread, keeping other threads intact', async () => {
+    const attachments = attachmentRepository(openNoxDB)
+    const first = await startPersistedTurn(repo, null, 'first files', [owned('a1', 'a.txt', 'aaa')])
+    const second = await startPersistedTurn(repo, null, 'second files', [owned('b1', 'b.txt', 'bbb')])
+
+    await repo.deleteThread(first.threadId)
+
+    expect(await repo.getMessages(first.threadId)).toEqual([])
+    expect(await attachments.get('a1')).toBeUndefined()
+    expect((await repo.getMessages(second.threadId)).map((m) => m.text)).toEqual(['second files'])
+    expect(await attachments.get('b1')).toMatchObject({ name: 'b.txt', threadId: second.threadId })
+    expect((await repo.listThreads()).map((t) => t.id)).not.toContain(first.threadId)
+  })
+
+  it('leaves unlinked legacy rows to the explicit orphan cleanup, never guessing ownership', async () => {
+    const attachments = attachmentRepository(openNoxDB)
+    const legacy = await attachments.save(new File(['legacy-bytes'], 'legacy.txt', { type: 'text/plain' }))
+    const turn = await startPersistedTurn(repo, null, 'owned files', [owned('o1', 'o.txt', 'ooo')])
+
+    await repo.deleteThread(turn.threadId)
+
+    // The legacy orphan has no thread linkage: thread deletion neither claims
+    // it (by filename or otherwise) nor deletes it implicitly.
+    expect((await attachments.get(legacy.id))?.blob.size).toBe(12)
+    expect(await attachments.get('o1')).toBeUndefined()
+  })
+
+  it('exports attachment metadata while excluding bytes, tickets, and tokens', async () => {
+    const secret = 'SUPER-SECRET-FILE-BYTES-9f8c'
+    const turn = await startPersistedTurn(repo, null, 'with files', [owned('e1', 'evidence.txt', secret)])
+    const threadId = turn.threadId
+
+    const raw = await repo.exportThread(threadId, 'json')
+    expect(raw).not.toContain(secret)
+    expect(raw).not.toContain('bytes')
+    expect(raw).not.toContain('blob')
+    const json = JSON.parse(raw)
+    expect(json.attachments).toEqual([expect.objectContaining({ id: 'e1', name: 'evidence.txt', mimeType: 'text/plain' })])
+    for (const row of json.attachments) {
+      expect(row).not.toHaveProperty('bytes')
+      expect(row).not.toHaveProperty('blob')
+    }
+
+    const markdown = await repo.exportThread(threadId, 'markdown')
+    expect(markdown).toContain('evidence.txt')
+    expect(markdown).toContain('metadata only')
+    expect(markdown).not.toContain(secret)
   })
 })
 

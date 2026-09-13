@@ -146,15 +146,24 @@ export function threadRepository(db: () => Promise<IDBPDatabase>): ThreadReposit
     },
 
     async deleteThread(id) {
+      // Epoch 10 / M7: thread-owned attachment bytes die with the thread.
+      // Keys are read inside the same transaction that deletes them — never
+      // pre-read outside it — so messages, journal entries, attachments, and
+      // thread metadata disappear atomically. Rows owned by other threads and
+      // unlinked legacy rows (no thread linkage) are untouched; the explicit
+      // orphan cleanup handles the latter.
       const conn = await db()
-      // Collect children first, then delete everything in one tx.
-      const messages = (await conn.getAllFromIndex('messages', 'by_thread', id)) as MessageRow[]
-      const journal = (await conn.getAllFromIndex('journal', 'by_thread', id)) as Array<{ id: string }>
-      const tx = conn.transaction(['threads', 'messages', 'journal'], 'readwrite')
+      const tx = conn.transaction(['threads', 'messages', 'journal', 'attachments'], 'readwrite')
+      const [messageKeys, journalKeys, attachmentKeys] = await Promise.all([
+        tx.objectStore('messages').index('by_thread').getAllKeys(id),
+        tx.objectStore('journal').index('by_thread').getAllKeys(id),
+        tx.objectStore('attachments').index('by_thread').getAllKeys(id),
+      ])
       await Promise.all([
         tx.objectStore('threads').delete(id),
-        ...messages.map((m) => tx.objectStore('messages').delete(m.id)),
-        ...journal.map((j) => tx.objectStore('journal').delete(j.id)),
+        ...messageKeys.map((key) => tx.objectStore('messages').delete(key)),
+        ...journalKeys.map((key) => tx.objectStore('journal').delete(key)),
+        ...attachmentKeys.map((key) => tx.objectStore('attachments').delete(key)),
         tx.done,
       ])
     },
@@ -180,14 +189,33 @@ export function threadRepository(db: () => Promise<IDBPDatabase>): ThreadReposit
       const thread = (await conn.get('threads', threadId)) as ThreadRow | undefined
       if (!thread) throw new Error(`thread ${threadId} not found`)
       const messages = await this.getMessages(threadId)
+      // Epoch 10 / M7: exports carry attachment metadata and explicitly
+      // exclude bytes. Only the listed scalar fields leave the store — never
+      // `bytes`/`blob` content, upload tickets, or tokens.
+      const rows = (await conn.getAllFromIndex('attachments', 'by_thread', threadId)) as AttachmentRow[]
+      const attachments = rows.map(({ id, name, mimeType, size, createdAt, threadId: owner }) => ({
+        id,
+        name,
+        mimeType,
+        size,
+        createdAt,
+        threadId: owner,
+      }))
 
       if (format === 'json') {
-        return JSON.stringify({ exportedBy: 'Nox v0.1.0', thread, messages }, null, 2)
+        return JSON.stringify({ exportedBy: 'Nox v0.1.0', thread, messages, attachments }, null, 2)
       }
 
       const lines = [`# ${thread.title}`, '', `_Exported by Nox · ${new Date().toISOString()}_`, '']
       for (const m of messages) {
         lines.push(m.role === 'user' ? `**You:** ${m.text}` : `**Nox:** ${m.text}`)
+        lines.push('')
+      }
+      if (attachments.length > 0) {
+        lines.push('## Attached files (metadata only — file bytes are not included in exports)', '')
+        for (const item of attachments) {
+          lines.push(`- ${item.name} (${item.mimeType}, ${item.size} bytes)`)
+        }
         lines.push('')
       }
       return lines.join('\n')

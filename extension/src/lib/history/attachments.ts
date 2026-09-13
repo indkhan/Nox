@@ -32,6 +32,35 @@ export function attachmentRepository(db: () => Promise<IDBPDatabase>) {
   }
 }
 
+/**
+ * Scoped cleanup for legacy orphan blobs (Epoch 10 / M7). Drafts selected
+ * before ephemeral drafts existed were persisted with no thread linkage, so
+ * thread deletion cannot attribute them to a conversation — and ownership is
+ * never guessed by filename. This removes only provably unreferenced rows:
+ * attachments with no `threadId` or whose thread no longer exists, excluding
+ * any ids the caller still retains (e.g. the current turn's committed ids).
+ * Rows owned by a live thread are always preserved. Returns the removed
+ * count. No store or index migration is involved.
+ */
+export async function removeUnlinkedAttachments(
+  db: () => Promise<IDBPDatabase>,
+  retainedIds: Set<string> = new Set(),
+): Promise<number> {
+  const conn = await db()
+  const [rows, threadKeys] = await Promise.all([
+    conn.getAll('attachments') as Promise<AttachmentRow[]>,
+    conn.getAllKeys('threads'),
+  ])
+  const live = new Set(threadKeys.map(String))
+  const unlinked = rows.filter(
+    (row) => !retainedIds.has(row.id) && (row.threadId == null || !live.has(row.threadId)),
+  )
+  if (unlinked.length === 0) return 0
+  const tx = conn.transaction('attachments', 'readwrite')
+  await Promise.all([...unlinked.map((row) => tx.store.delete(row.id)), tx.done])
+  return unlinked.length
+}
+
 function readFile(file: File): Promise<ArrayBuffer> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import 'fake-indexeddb/auto'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { attachmentRepository } from '../src/lib/history/attachments'
+import { attachmentRepository, removeUnlinkedAttachments } from '../src/lib/history/attachments'
 import { openNoxDB, closeNoxDBConnections, __resetConnectionCacheForTests } from '../src/lib/history/schema'
 import { __resetDeletionStateForTests } from '../src/lib/history/deletion'
 import { threadRepository } from '../src/lib/history/repository'
@@ -141,6 +141,51 @@ describe('ephemeral drafts and atomic send ownership (Epoch 10 / M7)', () => {
     // A second turn reusing the same row id fails instead of overwriting it.
     await expect(startPersistedTurn(repo, null, 'second thread', owned)).rejects.toThrow()
     expect((await attachments.get(owned[0].id))?.threadId).toBe(first.threadId)
+    closeNoxDBConnections()
+  })
+})
+
+describe('legacy orphan cleanup (Epoch 10 / M7)', () => {
+  beforeEach(async () => {
+    __resetConnectionCacheForTests()
+    __resetDeletionStateForTests()
+    const db = await openNoxDB()
+    await Promise.all([db.clear('threads'), db.clear('messages'), db.clear('attachments')])
+    closeNoxDBConnections()
+  })
+
+  it('removes only provably unreferenced rows, preserving owned and retained files', async () => {
+    const repo = threadRepository(openNoxDB)
+    const attachments = attachmentRepository(openNoxDB)
+    // Owned by a live thread: preserved.
+    const turn = await startPersistedTurn(repo, null, 'kept', [{
+      id: 'owned-1',
+      name: 'owned.txt',
+      mimeType: 'text/plain',
+      size: 3,
+      bytes: new TextEncoder().encode('abc').buffer as ArrayBuffer,
+    }])
+    // Legacy draft orphan (no thread) and a dangling thread reference.
+    const orphan = await attachments.save(new File(['orphan'], 'orphan.txt', { type: 'text/plain' }))
+    const db = await openNoxDB()
+    await db.put('attachments', {
+      id: 'dangling-1',
+      name: 'dangling.txt',
+      mimeType: 'text/plain',
+      size: 7,
+      bytes: new TextEncoder().encode('dangling').buffer,
+      threadId: 'thread-that-no-longer-exists',
+      createdAt: Date.now(),
+    })
+    const retained = await attachments.save(new File(['retained'], 'retained.txt', { type: 'text/plain' }))
+
+    const removed = await removeUnlinkedAttachments(openNoxDB, new Set([retained.id]))
+
+    expect(removed).toBe(2)
+    expect(await attachments.get('owned-1')).toMatchObject({ threadId: turn.threadId })
+    expect(await attachments.get(retained.id)).toBeDefined()
+    expect(await attachments.get(orphan.id)).toBeUndefined()
+    expect(await attachments.get('dangling-1')).toBeUndefined()
     closeNoxDBConnections()
   })
 })

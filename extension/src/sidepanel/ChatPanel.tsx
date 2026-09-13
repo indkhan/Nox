@@ -9,6 +9,8 @@ import { EmptyState } from './EmptyState'
 import { ApprovalCards, UndoBar } from './ApprovalCards'
 import { PlanCards } from './PlanCards'
 import { historyRepo } from '../lib/history/panel'
+import { removeUnlinkedAttachments } from '../lib/history/attachments'
+import { openNoxDB } from '../lib/history/schema'
 import { onDeletionNotice } from '../lib/history/deletion'
 import { HISTORY_SAVE_ERROR, startPersistedTurn, type PersistedTurn } from '../lib/history/turn'
 import { logError, logInfo } from '../lib/log'
@@ -92,6 +94,12 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
       if (cancelled || historyRestoreCancelledRef.current || generation !== historyGenerationRef.current) return
       setTurns(restored)
     }).catch(() => undefined)
+    // Epoch 10 / M7: drop provably unreferenced legacy attachment blobs left
+    // by pre-ephemeral drafts (no thread linkage). Owned rows are preserved;
+    // a cleanup failure is logged and never blocks startup.
+    void removeUnlinkedAttachments(openNoxDB).then((removed) => {
+      if (removed > 0) logInfo(`Removed ${removed} unlinked legacy attachment(s)`)
+    }).catch((error) => logError(`Legacy attachment cleanup failed: ${error instanceof Error ? error.message : String(error)}`))
     return () => { cancelled = true }
   }, [setActiveThreadId])
 

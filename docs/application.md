@@ -345,10 +345,16 @@ IndexedDB database `nox` is currently version 3.
 | `threads` | Conversation metadata and the Codex thread id. |
 | `messages` | User/assistant text, stream state, usage, and activity. |
 | `journal` | Applied changes, safe inverse calls, and undo state. |
-| `attachments` | Files attached to local conversations. |
+| `attachments` | Files attached to local conversations, owned by exactly one thread. |
 
 Version 3 removes unused page/mention cache stores and unused sort indexes while
 preserving threads, messages, attachments, and the change journal.
+
+Deleting a thread removes its messages, journal entries, and owned attachment
+bytes in the same transaction; other threads and unlinked legacy rows are
+untouched. Startup drops provably unreferenced legacy blobs (no thread, or a
+thread that no longer exists) without guessing ownership by filename. Exports
+carry attachment metadata only — never file bytes, upload tickets, or tokens.
 
 Each panel keeps one cached database connection and closes it promptly when
 another context deletes or upgrades the store, so one window cannot hold
