@@ -212,6 +212,15 @@ export class WriteGate {
     this.baselines.delete(normalizeId(pageId) ?? pageId)
   }
 
+  /**
+   * Expire all read baselines (Epoch 11): reconnect, sign-out, and workspace
+   * replacement retire every model-observed baseline so the next content
+   * write forces a fresh re-fetch instead of reusing a stale scope.
+   */
+  expireBaselines(): void {
+    this.baselines.clear()
+  }
+
   async handle(req: ToolCallRequest): Promise<unknown> {
     return this.handleRequest(req, false)
   }

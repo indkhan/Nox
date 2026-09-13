@@ -36,6 +36,16 @@ export function createTurnAccessState() {
     attachments: () => new Set(attachmentIds),
     smallEditGrant: (): SmallEditGrant => ({ allowed: grant.allowed, pages: [...grant.pages] }),
     /**
+     * Expire all per-turn grants (Epoch 11): reconnect and sign-out drop the
+     * Auto small-edit grant, attachment selection, and unplanned-effect budget
+     * so stale approvals never survive a transport/credential change.
+     */
+    invalidate: () => {
+      grant = { allowed: false, pages: [] }
+      attachmentIds.clear()
+      unplannedEffects = 0
+    },
+    /**
      * Reserve budget for unplanned Auto effects, counted by objects — a bulk
      * call counts every object, never one. Refuses past the cap so the gate
      * can demand a workspace plan before dispatch. Counts are never released,

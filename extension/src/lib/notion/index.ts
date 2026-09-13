@@ -50,6 +50,19 @@ export class Notion {
         if (!this.metadata) await this.loadMetadata()
         return this.registrar.getClientId(this.metadata!, this.deps.redirectUri())
       },
+      // Validated discovered token endpoint (Epoch 11 / M8): refresh never
+      // uses a hardcoded fallback when discovery has established metadata.
+      getTokenEndpoint: async () => {
+        const meta = this.metadata ?? (await this.loadMetadata())
+        let url: URL
+        try {
+          url = new URL(meta.token_endpoint)
+        } catch {
+          throw new Error('[token-refresh] invalid discovered token endpoint')
+        }
+        if (url.protocol !== 'https:') throw new Error('[token-refresh] invalid discovered token endpoint')
+        return url.toString()
+      },
     })
     this.client = new McpClient({ fetchImpl, getAccessToken: () => this.tokenStore.getAccessToken() })
   }
@@ -79,6 +92,10 @@ export class Notion {
 
   /** Full browser flow: discovery → DCR → consent → token exchange. */
   async connect(launchConsent: (authorizeUrl: string) => Promise<string>): Promise<SelfInfo> {
+    // Start of a replacement login (Epoch 11 / M8): abort any in-flight
+    // refresh and invalidate the credential generation up front, so a stale
+    // response landing after the new exchange cannot resurrect old tokens.
+    await this.tokenStore.beginLogin()
     // Every hop is named on failure — without this, a connect failure is a
     // guessing game across four network hops (spike 0.1 lesson).
     const metadata = await stage('discovery', () => this.loadMetadata())

@@ -150,6 +150,51 @@ describe('Notion facade', () => {
     expect(notion.explain(new Error('Failed to fetch')).kind).toBe('transient')
   })
 
+  it('refresh uses the validated discovered token endpoint, not a hardcoded fallback (Epoch 11 / M8)', async () => {
+    const customTokenUrl = 'https://mcp.notion.com/custom-token'
+    const customAS = { ...AS, token_endpoint: customTokenUrl }
+    scripted((url, body) => {
+      if (url.includes('protected-resource')) return jsonRes(PRM)
+      if (url.includes('oauth-authorization-server')) return jsonRes(customAS)
+      if (url.endsWith('/register')) return jsonRes({ client_id: 'cid-1' }, 201)
+      if (url === customTokenUrl) return jsonRes({ access_token: 'at-2', refresh_token: 'rt-2', expires_in: 3600 })
+      if (url.endsWith('/token')) throw new Error(`hardcoded fallback hit: ${url}`)
+      if (typeof body.method === 'string') {
+        if (body.method === 'initialize') return jsonRes({ jsonrpc: '2.0', id: body.id as number, result: {} }, 200, { 'mcp-session-id': 's1' })
+        if (body.method === 'tools/call') {
+          return rpcResult(body.id as number, { content: [{ type: 'text', text: SELF_TEXT }] })
+        }
+        if (body.method?.startsWith('notifications/')) return new Response(null, { status: 202 })
+      }
+      throw new Error(`unexpected ${url}`)
+    })
+    await notion.importToken({ access_token: 'at', refresh_token: 'rt', expires_in: 3600 })
+    // Forced refresh must hit the discovered endpoint from metadata.
+    await notion.tokens.refresh()
+    expect(fetchCalls.some((c) => c.url === customTokenUrl)).toBe(true)
+    expect(fetchCalls.some((c) => c.url === 'https://mcp.notion.com/token')).toBe(false)
+  })
+
+  it('rejects a non-HTTPS discovered token endpoint fail-closed (Epoch 11 / M8)', async () => {
+    const badAS = { ...AS, token_endpoint: 'http://mcp.notion.com/token' }
+    scripted((url, body) => {
+      if (url.includes('protected-resource')) return jsonRes(PRM)
+      if (url.includes('oauth-authorization-server')) return jsonRes(badAS)
+      if (url.endsWith('/register')) return jsonRes({ client_id: 'cid-1' }, 201)
+      if (url.includes('/token')) return jsonRes({ access_token: 'at-1', refresh_token: 'rt-1', expires_in: 3600 })
+      if (typeof body.method === 'string') {
+        if (body.method === 'initialize') return jsonRes({ jsonrpc: '2.0', id: body.id as number, result: {} }, 200, { 'mcp-session-id': 's1' })
+        if (body.method === 'tools/call') {
+          return rpcResult(body.id as number, { content: [{ type: 'text', text: SELF_TEXT }] })
+        }
+        if (body.method?.startsWith('notifications/')) return new Response(null, { status: 202 })
+      }
+      throw new Error(`unexpected ${url}`)
+    })
+    await notion.importToken({ access_token: 'at', refresh_token: 'rt', expires_in: 3600 })
+    await expect(notion.tokens.refresh()).rejects.toThrow(/discovered token endpoint/i)
+  })
+
   it('never retries a mutation after a transient 503: exactly one dispatch', async () => {
     let mutationCalls = 0
     scripted((url, body) => {

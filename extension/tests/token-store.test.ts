@@ -200,3 +200,237 @@ describe('TokenStore', () => {
     expect(await s.hasRefreshToken()).toBe(false)
   })
 })
+
+describe('credential generations (Epoch 11 / M8)', () => {
+  let fetchCalls: Array<{ url: string; body: URLSearchParams; signal?: AbortSignal }>
+  let fetchImpl: typeof fetch
+  let stores: ReturnType<typeof recordingStores>
+  let reauthEvents: number
+  let nowMs: number
+
+  /** Mutual-exclusion lock so two TokenStore instances serialize like Web Locks. */
+  function serialLock() {
+    const tails = new Map<string, Promise<void>>()
+    return {
+      runExclusive<T>(name: string, fn: () => Promise<T>): Promise<T> {
+        const tail = tails.get(name) ?? Promise.resolve()
+        const run = tail.then(fn, fn)
+        tails.set(
+          name,
+          run.then(
+            () => undefined,
+            () => undefined,
+          ),
+        )
+        return run
+      },
+    }
+  }
+
+  function makeStore(lock = serialLock()) {
+    return new TokenStore({
+      session: stores.session,
+      local: stores.local,
+      fetchImpl,
+      getClientId: async () => 'client-1',
+      now: () => nowMs,
+      lock,
+      onReauthRequired: () => {
+        reauthEvents++
+      },
+    })
+  }
+
+  function deferredTokenResponse(access: string, refresh: string) {
+    let release!: (res: Response) => void
+    const gate = new Promise<Response>((resolve) => {
+      release = resolve
+    })
+    const impl = (async (url: string, init?: RequestInit) => {
+      fetchCalls.push({ url: String(url), body: new URLSearchParams(String(init?.body ?? '')), signal: init?.signal as AbortSignal | undefined })
+      return gate
+    }) as typeof fetch
+    return {
+      impl,
+      resolve: () =>
+        release(new Response(JSON.stringify(tokenResponse({ access_token: access, refresh_token: refresh })), { status: 200 })),
+    }
+  }
+
+  beforeEach(() => {
+    fetchCalls = []
+    fetchImpl = (async (url, init) => {
+      fetchCalls.push({ url: String(url), body: new URLSearchParams(String(init?.body ?? '')) })
+      return new Response(JSON.stringify(tokenResponse({ access_token: 'at-2', refresh_token: 'rt-2' })), { status: 200 })
+    }) as typeof fetch
+    stores = recordingStores()
+    reauthEvents = 0
+    nowMs = 1_000_000
+  })
+
+  afterEach(() => vi.useRealTimers())
+
+  it('a refresh that resolves after sign-out writes nothing and stays signed out', async () => {
+    const pending = deferredTokenResponse('at-stale', 'rt-stale')
+    fetchImpl = pending.impl
+    // Shared lock simulates the production shared Web Lock (`nox-credential-*`)
+    // across panels: credential writes serialize, so the late refresh loses.
+    const lock = serialLock()
+    const s = makeStore(lock)
+    await s.saveFromTokenResponse(tokenResponse())
+    const refreshing = s.refresh()
+    // Wait until the stale refresh has dispatched (old token in flight) before
+    // the second panel signs out — otherwise the snapshot could race ahead.
+    await vi.waitFor(() => expect(fetchCalls.some((c) => c.body.get('grant_type') === 'refresh_token')).toBe(true))
+    // A second instance on the same storage signs out: generation bump plus
+    // wipe land before the stale response resolves.
+    await makeStore(lock).signOut({})
+    pending.resolve()
+    expect(await refreshing).toBe('no-token')
+    expect(await s.hasRefreshToken()).toBe(false)
+    expect((await stores.session.get())['notion.access']).toBeUndefined()
+    expect(reauthEvents).toBe(0)
+  })
+
+  it('a new login wins over a stale in-flight refresh without wiping the new tokens', async () => {
+    const pending = deferredTokenResponse('at-stale', 'rt-stale')
+    fetchImpl = pending.impl
+    const lock = serialLock()
+    const s = makeStore(lock)
+    await s.saveFromTokenResponse(tokenResponse())
+    const refreshing = s.refresh()
+    await vi.waitFor(() => expect(fetchCalls.some((c) => c.body.get('grant_type') === 'refresh_token')).toBe(true))
+    await makeStore(lock).saveFromTokenResponse(tokenResponse({ access_token: 'at-new', refresh_token: 'rt-new' }))
+    pending.resolve()
+    expect(await refreshing).toBe('no-token')
+    expect(stores.local.data['notion.refresh']).toBe('rt-new')
+    expect(stores.session.data['notion.access']).toBe('at-new')
+    expect(reauthEvents).toBe(0)
+  })
+
+  it('an old invalid_grant cannot wipe a newer login', async () => {
+    let release!: (res: Response) => void
+    const gate = new Promise<Response>((resolve) => {
+      release = resolve
+    })
+    let dispatched = false
+    fetchImpl = (async () => {
+      dispatched = true
+      return gate
+    }) as typeof fetch
+    const lock = serialLock()
+    const s = makeStore(lock)
+    await s.saveFromTokenResponse(tokenResponse())
+    const failing = s.refresh()
+    await vi.waitFor(() => expect(dispatched).toBe(true))
+    await makeStore(lock).saveFromTokenResponse(tokenResponse({ access_token: 'at-new', refresh_token: 'rt-new' }))
+    release(new Response(JSON.stringify({ error: 'invalid_grant' }), { status: 400 }))
+    expect(await failing).toBe('no-token')
+    expect(stores.local.data['notion.refresh']).toBe('rt-new')
+    expect(stores.session.data['notion.access']).toBe('at-new')
+    expect(reauthEvents).toBe(0)
+  })
+
+  it('two instances share one refresh instead of racing the token endpoint', async () => {
+    const lock = serialLock()
+    const a = makeStore(lock)
+    const b = makeStore(lock)
+    await a.saveFromTokenResponse(tokenResponse())
+    const [first, second] = await Promise.all([a.refresh(), b.refresh()])
+    expect(first).toBe('refreshed')
+    expect(second).toBe('refreshed')
+    expect(fetchCalls.filter((c) => c.body.get('grant_type') === 'refresh_token')).toHaveLength(1)
+    expect(stores.local.data['notion.refresh']).toBe('rt-2')
+  })
+
+  it('clears local tokens before a hung revocation resolves', async () => {
+    let releaseRevocation!: () => void
+    const revocationGate = new Promise<void>((resolve) => {
+      releaseRevocation = resolve
+    })
+    fetchImpl = (async (url) => {
+      if (String(url).includes('revoke')) {
+        await revocationGate
+        return new Response(null, { status: 200 })
+      }
+      return new Response(JSON.stringify(tokenResponse()), { status: 200 })
+    }) as typeof fetch
+    const s = makeStore()
+    await s.saveFromTokenResponse(tokenResponse())
+    const signingOut = s.signOut({ revocation_endpoint: 'https://mcp.notion.com/revoke' })
+    await Promise.resolve()
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    // Local sign-out is already complete while revocation still hangs.
+    expect(await s.hasRefreshToken()).toBe(false)
+    expect((await stores.session.get())['notion.access']).toBeUndefined()
+    releaseRevocation()
+    await signingOut
+    expect(await s.hasRefreshToken()).toBe(false)
+  })
+
+  it('aborts a hung revocation after five seconds instead of waiting forever', async () => {
+    vi.useFakeTimers()
+    let observedSignal: AbortSignal | undefined
+    fetchImpl = ((_url: unknown, init?: RequestInit) => {
+      observedSignal = init?.signal as AbortSignal | undefined
+      return new Promise<Response>((_resolve, reject) => {
+        observedSignal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))
+      })
+    }) as typeof fetch
+    const s = makeStore()
+    await s.saveFromTokenResponse(tokenResponse())
+    const signingOut = s.signOut({ revocation_endpoint: 'https://mcp.notion.com/revoke' })
+    await vi.advanceTimersByTimeAsync(5000)
+    await signingOut
+    expect(observedSignal?.aborted).toBe(true)
+    expect(await s.hasRefreshToken()).toBe(false)
+  })
+
+  it('a storage failure after remote rotation surfaces reauth-required, not success', async () => {
+    const s = makeStore()
+    await s.saveFromTokenResponse(tokenResponse())
+    const innerSet = stores.local.set.bind(stores.local)
+    let failures = 1
+    stores.local.set = async (items: Record<string, unknown>) => {
+      if (failures > 0 && 'notion.refresh' in items) {
+        failures--
+        throw new Error('disk full')
+      }
+      return innerSet(items)
+    }
+    expect(await s.refresh()).toBe('reauth-required')
+    expect(reauthEvents).toBe(1)
+    // The rotated server-side credential was never durably recorded.
+    expect(stores.local.data['notion.refresh']).toBe('rt-1')
+  })
+
+  it('refuses malformed token responses without touching stored credentials', async () => {
+    fetchImpl = (async () =>
+      new Response(JSON.stringify({ access_token: '', refresh_token: 'rt-x', expires_in: -30 }), { status: 200 })) as typeof fetch
+    const s = makeStore()
+    await s.saveFromTokenResponse(tokenResponse())
+    await expect(s.refresh()).rejects.toThrow(/token response/i)
+    expect(stores.local.data['notion.refresh']).toBe('rt-1')
+    expect(stores.session.data['notion.access']).toBe('at-1')
+    await expect(makeStore().saveFromTokenResponse({ access_token: 'x', expires_in: Number.NaN } as TokenResponse)).rejects.toThrow(
+      /token response/i,
+    )
+  })
+
+  it('beginLogin invalidates an in-flight refresh so a replacement login cannot be resurrected (Epoch 11 / M8)', async () => {
+    const pending = deferredTokenResponse('at-stale', 'rt-stale')
+    fetchImpl = pending.impl
+    const lock = serialLock()
+    const s = makeStore(lock)
+    await s.saveFromTokenResponse(tokenResponse())
+    const refreshing = s.refresh()
+    await vi.waitFor(() => expect(fetchCalls.some((c) => c.body.get('grant_type') === 'refresh_token')).toBe(true))
+    // Start of a replacement login: aborts stale work and bumps generation.
+    await s.beginLogin()
+    await makeStore(lock).saveFromTokenResponse(tokenResponse({ access_token: 'at-new', refresh_token: 'rt-new' }))
+    pending.resolve()
+    expect(await refreshing).toBe('no-token')
+    expect(stores.local.data['notion.refresh']).toBe('rt-new')
+    expect(stores.session.data['notion.access']).toBe('at-new')
+  })
+})

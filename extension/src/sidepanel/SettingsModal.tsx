@@ -4,6 +4,7 @@ import { useNoxStore } from './store'
 import { ConnectionCard } from './ConnectionCard'
 import { BridgeCard } from './BridgeCard'
 import { storageUsageBytes, deleteAllData } from '../lib/history/panel'
+import { notion } from '../lib/notion/panel'
 import {
   clearLogs,
   copyLogs,
@@ -201,8 +202,13 @@ function DataSection() {
           setDeleteError(null)
           // The request keeps its real lifecycle: a blocked deletion waits
           // for a genuine outcome (never a false success), while the notice
-          // below names the specific blocker.
-          void deleteAllData({ onBlocked: () => setBlocked(true) }).then(() => window.location.reload()).catch((error) => {
+          // below names the specific blocker. Credentials go through the
+          // shared serialized generation path (Epoch 11 / M8), never held
+          // hostage by a blocked database.
+          void deleteAllData({
+            onBlocked: () => setBlocked(true),
+            clearCredentials: () => notion.tokens.wipe(),
+          }).then(() => window.location.reload()).catch((error) => {
             setDeleteError(error instanceof Error ? error.message : String(error))
             setDeleting(false)
           })

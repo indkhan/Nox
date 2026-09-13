@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useNoxStore } from './store'
 import { launchConsentFlow, notion } from '../lib/notion/panel'
 import { logError, logInfo } from '../lib/log'
+import { agentLoop, expireAgentGrants, planEngine, writeGate } from '../lib/agent/panel'
 
 /** Dev-only: paste a token JSON (from spikes/.notion-token.json) to skip consent. */
 async function importDevToken(): Promise<void> {
@@ -60,9 +61,35 @@ export function ConnectionCard() {
   async function disconnect() {
     setBusy(true)
     logInfo('Notion disconnect')
+    // Cancel active turns/grants first so no new mutation can dispatch while
+    // credentials are being invalidated (Epoch 11 / M8).
+    try {
+      agentLoop.cancel()
+    } catch {
+      /* best effort */
+    }
+    try {
+      planEngine.invalidateApproval()
+      planEngine.rejectPending()
+      writeGate.approvals.rejectAllPending()
+      writeGate.expireBaselines()
+      expireAgentGrants()
+    } catch {
+      /* best effort — sign-out hygiene still proceeds */
+    }
     try {
       await notion.signOut()
       setConnection({ connectionStatus: 'disconnected', identity: null, limitations: [], connectionError: null })
+    } catch (e) {
+      // Storage-clear failure is visible, never reported as complete (M8).
+      const message = e instanceof Error ? e.message : String(e)
+      logError(`Notion disconnect failed: ${message}`)
+      setConnection({
+        connectionStatus: 'error',
+        identity: null,
+        limitations: [],
+        connectionError: `Sign-out did not complete: ${message}`,
+      })
     } finally {
       setBusy(false)
     }

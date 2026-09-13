@@ -36,6 +36,15 @@ export function prepareAgentTurn(mode: Mode, pageIds: string[], attachmentIds: s
   turnAccess.begin(mode, pageIds, attachmentIds, grant)
 }
 
+/**
+ * Expire per-turn grants without starting a turn (Epoch 11): reconnect and
+ * sign-out drop stale Auto/upload approvals so the next Send re-captures
+ * explicit consent.
+ */
+export function expireAgentGrants(): void {
+  turnAccess.invalidate()
+}
+
 export const writeGate = new WriteGate({
   callTool: (name, args, signal) => notion.scheduleCallTool(name, args, signal),
   fetchPageMarkdown: async (pageId, signal) => {

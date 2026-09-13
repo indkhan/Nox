@@ -114,9 +114,21 @@ capability gate.
 1. Nox discovers Notion's OAuth endpoints.
 2. It registers itself as a public client and uses Authorization Code + PKCE.
 3. The access token stays in session storage; the refresh token is durable in local
-   extension storage and is rotated safely.
+   extension storage and is rotated safely. Every authorization mints a persisted
+   credential generation; sign-out, wipe, delete-all, and replacement logins invalidate
+   it first. Refreshes serialize across panels under a shared refresh lock, re-check the
+   persisted generation inside a short credential-write lock (never held across network),
+   and use the validated discovered token endpoint. A stale response can never overwrite
+   a newer login, and an old `invalid_grant` can never wipe one.
 4. Nox initializes MCP, fetches the user's identity, and asks for the current tool list.
 5. Tools unavailable on the user's Notion plan are not offered to Codex.
+
+Sign-out captures the revocation token, cancels turns/grants, clears local/session tokens
+promptly under the credential lock, then revokes best-effort with a five-second timeout;
+a storage failure surfaces as an incomplete sign-out, never false success. Rotation that
+succeeds remotely but cannot be persisted surfaces re-authentication required. Sign-out in
+one panel propagates to all panels via storage events; delete-all clears credentials
+through the same serialized generation path before touching the database.
 
 All workspace calls go to `https://mcp.notion.com/mcp` using MCP protocol `2025-06-18`.
 Responses may be JSON or server-sent events. The scheduler allows at most three calls at
