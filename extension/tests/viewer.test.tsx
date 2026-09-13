@@ -18,8 +18,8 @@ const chatMocks = vi.hoisted(() => ({
   newestFirst: vi.fn(async (): Promise<any[]> => []),
   undoable: vi.fn(async () => []),
   undoableCount: vi.fn(async () => 0),
-  onChange: vi.fn(() => () => undefined),
-  deleteAllData: vi.fn(async () => undefined),
+  onChange: vi.fn<(callback: () => void) => () => void>(),
+  deleteAllData: vi.fn<(deps?: { onBlocked?: () => void }) => Promise<void>>(),
   restoreThread: vi.fn(),
   setOverrides: vi.fn(),
   getMessages: vi.fn(async (): Promise<any[]> => []),
@@ -66,7 +66,7 @@ import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { Composer } from '../src/sidepanel/Composer'
 import { ApprovalCards, UndoBar } from '../src/sidepanel/ApprovalCards'
-import { ChatPanel } from '../src/sidepanel/ChatPanel'
+import { ChatPanel, HistorySaveError } from '../src/sidepanel/ChatPanel'
 import { EmptyState } from '../src/sidepanel/EmptyState'
 import { SettingsModal } from '../src/sidepanel/SettingsModal'
 import { useNoxStore } from '../src/sidepanel/store'
@@ -513,8 +513,7 @@ describe('UndoBar event-driven count (Epoch 09)', () => {
   })
 })
 
-describe('delete-all-data blocked state (Epoch 09)', () => {
-  it('names the blocker while the request waits for a real outcome', async () => {
+describe('delete-all-data blocked state (Epoch 09)', () => {  it('names the blocker while the request waits for a real outcome', async () => {
     let release!: () => void
     const gate = new Promise<void>((resolve) => {
       release = resolve
@@ -554,6 +553,49 @@ describe('delete-all-data blocked state (Epoch 09)', () => {
       await act(async () => root.unmount())
       container.remove()
       chatMocks.deleteAllData.mockReset().mockResolvedValue(undefined)
+    }
+  })
+})
+
+describe('history save banner (Epoch 09)', () => {
+  it('offers retry and copy without rerunning the turn', async () => {
+    const onRetry = vi.fn()
+    const onCopy = vi.fn()
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    try {
+      await act(async () => {
+        root.render(<HistorySaveError onRetry={onRetry} onCopy={onCopy} />)
+      })
+      expect(container.textContent).toContain('History could not be saved')
+      await act(async () => {
+        ;(container.querySelector('[data-testid=history-save-retry]') as HTMLButtonElement).click()
+      })
+      expect(onRetry).toHaveBeenCalledOnce()
+      await act(async () => {
+        ;(container.querySelector('[data-testid=history-save-copy]') as HTMLButtonElement).click()
+      })
+      expect(onCopy).toHaveBeenCalledOnce()
+    } finally {
+      await act(async () => root.unmount())
+      container.remove()
+    }
+  })
+
+  it('shows copy only when no retry handle exists', async () => {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    try {
+      await act(async () => {
+        root.render(<HistorySaveError onCopy={vi.fn()} />)
+      })
+      expect(container.querySelector('[data-testid=history-save-retry]')).toBeNull()
+      expect(container.querySelector('[data-testid=history-save-copy]')).not.toBeNull()
+    } finally {
+      await act(async () => root.unmount())
+      container.remove()
     }
   })
 })

@@ -3,6 +3,7 @@ import 'fake-indexeddb/auto'
 import { openDB, deleteDB } from 'idb'
 import { beforeEach, describe, expect, it, vi, afterEach } from 'vitest'
 import { openNoxDB, closeNoxDBConnections, DB_VERSION, __resetConnectionCacheForTests } from '../src/lib/history/schema'
+import type { MessageRow } from '../src/lib/history/schema'
 import { __resetDeletionStateForTests, type DeletionMark, type DeletionStore } from '../src/lib/history/deletion'
 import { deleteAllData } from '../src/lib/history/panel'
 import { threadRepository, type ThreadRepository } from '../src/lib/history/repository'
@@ -58,7 +59,7 @@ describe('IndexedDB schema', () => {
   })
 
   it('upgrades idempotently from an older version without duplicating stores', async () => {
-    const db = await openNoxDB()
+    await openNoxDB()
     const db2 = await openNoxDB()
     expect(db2.version).toBe(DB_VERSION)
     closeNoxDBConnections()
@@ -540,8 +541,7 @@ describe('cooperative deletion (Epoch 09)', () => {
   })
 })
 
-describe('journal change notifications (Epoch 09)', () => {
-  it('notifies observers after durable changes, never on storage failure', async () => {
+describe('journal change notifications (Epoch 09)', () => {  it('notifies observers after durable changes, never on storage failure', async () => {
     const journal = new MutationJournal()
     journal.setThread('thread-a')
     let notices = 0
@@ -571,5 +571,170 @@ describe('journal change notifications (Epoch 09)', () => {
     expect(await journal.undoableCount()).toBe(1)
     journal.scopeThread(null)
     expect(await journal.undoableCount()).toBe(0)
+  })
+})
+
+describe('persisted turn queue (Epoch 09)', () => {
+  interface StoredMessage {
+    id: string
+    threadId: string
+    text: string
+    turnStatus?: string
+  }
+
+  /** Memory repository with scripted per-append failures and call counting. */
+  function scriptedRepo(script: Array<'ok' | 'fail'> = []) {
+    const messages: StoredMessage[] = []
+    let calls = 0
+    let threads = 0
+    const repo = {
+      createThread: async () => {
+        threads++
+        return { id: `thread-${threads}`, title: 't', createdAt: 0, updatedAt: 0, mode: 'ask', pinned: false }
+      },
+      appendMessage: async (threadId: string, message: Omit<MessageRow, 'id' | 'ts' | 'threadId'> & { id?: string }) => {
+        const step = script[calls] ?? 'ok'
+        calls++
+        if (step === 'fail') throw new Error(`storage offline (append ${calls})`)
+        const row = { id: message.id ?? `m${calls}`, threadId, text: message.text, turnStatus: message.turnStatus }
+        const existing = messages.findIndex((m) => m.id === row.id)
+        if (existing >= 0) messages[existing] = row
+        else messages.push(row)
+        return row
+      },
+    } as unknown as ThreadRepository
+    return { repo, messages, calls: () => calls }
+  }
+
+  it('recovers after a failed partial so the final still lands', async () => {
+    const { repo, messages } = scriptedRepo(['ok', 'fail', 'ok'])
+    const turn = await startPersistedTurn(repo, null, 'do work')
+    const errors: string[] = []
+    turn.onSaveError((message) => void errors.push(message))
+    await expect(turn.persistAssistant('partial')).rejects.toThrow(/storage offline/)
+    // The queue is not poisoned: the final is attempted and succeeds, and a
+    // recovered partial failure never raised the banner.
+    await turn.persistAssistant('complete', undefined, undefined, 'complete')
+    expect(messages.map((m) => m.text)).toEqual(['do work', 'complete'])
+    expect(errors).toEqual([])
+  })
+
+  it('gives each save its own result while the tail recovers', async () => {
+    const { repo } = scriptedRepo(['ok', 'fail', 'ok', 'ok'])
+    const turn = await startPersistedTurn(repo, null, 'do work')
+    const first = turn.persistAssistant('one')
+    const second = turn.persistAssistant('two', undefined, undefined, 'complete')
+    await expect(first).rejects.toThrow(/storage offline/)
+    await expect(second).resolves.toBeUndefined()
+    // … and the turn stays usable afterwards.
+    await expect(turn.persistAssistant('three', undefined, undefined, 'complete')).resolves.toBeUndefined()
+  })
+
+  it('lets a final supersede waiting partials without later overwrite', async () => {
+    const { repo, messages } = scriptedRepo()
+    // Gate installed before the turn starts so append #1 is the user row
+    // and #2 is the first in-flight partial.
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const innerAppend = repo.appendMessage.bind(repo)
+    let appends = 0
+    repo.appendMessage = (async (threadId: string, message: Omit<MessageRow, 'id' | 'ts' | 'threadId'> & { id?: string }) => {
+      appends++
+      if (appends === 2) await gate // block the first partial mid-flight
+      return innerAppend(threadId, message)
+    }) as typeof repo.appendMessage
+    const turn = await startPersistedTurn(repo, null, 'do work')
+    const partial1 = turn.persistAssistant('partial-1')
+    const partial2 = turn.persistAssistant('partial-2')
+    const final = turn.persistAssistant('final answer', { output_tokens: 9 }, undefined, 'complete')
+    release()
+    await Promise.all([partial1, partial2, final])
+    // user + in-flight partial-1 + final only: partial-2 coalesced away, the
+    // final upserts the assistant row last, and nothing writes after it.
+    expect(appends).toBe(3)
+    expect(messages.map((m) => m.text)).toEqual(['do work', 'final answer'])
+  })
+
+  it('bounds rapid partials to one in-flight and one waiting write', async () => {
+    const { repo, messages } = scriptedRepo()
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const innerAppend = repo.appendMessage.bind(repo)
+    let appends = 0
+    repo.appendMessage = (async (threadId: string, message: Omit<MessageRow, 'id' | 'ts' | 'threadId'> & { id?: string }) => {
+      appends++
+      if (appends === 2) await gate
+      return innerAppend(threadId, message)
+    }) as typeof repo.appendMessage
+    const turn = await startPersistedTurn(repo, null, 'do work')
+    const saves = Array.from({ length: 10 }, (_, i) => turn.persistAssistant(`partial-${i}`))
+    const final = turn.persistAssistant('final answer', undefined, undefined, 'complete')
+    release()
+    await Promise.all([...saves, final])
+    expect(appends).toBe(3)
+    expect(messages.map((m) => m.text)).toEqual(['do work', 'final answer'])
+  })
+
+  it('surfaces final failure with retry instead of rerunning the turn', async () => {
+    const { repo, messages } = scriptedRepo(['ok', 'ok', 'fail', 'ok'])
+    const turn = await startPersistedTurn(repo, null, 'do work')
+    const errors: string[] = []
+    turn.onSaveError((message) => void errors.push(message))
+    await turn.persistAssistant('partial')
+    await expect(turn.persistAssistant('final answer', undefined, undefined, 'complete')).rejects.toThrow(/storage offline/)
+    expect(errors).toEqual(['History could not be saved'])
+    // Retry re-attempts the full local snapshot; the model turn never reruns.
+    await turn.retryFinal()
+    expect(messages.map((m) => m.text)).toEqual(['do work', 'final answer'])
+  })
+
+  it('does not surface recovered partial failures', async () => {
+    const { repo } = scriptedRepo(['ok', 'fail', 'ok'])
+    const turn = await startPersistedTurn(repo, null, 'do work')
+    const errors: string[] = []
+    turn.onSaveError((message) => void errors.push(message))
+    await expect(turn.persistAssistant('partial')).rejects.toThrow()
+    await turn.persistAssistant('complete', undefined, undefined, 'complete')
+    expect(errors).toEqual([])
+  })
+
+  it('keeps interleaved turns isolated to their own threads', async () => {
+    const { repo, messages } = scriptedRepo()
+    const turnA = await startPersistedTurn(repo, null, 'question A')
+    const turnB = await startPersistedTurn(repo, null, 'question B')
+    expect(turnA.threadId).not.toBe(turnB.threadId)
+    await Promise.all([
+      turnA.persistAssistant('partial A'),
+      turnB.persistAssistant('partial B'),
+      turnA.persistAssistant('final A', undefined, undefined, 'complete'),
+      turnB.persistAssistant('final B', undefined, undefined, 'failed', 'boom'),
+    ])
+    const forThread = (id: string) => messages.filter((m) => m.threadId === id).map((m) => m.text)
+    // The assistant row upserts per turn: question + latest snapshot each,
+    // with no row ever landing in the other thread.
+    expect(forThread(turnA.threadId)).toEqual(['question A', 'final A'])
+    expect(forThread(turnB.threadId)).toEqual(['question B', 'final B'])
+  })
+
+  it('refuses retry before any final snapshot exists', async () => {
+    const { repo } = scriptedRepo()
+    const turn = await startPersistedTurn(repo, null, 'do work')
+    expect(() => turn.retryFinal()).toThrow(/no final snapshot/)
+  })
+
+  it('stops notifying unsubscribed save-error observers', async () => {
+    const { repo } = scriptedRepo(['ok', 'fail', 'fail'])
+    const turn = await startPersistedTurn(repo, null, 'do work')
+    let notices = 0
+    const unsubscribe = turn.onSaveError(() => void notices++)
+    await expect(turn.persistAssistant('final-1', undefined, undefined, 'failed', 'x')).rejects.toThrow()
+    expect(notices).toBe(1)
+    unsubscribe()
+    await expect(turn.persistAssistant('final-2', undefined, undefined, 'failed', 'x')).rejects.toThrow()
+    expect(notices).toBe(1)
   })
 })

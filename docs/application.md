@@ -355,6 +355,15 @@ remaining blocker, and only then clears storage and lifts the mark. The
 UndoBar shows a thread-scoped undoable count refreshed by journal changes,
 thread switches, and deletion notices instead of polling the full journal.
 
+Turn history is written through a recoverable per-turn queue: at most one
+save in flight plus the latest waiting partial, so rapid streaming coalesces
+instead of piling up. Each save settles on its own — one failure never poisons
+later saves — and a final/outcome snapshot always supersedes waiting partials
+and can never be overwritten by an older one. A failed final save surfaces
+"History could not be saved" next to its answer with a snapshot retry (never
+a model rerun) and a copy option; reopened history always reflects the latest
+successful save.
+
 Streaming messages are updated in place, so reopening the panel can identify and show an
 interrupted turn. Users can search, export, or delete local history. Codex also retains
 its own conversation data under its normal `~/.codex` storage.

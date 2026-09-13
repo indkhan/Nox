@@ -10,7 +10,7 @@ import { ApprovalCards, UndoBar } from './ApprovalCards'
 import { PlanCards } from './PlanCards'
 import { historyRepo } from '../lib/history/panel'
 import { onDeletionNotice } from '../lib/history/deletion'
-import { startPersistedTurn } from '../lib/history/turn'
+import { HISTORY_SAVE_ERROR, startPersistedTurn, type PersistedTurn } from '../lib/history/turn'
 import { logError, logInfo } from '../lib/log'
 import { requestRuntimeUndo } from '../lib/writes/undo'
 import { restoreTurns } from '../lib/history/restore'
@@ -23,6 +23,27 @@ interface TurnView {
   error: string | null
   outcome?: 'failed' | 'interrupted'
   pending: boolean
+  /** Durable-history degradation for this turn ("History could not be saved"). */
+  historyError?: string | null
+}
+
+/** Retry/copy banner for a failed final history save (Epoch 09 / M16). */
+export function HistorySaveError({ onRetry, onCopy }: { onRetry?: () => void; onCopy: () => void }) {
+  return (
+    <div className="rounded-md border border-amber-700/60 bg-amber-950/40 px-2 py-1.5 text-xs text-amber-200" role="alert" data-testid="history-save-error">
+      <span>{HISTORY_SAVE_ERROR} — the answer above is only in memory.</span>
+      <span className="ml-2 inline-flex gap-2">
+        {onRetry && (
+          <button onClick={onRetry} data-testid="history-save-retry" className="underline underline-offset-2 hover:no-underline">
+            Retry save
+          </button>
+        )}
+        <button onClick={onCopy} data-testid="history-save-copy" className="underline underline-offset-2 hover:no-underline">
+          Copy answer
+        </button>
+      </span>
+    </div>
+  )
 }
 
 export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
@@ -33,6 +54,10 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const currentThreadIdRef = useRef<string | null>(null)
   const lastUsageRef = useRef<Record<string, number> | null>(null)
+  /** Persisted-turn handles by turn id for history-save retries (no model rerun). */
+  const persistedHandles = useRef(new Map<string, PersistedTurn>())
+  const patchTurn = (id: string, fn: (v: TurnView) => TurnView) =>
+    setTurns((all) => all.map((turn) => (turn.id === id ? { ...turn, view: fn(turn.view) } : turn)))
   const historyRestoreCancelledRef = useRef(false)
   const historyGenerationRef = useRef(0)
   const connectionStatus = useNoxStore((s) => s.connectionStatus)
@@ -97,6 +122,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
     historyGenerationRef.current++
     historyRestoreCancelledRef.current = true
     setTurns([])
+    persistedHandles.current.clear()
     currentThreadIdRef.current = null
     setActiveThreadId(null)
     setAgentHistoryThread(null)
@@ -150,16 +176,24 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
     let streamedAnswer = ''
     let unsubscribe: (() => void) | null = null
     let persisted: Awaited<ReturnType<typeof startPersistedTurn>> | null = null
+    let unsubscribeHistoryErrors: (() => void) | null = null
 
     try {
       try {
         persisted = await startPersistedTurn(historyRepo, currentThreadIdRef.current, text)
         currentThreadIdRef.current = persisted.threadId
+        persistedHandles.current.set(turnId, persisted)
+        // Final-save failures surface near the answer with retry/copy;
+        // partial-save failures stay silent unless the final also fails.
+        unsubscribeHistoryErrors = persisted.onSaveError(() => {
+          patch((v) => ({ ...v, historyError: HISTORY_SAVE_ERROR }))
+        })
         setActiveThreadId(persisted.threadId)
         setAgentHistoryThread(persisted.threadId)
         void chrome.storage.local.set({ nox_thread_id: persisted.threadId })
       } catch {
         /* persistence is best-effort; never block the chat */
+        patch((v) => ({ ...v, historyError: HISTORY_SAVE_ERROR }))
       }
       unsubscribe = agentLoop.onTurnEvent((event) => {
         switch (event.kind) {
@@ -262,6 +296,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
     } finally {
       clearTimeout(deadline)
       sendAbortRef.current = null
+      unsubscribeHistoryErrors?.()
       unsubscribe?.()
       busyRef.current = false
       setAgentBusy(false)
@@ -304,6 +339,28 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
                 <p className="nox-warning rounded-md border border-current/40 px-2 py-1.5 text-xs" role="alert">
                   ⚠ {view.error}
                 </p>
+              )}
+              {view.historyError && (
+                <HistorySaveError
+                  onRetry={
+                    persistedHandles.current.has(id)
+                      ? () => {
+                          const handle = persistedHandles.current.get(id)
+                          if (!handle) return
+                          // Retry the full local snapshot only — never rerun
+                          // the model turn. Success clears the banner; another
+                          // failure keeps it via the promise rejection below.
+                          void handle.retryFinal().then(
+                            () => patchTurn(id, (v) => ({ ...v, historyError: null })),
+                            () => patchTurn(id, (v) => ({ ...v, historyError: HISTORY_SAVE_ERROR })),
+                          )
+                        }
+                      : undefined
+                  }
+                  onCopy={() => {
+                    void navigator.clipboard?.writeText(view.answer).catch(() => undefined)
+                  }}
+                />
               )}
             </div>
           ))}
