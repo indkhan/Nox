@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNoxStore } from './store'
 import { writeGate } from '../lib/agent/panel'
+import { onDeletionNotice } from '../lib/history/deletion'
 import { requestRuntimeUndo } from '../lib/writes/undo'
 import type { ApprovalDisplay } from '../lib/writes/approvals'
 
@@ -79,13 +80,32 @@ export function UndoBar({ readOnly = false, busy = false }: { readOnly?: boolean
   const [undoableCount, setUndoableCount] = useState(0)
   const [status, setStatus] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
+  const activeThreadId = useNoxStore((s) => s.activeThreadId)
 
   useEffect(() => {
-    const refresh = () => void writeGate.journal.undoable().then((entries) => setUndoableCount(entries.length))
+    // Event-driven, thread-scoped count: refresh after known journal changes,
+    // on thread change, and on deletion notices — never a full-journal poll.
+    // A failed count read (e.g. mid-deletion) shows zero, never stale data.
+    let cancelled = false
+    const refresh = () => {
+      void writeGate.journal
+        .undoableCount()
+        .then((count) => {
+          if (!cancelled) setUndoableCount(count)
+        })
+        .catch(() => {
+          if (!cancelled) setUndoableCount(0)
+        })
+    }
     refresh()
-    const timer = setInterval(refresh, 3000)
-    return () => clearInterval(timer)
-  }, [])
+    const unsubscribeJournal = writeGate.journal.onChange(refresh)
+    const unsubscribeDeletion = onDeletionNotice(refresh)
+    return () => {
+      cancelled = true
+      unsubscribeJournal()
+      unsubscribeDeletion()
+    }
+  }, [activeThreadId])
 
   if (readOnly || (undoableCount === 0 && !status && !running && !busy)) return null
 
@@ -94,7 +114,7 @@ export function UndoBar({ readOnly = false, busy = false }: { readOnly?: boolean
     setRunning(true)
     const message = await runUndo(readOnly, busy)
     setStatus(message)
-    setUndoableCount((await writeGate.journal.undoable()).length)
+    setUndoableCount(await writeGate.journal.undoableCount().catch(() => 0))
     setRunning(false)
     window.setTimeout(() => setStatus(null), 2500)
   }

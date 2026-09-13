@@ -344,6 +344,17 @@ IndexedDB database `nox` is currently version 3.
 Version 3 removes unused page/mention cache stores and unused sort indexes while
 preserving threads, messages, attachments, and the change journal.
 
+Each panel keeps one cached database connection and closes it promptly when
+another context deletes or upgrades the store, so one window cannot hold
+"Delete all data" blocked forever. Deletion is cooperative: the deleter marks
+a session tombstone first (other panels cancel their turns, close, and refuse
+to reopen while it stands; a missed notification is repaired from the mark,
+and a stale mark from a crashed deleter is cleared), clears credentials before
+touching the database, waits for the real delete outcome while naming a
+remaining blocker, and only then clears storage and lifts the mark. The
+UndoBar shows a thread-scoped undoable count refreshed by journal changes,
+thread switches, and deletion notices instead of polling the full journal.
+
 Streaming messages are updated in place, so reopening the panel can identify and show an
 interrupted turn. Users can search, export, or delete local history. Codex also retains
 its own conversation data under its normal `~/.codex` storage.

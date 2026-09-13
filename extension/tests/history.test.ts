@@ -1,13 +1,19 @@
 // @vitest-environment jsdom
 import 'fake-indexeddb/auto'
 import { openDB, deleteDB } from 'idb'
-import { beforeEach, describe, expect, it } from 'vitest'
-import { openNoxDB, DB_VERSION } from '../src/lib/history/schema'
+import { beforeEach, describe, expect, it, vi, afterEach } from 'vitest'
+import { openNoxDB, closeNoxDBConnections, DB_VERSION, __resetConnectionCacheForTests } from '../src/lib/history/schema'
+import { __resetDeletionStateForTests, type DeletionMark, type DeletionStore } from '../src/lib/history/deletion'
+import { deleteAllData } from '../src/lib/history/panel'
 import { threadRepository, type ThreadRepository } from '../src/lib/history/repository'
 import { MutationJournal, idbJournalStore, type JournalEntry } from '../src/lib/writes/journal'
 import { startPersistedTurn } from '../src/lib/history/turn'
 
 describe('IndexedDB schema', () => {
+  beforeEach(() => {
+    __resetConnectionCacheForTests()
+    __resetDeletionStateForTests()
+  })
   it('removes unused v2 stores and indexes while preserving records', async () => {
     const old = await openDB('nox', 2, {
       upgrade(db) {
@@ -36,7 +42,7 @@ describe('IndexedDB schema', () => {
         expect(await db.get(store, store)).toMatchObject({ id: store, text: 'retained' })
       }
     } finally {
-      db.close()
+      closeNoxDBConnections()
       await deleteDB('nox')
     }
   })
@@ -48,15 +54,45 @@ describe('IndexedDB schema', () => {
     for (const store of ['threads', 'messages', 'journal', 'attachments']) {
       expect(db.objectStoreNames.contains(store)).toBe(true)
     }
-    db.close()
+    closeNoxDBConnections()
   })
 
   it('upgrades idempotently from an older version without duplicating stores', async () => {
     const db = await openNoxDB()
     const db2 = await openNoxDB()
     expect(db2.version).toBe(DB_VERSION)
-    db.close()
-    db2.close()
+    closeNoxDBConnections()
+  })
+
+  it('reuses one cached connection across repeated calls', async () => {
+    const first = await openNoxDB()
+    const second = await openNoxDB()
+    expect(second).toBe(first)
+    closeNoxDBConnections()
+  })
+
+  it('opens a fresh connection after explicit close', async () => {
+    const first = await openNoxDB()
+    closeNoxDBConnections()
+    const second = await openNoxDB()
+    expect(second).not.toBe(first)
+    expect(second.version).toBe(DB_VERSION)
+    closeNoxDBConnections()
+  })
+
+  it('closes promptly on versionchange so another context can delete', async () => {
+    const owned = await openNoxDB()
+    // A second raw connection stands in for another open panel.
+    const other = await openDB('nox', DB_VERSION)
+    const deleted = deleteDB('nox')
+    // Our cached connection closes itself on versionchange even though the
+    // other panel still holds the database blocked …
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(() => owned.transaction('threads', 'readonly')).toThrow()
+    // … and once the other panel closes too, deletion completes for real.
+    other.close()
+    await deleted
+    closeNoxDBConnections()
   })
 })
 
@@ -76,7 +112,7 @@ describe('persistent mutation journal', () => {
     expect(entries).toHaveLength(1)
     expect(entries[0]).toMatchObject({ threadId: 'thread-a', status: 'applied' })
     expect(entries[0].turnId).toBeTruthy()
-    db.close()
+    closeNoxDBConnections()
   })
 
   it('does not overwrite concurrent journal records', async () => {
@@ -89,7 +125,7 @@ describe('persistent mutation journal', () => {
       journal.record({ tool: 'second', args: {}, kind: 'content-update' }),
     ])
     expect(await journal.newestFirst()).toHaveLength(2)
-    db.close()
+    closeNoxDBConnections()
   })
 
   it('orders journal entries by timestamp rather than UUID key order', async () => {
@@ -192,7 +228,7 @@ describe('persistent mutation journal', () => {
     scoped.scopeThread('thread-a')
     expect((await scoped.newestFirst()).map((e) => e.tool)).toEqual(['a-write'])
     expect((await scoped.newestForThread('thread-b')).map((e) => e.tool)).toEqual(['b-write'])
-    db.close()
+    closeNoxDBConnections()
   })
 
   it('resolves concurrent undo reservations atomically in IndexedDB', async () => {
@@ -213,7 +249,7 @@ describe('persistent mutation journal', () => {
     expect([a, b].filter(Boolean)).toHaveLength(1)
     const winner = a ?? b
     expect((await first.getEntry(original.id))?.reservedByUndoOpId).toBe(winner!.undo.id)
-    db.close()
+    closeNoxDBConnections()
   })
 
   it('releases a failed undo claim instead of wedging later undo', async () => {
@@ -367,3 +403,173 @@ describe('ThreadRepository', () => {
   })
 })
 
+describe('cooperative deletion (Epoch 09)', () => {
+  function memoryDeletionStore() {
+    let mark: DeletionMark | null = null
+    return {
+      store: {
+        get: async () => mark,
+        set: async (next: DeletionMark) => {
+          mark = next
+        },
+        clear: async () => {
+          mark = null
+        },
+        onChange: () => () => undefined,
+      } satisfies DeletionStore,
+      peek: () => mark,
+    }
+  }
+
+  function stubChrome() {
+    const localClear = vi.fn(async () => undefined)
+    const sessionClear = vi.fn(async () => undefined)
+    vi.stubGlobal('chrome', { storage: { local: { clear: localClear }, session: { clear: sessionClear } } })
+    return { localClear, sessionClear }
+  }
+
+  beforeEach(() => {
+    __resetConnectionCacheForTests()
+    __resetDeletionStateForTests()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    __resetConnectionCacheForTests()
+    __resetDeletionStateForTests()
+  })
+
+  it('clears credentials before deleting the database', async () => {
+    const { store, peek } = memoryDeletionStore()
+    stubChrome()
+    const events: string[] = []
+    await deleteAllData({
+      deletionStore: store,
+      clearCredentials: async () => void events.push('credentials'),
+      deleteDatabase: async () => void events.push('database'),
+    })
+    expect(events).toEqual(['credentials', 'database'])
+    // Tombstone was set during the run and lifted at the end.
+    expect(peek()).toBeNull()
+  })
+
+  it('clears credentials even when database deletion hangs', async () => {
+    const { store } = memoryDeletionStore()
+    stubChrome()
+    let credentialsCleared = false
+    let databaseAttempted = false
+    const pending = deleteAllData({
+      deletionStore: store,
+      clearCredentials: async () => {
+        credentialsCleared = true
+      },
+      deleteDatabase: () => {
+        databaseAttempted = true
+        return new Promise<void>(() => undefined) // hangs forever
+      },
+    })
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(databaseAttempted).toBe(true)
+    expect(credentialsCleared).toBe(true)
+    // Tokens are not held hostage: the pending request keeps its own
+    // lifecycle instead of resolving early.
+    void pending.catch(() => undefined)
+  })
+
+  it('reports blocked deletions through onBlocked while still waiting', async () => {
+    const { store } = memoryDeletionStore()
+    stubChrome()
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let blockedCalls = 0
+    let settled = false
+    const pending = deleteAllData({
+      deletionStore: store,
+      clearCredentials: async () => undefined,
+      deleteDatabase: (onBlocked) => {
+        onBlocked?.()
+        blockedCalls++
+        return gate
+      },
+    })
+    void pending.then(() => {
+      settled = true
+    })
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    // Blocked is visible ("another Nox window…") but the request is still
+    // pending: no false success on a transient signal.
+    expect(blockedCalls).toBe(1)
+    expect(settled).toBe(false)
+    release()
+    await pending
+    expect(settled).toBe(true)
+  })
+
+  it('refuses database opens while deletion is pending and allows them after', async () => {
+    const { store } = memoryDeletionStore()
+    await openNoxDB(store)
+    closeNoxDBConnections()
+    // Another panel's tombstone, observed on refresh (message missed).
+    await store.set({ state: 'deleting', generation: 2, ts: Date.now() })
+    await expect(openNoxDB(store)).rejects.toThrow(/DELETION_PENDING/)
+    // Late callbacks cannot recreate the database through the guard …
+    await expect(openNoxDB(store)).rejects.toThrow(/DELETION_PENDING/)
+    // … but normal operation resumes once the mark lifts.
+    await store.clear()
+    const reopened = await openNoxDB(store)
+    expect(reopened.version).toBe(DB_VERSION)
+    closeNoxDBConnections()
+  })
+
+  it('runs a real blocked deletion end to end with a second connection', async () => {
+    const { store } = memoryDeletionStore()
+    stubChrome()
+    await openNoxDB(store)
+    const other = await openDB('nox', DB_VERSION)
+    let blockedCalls = 0
+    const pending = deleteAllData({ deletionStore: store, onBlocked: () => void blockedCalls++ })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    // The cached connection closed itself; the raw second connection is the
+    // remaining blocker, which the UI names explicitly.
+    expect(blockedCalls).toBeGreaterThanOrEqual(1)
+    other.close()
+    await pending
+    closeNoxDBConnections()
+  })
+})
+
+describe('journal change notifications (Epoch 09)', () => {
+  it('notifies observers after durable changes, never on storage failure', async () => {
+    const journal = new MutationJournal()
+    journal.setThread('thread-a')
+    let notices = 0
+    const unsubscribe = journal.onChange(() => void notices++)
+    await journal.record({ tool: 'write', args: {}, kind: 'content-update' })
+    expect(notices).toBe(1)
+    const scope = { threadId: 'thread-a', turnId: 'turn-1', workspaceId: 'ws', connectionGeneration: 'c', ownerGeneration: 'o' }
+    const intent = await journal.beginIntent({ tool: 't', args: {}, kind: 'write', scope })
+    expect(notices).toBe(2)
+    await journal.settleIntent(intent.id, { status: 'applied' })
+    expect(notices).toBe(3)
+    unsubscribe()
+    await journal.record({ tool: 'write-2', args: {}, kind: 'write' })
+    expect(notices).toBe(3)
+  })
+
+  it('counts scoped undoables without loading other threads', async () => {
+    const journal = new MutationJournal()
+    journal.setThread('thread-a')
+    await journal.record({ tool: 'a-write', args: {}, kind: 'move', inverse: { tool: 'u', args: {} } })
+    await journal.record({ tool: 'a-plain', args: {}, kind: 'move' })
+    journal.setThread('thread-b')
+    await journal.record({ tool: 'b-write', args: {}, kind: 'move', inverse: { tool: 'u', args: {} } })
+    journal.scopeThread('thread-a')
+    expect(await journal.undoableCount()).toBe(1)
+    journal.scopeThread('thread-b')
+    expect(await journal.undoableCount()).toBe(1)
+    journal.scopeThread(null)
+    expect(await journal.undoableCount()).toBe(0)
+  })
+})

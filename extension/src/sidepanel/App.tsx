@@ -6,6 +6,7 @@ import { ViewerBanner } from './Onboarding'
 import { applyTheme, loadSettings } from '../lib/settings'
 import { agentLoop } from '../lib/agent/panel'
 import { claimWindowRole, type WindowRole } from '../lib/history/panel'
+import { defaultDeletionStore, watchDeletionChanges } from '../lib/history/deletion'
 import { installLogCapture, logInfo } from '../lib/log'
 import { connectCodexAction } from './codex-connect'
 import { restoreNotionAction } from './notion-connect'
@@ -49,6 +50,9 @@ export function App() {
     void hydrateCurrentPage()
     void claimWindowRole().then(setRole)
     hydrateSettings()
+    // Deletion tombstone push for this already-open panel; the tombstone
+    // itself (checked on every database open) covers missed events.
+    return watchDeletionChanges(defaultDeletionStore())
   }, [])
 
   useEffect(() => {

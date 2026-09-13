@@ -179,6 +179,7 @@ function LogsSection() {
 function DataSection() {
   const [usage, setUsage] = useState<string | null>(null)
   const [deleting, setDeleting] = useState(false)
+  const [blocked, setBlocked] = useState(false)
   const [deleteError, setDeleteError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -196,8 +197,12 @@ function DataSection() {
         onClick={() => {
           if (!window.confirm('Delete ALL Nox data — threads, journal, tokens?')) return
           setDeleting(true)
+          setBlocked(false)
           setDeleteError(null)
-          void deleteAllData().then(() => window.location.reload()).catch((error) => {
+          // The request keeps its real lifecycle: a blocked deletion waits
+          // for a genuine outcome (never a false success), while the notice
+          // below names the specific blocker.
+          void deleteAllData({ onBlocked: () => setBlocked(true) }).then(() => window.location.reload()).catch((error) => {
             setDeleteError(error instanceof Error ? error.message : String(error))
             setDeleting(false)
           })
@@ -207,6 +212,11 @@ function DataSection() {
         {deleting ? 'Deleting…' : 'Delete all data'}
       </button>
       </div>
+      {deleting && blocked && (
+        <p className="mt-1 text-[11px] text-zinc-400" role="status">
+          Another Nox window is keeping storage open; close it to finish.
+        </p>
+      )}
       {deleteError && <p className="nox-danger mt-1 text-[11px]" role="alert">{deleteError}</p>}
     </section>
   )

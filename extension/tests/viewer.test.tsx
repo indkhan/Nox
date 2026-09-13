@@ -17,6 +17,9 @@ const chatMocks = vi.hoisted(() => ({
   newestForThread: vi.fn(async (): Promise<any[]> => []),
   newestFirst: vi.fn(async (): Promise<any[]> => []),
   undoable: vi.fn(async () => []),
+  undoableCount: vi.fn(async () => 0),
+  onChange: vi.fn(() => () => undefined),
+  deleteAllData: vi.fn(async () => undefined),
   restoreThread: vi.fn(),
   setOverrides: vi.fn(),
   getMessages: vi.fn(async (): Promise<any[]> => []),
@@ -32,6 +35,8 @@ vi.mock('../src/lib/agent/panel', () => ({
     approvals: { answer: vi.fn() },
     journal: {
       undoable: chatMocks.undoable,
+      undoableCount: chatMocks.undoableCount,
+      onChange: chatMocks.onChange,
       scopeThread: chatMocks.scopeThread,
       newestForThread: chatMocks.newestForThread,
       newestFirst: chatMocks.newestFirst,
@@ -41,6 +46,8 @@ vi.mock('../src/lib/agent/panel', () => ({
 }))
 vi.mock('../src/lib/history/panel', () => ({
   historyRepo: { getMessages: chatMocks.getMessages, getThread: chatMocks.getThread },
+  storageUsageBytes: vi.fn(async () => null),
+  deleteAllData: (...args: unknown[]) => (chatMocks.deleteAllData as (...a: unknown[]) => Promise<void>)(...args),
 }))
 vi.mock('../src/lib/codex/panel', () => ({
   codex: { listModels: vi.fn(async () => [{
@@ -58,12 +65,14 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { createRoot } from 'react-dom/client'
 import { act } from 'react'
 import { Composer } from '../src/sidepanel/Composer'
-import { ApprovalCards } from '../src/sidepanel/ApprovalCards'
+import { ApprovalCards, UndoBar } from '../src/sidepanel/ApprovalCards'
 import { ChatPanel } from '../src/sidepanel/ChatPanel'
 import { EmptyState } from '../src/sidepanel/EmptyState'
+import { SettingsModal } from '../src/sidepanel/SettingsModal'
 import { useNoxStore } from '../src/sidepanel/store'
 import { notion } from '../src/lib/notion/panel'
 import { agentLoop } from '../src/lib/agent/panel'
+import { beginDeletion, endDeletion, __resetDeletionStateForTests } from '../src/lib/history/deletion'
 
 describe('viewer mode', () => {
   it('disables the composer for read-only windows', () => {
@@ -410,6 +419,141 @@ describe('viewer mode', () => {
       await act(async () => root.unmount())
       container.remove()
       browser.storageGet.mockImplementation(async () => ({}))
+    }
+  })
+})
+
+describe('UndoBar event-driven count (Epoch 09)', () => {
+  it('shows the scoped count and refreshes on journal changes without polling', async () => {
+    vi.useFakeTimers()
+    try {
+      let count = 2
+      const listeners = new Set<() => void>()
+      chatMocks.undoableCount.mockImplementation(async () => count)
+      chatMocks.onChange.mockImplementation((callback: () => void) => {
+        listeners.add(callback)
+        return () => {
+          listeners.delete(callback)
+        }
+      })
+      const container = document.createElement('div')
+      document.body.appendChild(container)
+      const root = createRoot(container)
+      await act(async () => {
+        root.render(<UndoBar />)
+      })
+      await act(async () => {
+        await Promise.resolve()
+      })
+      expect(chatMocks.undoableCount).toHaveBeenCalled()
+      expect(container.textContent).toContain('2 reversible changes')
+      // No interval polling: advancing the clock triggers no new reads.
+      const callsAfterMount = chatMocks.undoableCount.mock.calls.length
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30000)
+      })
+      expect(chatMocks.undoableCount.mock.calls.length).toBe(callsAfterMount)
+      // A journal change refreshes the count through the subscription.
+      count = 0
+      await act(async () => {
+        for (const listener of [...listeners]) listener()
+        await Promise.resolve()
+      })
+      expect(container.textContent).not.toContain('reversible changes')
+      expect(listeners.size).toBe(1)
+      await act(async () => root.unmount())
+      expect(listeners.size).toBe(0)
+      container.remove()
+    } finally {
+      vi.useRealTimers()
+      chatMocks.undoableCount.mockReset().mockResolvedValue(0)
+      chatMocks.onChange.mockReset().mockReturnValue(() => undefined)
+    }
+  })
+
+  it('refreshes on deletion notices through the shared channel', async () => {
+    const listeners = new Set<() => void>()
+    chatMocks.undoableCount.mockResolvedValue(1)
+    chatMocks.onChange.mockImplementation((callback: () => void) => {
+      listeners.add(callback)
+      return () => {
+        listeners.delete(callback)
+      }
+    })
+    const fakeStore = {
+      get: async () => null,
+      set: async () => undefined,
+      clear: async () => undefined,
+      onChange: () => () => undefined,
+    }
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    try {
+      await act(async () => {
+        root.render(<UndoBar />)
+      })
+      await act(async () => {
+        await Promise.resolve()
+      })
+      const callsBefore = chatMocks.undoableCount.mock.calls.length
+      await act(async () => {
+        await beginDeletion(fakeStore)
+        await Promise.resolve()
+      })
+      expect(chatMocks.undoableCount.mock.calls.length).toBeGreaterThan(callsBefore)
+      await act(async () => root.unmount())
+    } finally {
+      await endDeletion(fakeStore)
+      __resetDeletionStateForTests()
+      container.remove()
+      chatMocks.undoableCount.mockReset().mockResolvedValue(0)
+      chatMocks.onChange.mockReset().mockReturnValue(() => undefined)
+    }
+  })
+})
+
+describe('delete-all-data blocked state (Epoch 09)', () => {
+  it('names the blocker while the request waits for a real outcome', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    chatMocks.deleteAllData.mockImplementationOnce((deps?: { onBlocked?: () => void }) => {
+      deps?.onBlocked?.()
+      return gate
+    })
+    const confirm = window.confirm
+    window.confirm = (() => true) as typeof window.confirm
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    try {
+      await act(async () => {
+        root.render(<SettingsModal />)
+      })
+      const deleteButton = [...container.querySelectorAll('button')].find((button) =>
+        button.textContent?.includes('Delete all data'),
+      )
+      expect(deleteButton).not.toBeUndefined()
+      await act(async () => {
+        deleteButton!.click()
+        await Promise.resolve()
+      })
+      // Blocked is visible, and the request is still pending (no reload,
+      // no success claim): the button stays disabled with "Deleting…".
+      expect(container.textContent).toContain('Another Nox window is keeping storage open; close it to finish.')
+      expect(container.textContent).toContain('Deleting…')
+      release()
+      await act(async () => {
+        await gate
+        await Promise.resolve()
+      })
+    } finally {
+      window.confirm = confirm
+      await act(async () => root.unmount())
+      container.remove()
+      chatMocks.deleteAllData.mockReset().mockResolvedValue(undefined)
     }
   })
 })

@@ -9,6 +9,7 @@ import { EmptyState } from './EmptyState'
 import { ApprovalCards, UndoBar } from './ApprovalCards'
 import { PlanCards } from './PlanCards'
 import { historyRepo } from '../lib/history/panel'
+import { onDeletionNotice } from '../lib/history/deletion'
 import { startPersistedTurn } from '../lib/history/turn'
 import { logError, logInfo } from '../lib/log'
 import { requestRuntimeUndo } from '../lib/writes/undo'
@@ -106,6 +107,16 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
   }, [newChatTick, setActiveThreadId, setThreadTitle])
 
   const scrollToEnd = () => requestAnimationFrame(() => scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }))
+
+  // Another panel started "Delete all data": cancel this panel's turn,
+  // invalidate pending grants/cards, and stop touching storage. Late
+  // streaming/journal callbacks already tolerate rejection; openNoxDB refuses
+  // while deletion is pending so nothing recreates the database.
+  useEffect(() => onDeletionNotice(() => {
+    sendAbortRef.current?.abort()
+    agentLoop.cancel()
+    logError('Storage deletion was requested from another Nox window — the active turn was cancelled.')
+  }), [])
 
   async function send(text: string, mentions: MentionRef[] = [], attachments: LocalAttachment[] = [], allowSmallEdits = false) {
     if (busyRef.current || readOnly) return

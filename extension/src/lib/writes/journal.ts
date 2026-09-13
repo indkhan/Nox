@@ -129,8 +129,52 @@ export class MutationJournal {
   private lastTimestamp = 0
   private scopeActive = false
   private recordQueue: Promise<void> = Promise.resolve()
+  /** Observers of durable journal changes (e.g. the UndoBar count). */
+  private readonly changeListeners = new Set<() => void>()
 
-  constructor(private readonly store: JournalStore = memoryJournalStore()) {}
+  constructor(store: JournalStore = memoryJournalStore()) {
+    const inner = store
+    // Every durable mutation flows through append or reserveUndo: wrap both
+    // once so observers fire after success, never on storage failure.
+    this.store = {
+      ...inner,
+      append: async (entry) => {
+        const result = await inner.append(entry)
+        this.emitChange()
+        return result
+      },
+      ...(inner.reserveUndo
+        ? {
+            reserveUndo: async (originalId, undoEntry) => {
+              const result = await inner.reserveUndo!(originalId, undoEntry)
+              if (result) this.emitChange()
+              return result
+            },
+          }
+        : {}),
+    }
+  }
+
+  /** Wrapped store: every durable mutation notifies change observers. */
+  private declare readonly store: JournalStore;
+
+  /** Subscribe to durable journal changes. Returns an unsubscribe. */
+  onChange(callback: () => void): () => void {
+    this.changeListeners.add(callback)
+    return () => {
+      this.changeListeners.delete(callback)
+    }
+  }
+
+  private emitChange(): void {
+    for (const listener of [...this.changeListeners]) {
+      try {
+        listener()
+      } catch {
+        // One failing observer must not break journal bookkeeping.
+      }
+    }
+  }
 
   setThread(threadId: string | null): void {
     this.threadId = threadId
@@ -315,6 +359,15 @@ export class MutationJournal {
   /** Entries that carry a runnable inverse: applied, unreserved, unreviewed-agnostic. */
   async undoable(): Promise<JournalEntry[]> {
     return (await this.newestFirst()).filter((e) => e.status === 'applied' && e.inverse != null && e.reservedByUndoOpId == null)
+  }
+
+  /**
+   * Scoped undoable count for the UndoBar. Reads through the existing
+   * thread-scoped path (`by_thread` in IndexedDB), never the whole store —
+   * and the component keeps only the number, never a copy of inverses.
+   */
+  async undoableCount(): Promise<number> {
+    return (await this.undoable()).length
   }
 
   async newestForThread(threadId: string): Promise<JournalEntry[]> {
