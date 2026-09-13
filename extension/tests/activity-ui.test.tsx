@@ -89,6 +89,25 @@ describe('ActivityTimeline', () => {
     expect(html).toContain('Undo unavailable in read-only mode')
   })
 
+  it('renders unresolved operations as prominent reviewable rows', () => {
+    const onMarkReviewed = vi.fn()
+    const onCheckState = vi.fn()
+    const html = renderToStaticMarkup(<ActivityTimeline active items={[
+      {
+        kind: 'tool', id: 'u', tool: 'notion-update-page', args: { page_id: 'p1' },
+        status: 'unknown', journalId: 'op-1',
+        unresolvedDetail: 'Outcome unknown — it may or may not have applied.',
+        inspectUrl: 'https://www.notion.so/p1',
+      },
+    ]} initiallyExpanded onMarkReviewed={onMarkReviewed} onCheckState={onCheckState} />)
+    expect(html).toContain('Needs review')
+    expect(html).toContain('Outcome unknown')
+    expect(html).toContain('href="https://www.notion.so/p1"')
+    expect(html).toContain('Mark reviewed')
+    expect(html).toContain('Check current state')
+    expect(html).not.toContain('Undo this change')
+  })
+
   it('renders follow-up actions as buttons', () => {
     const html = renderToStaticMarkup(<FollowUpActions suggestions={['Summarize these results']} onSelect={vi.fn()} />)
     expect(html).toContain('Follow-ups')

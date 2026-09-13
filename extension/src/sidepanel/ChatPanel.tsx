@@ -3,7 +3,7 @@ import type { Dispatch, SetStateAction } from 'react'
 import { useNoxStore } from './store'
 import { agentLoop, fetchMentionContext, prepareAgentTurn, setAgentHistoryThread, writeGate } from '../lib/agent/panel'
 import { ActivityTimeline, AssistantMarkdown, FollowUpActions } from './MessageParts'
-import { applyActivityEvent, applyUndoResult, followUpsForActivity, type ActivityItem } from '../lib/agent/activity'
+import { applyActivityEvent, applyReviewEvidence, applyReviewResult, applyUndoResult, describeUnresolvedEntry, followUpsForActivity, inspectUrlForPage, type ActivityItem } from '../lib/agent/activity'
 import { Composer } from './Composer'
 import { EmptyState } from './EmptyState'
 import { ApprovalCards, UndoBar } from './ApprovalCards'
@@ -276,6 +276,8 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
                   answerStarted={view.answer.length > 0}
                   onUndo={readOnly || busy ? undefined : (id) => void undoActivity(id, setTurns)}
                   undoUnavailableReason={readOnly ? 'Undo unavailable in read-only mode' : busy ? 'Undo unavailable while Nox is working' : undefined}
+                  onMarkReviewed={readOnly || busy ? undefined : (id) => void reviewActivity(id, setTurns)}
+                  onCheckState={readOnly || busy ? undefined : (id) => void checkOperationState(id, setTurns)}
                 />
               )}
               {view.answer && <div aria-live={view.pending ? 'polite' : undefined} aria-atomic="false"><AssistantMarkdown markdown={view.answer} /></div>}
@@ -316,8 +318,32 @@ function attachJournalEntries(items: ActivityItem[], entries: Awaited<ReturnType
   return items.map((item) => {
     if (item.kind !== 'tool') return item
     const entry = entries.find((candidate) => candidate.callId && candidate.callId === item.id)
-    return entry ? { ...item, journalId: entry.id, undoable: entry.status === 'applied' && entry.inverse != null } : item
+    if (!entry) {
+      const byJournalId = entries.find((candidate) => candidate.id === item.journalId)
+      return byJournalId && (byJournalId.status === 'pending' || byJournalId.status === 'unknown')
+        ? markUnresolvedRow(item, byJournalId)
+        : item
+    }
+    if (entry.status === 'pending' || entry.status === 'unknown' || (entry.status === 'applied' && entry.reservedByUndoOpId != null)) {
+      return markUnresolvedRow(item, entry)
+    }
+    return { ...item, journalId: entry.id, undoable: entry.status === 'applied' && entry.inverse != null }
   })
+}
+
+function markUnresolvedRow(
+  item: Extract<ActivityItem, { kind: 'tool' }>,
+  entry: { id: string; status: string; outcomeDetail?: string; reviewedAt?: number; reservedByUndoOpId?: string; targetPageId?: string },
+): ActivityItem {
+  return {
+    ...item,
+    status: 'unknown',
+    journalId: entry.id,
+    undoable: false,
+    unresolvedDetail: describeUnresolvedEntry(entry),
+    inspectUrl: entry.targetPageId ? inspectUrlForPage(entry.targetPageId) : undefined,
+    reviewed: entry.reviewedAt != null ? true : undefined,
+  }
 }
 
 async function undoActivity(
@@ -338,4 +364,33 @@ async function undoActivity(
     undoingJournalIds.delete(journalId)
   }
   setTurns((turns) => turns.map((turn) => ({ ...turn, view: { ...turn.view, activity: applyUndoResult(turn.view.activity, journalId, error) } })))
+}
+
+async function reviewActivity(
+  journalId: string,
+  setTurns: Dispatch<SetStateAction<Array<{ id: string; userText: string; view: TurnView }>>>,
+): Promise<void> {
+  try {
+    const reviewed = await writeGate.journal.markReviewed(journalId, 'inspected from activity')
+    if (!reviewed) return
+  } catch (cause) {
+    setTurns((turns) => turns.map((turn) => ({ ...turn, view: { ...turn.view, activity: applyReviewEvidence(turn.view.activity, journalId, `Review failed: ${cause instanceof Error ? cause.message : String(cause)}`) } })))
+    return
+  }
+  setTurns((turns) => turns.map((turn) => ({ ...turn, view: { ...turn.view, activity: applyReviewResult(turn.view.activity, journalId) } })))
+}
+
+async function checkOperationState(
+  journalId: string,
+  setTurns: Dispatch<SetStateAction<Array<{ id: string; userText: string; view: TurnView }>>>,
+): Promise<void> {
+  try {
+    const evidence = await writeGate.readbackForReview(journalId)
+    const text = evidence.targetPageId
+      ? `${evidence.detail} Open in Notion: ${inspectUrlForPage(evidence.targetPageId)}.`
+      : evidence.detail
+    setTurns((turns) => turns.map((turn) => ({ ...turn, view: { ...turn.view, activity: applyReviewEvidence(turn.view.activity, journalId, text) } })))
+  } catch (cause) {
+    setTurns((turns) => turns.map((turn) => ({ ...turn, view: { ...turn.view, activity: applyReviewEvidence(turn.view.activity, journalId, `State check failed: ${cause instanceof Error ? cause.message : String(cause)}`) } })))
+  }
 }

@@ -5,7 +5,7 @@ import { deriveActivitySummary, failedToolActivityLabel, toolActivityLabel, tool
 import { toResultTable } from '../lib/db/query'
 import { ResultsTable } from './ResultsTable'
 
-export function ActivityTimeline({ items, active = false, answerStarted = false, initiallyExpanded = false, outcome, onUndo, undoUnavailableReason }: { items: ActivityItem[]; active?: boolean; answerStarted?: boolean; initiallyExpanded?: boolean; outcome?: 'failed' | 'interrupted'; onUndo?: (journalId: string) => void; undoUnavailableReason?: string }) {
+export function ActivityTimeline({ items, active = false, answerStarted = false, initiallyExpanded = false, outcome, onUndo, undoUnavailableReason, onMarkReviewed, onCheckState }: { items: ActivityItem[]; active?: boolean; answerStarted?: boolean; initiallyExpanded?: boolean; outcome?: 'failed' | 'interrupted'; onUndo?: (journalId: string) => void; undoUnavailableReason?: string; onMarkReviewed?: (journalId: string) => void; onCheckState?: (journalId: string) => void }) {
   const [open, setOpen] = useState(initiallyExpanded)
   useEffect(() => {
     if (answerStarted) setOpen(false)
@@ -28,7 +28,7 @@ export function ActivityTimeline({ items, active = false, answerStarted = false,
         <div className="ml-2 mt-1 border-l border-zinc-800 pb-1 pl-3">
           <p className="pb-1 text-[10px] font-medium uppercase tracking-wider text-zinc-600">What Nox did</p>
           <ol>
-            {items.filter((item) => item.kind !== 'reasoning').map((item) => <ActivityRow key={item.id} item={item} onUndo={onUndo} undoUnavailableReason={undoUnavailableReason} />)}
+            {items.filter((item) => item.kind !== 'reasoning').map((item) => <ActivityRow key={item.id} item={item} onUndo={onUndo} undoUnavailableReason={undoUnavailableReason} onMarkReviewed={onMarkReviewed} onCheckState={onCheckState} />)}
           </ol>
         </div>
       )}
@@ -36,7 +36,7 @@ export function ActivityTimeline({ items, active = false, answerStarted = false,
   )
 }
 
-function ActivityRow({ item, onUndo, undoUnavailableReason }: { item: Exclude<ActivityItem, { kind: 'reasoning' }>; onUndo?: (journalId: string) => void; undoUnavailableReason?: string }) {
+function ActivityRow({ item, onUndo, undoUnavailableReason, onMarkReviewed, onCheckState }: { item: Exclude<ActivityItem, { kind: 'reasoning' }>; onUndo?: (journalId: string) => void; undoUnavailableReason?: string; onMarkReviewed?: (journalId: string) => void; onCheckState?: (journalId: string) => void }) {
   if (item.kind === 'commentary') return <li className="py-1 text-xs text-zinc-500">{item.text}</li>
   if (item.kind === 'search') return <li className="nox-info py-1 text-xs">
     {item.status === 'completed' ? 'Searched the web' : 'Searching the web...'}
@@ -47,17 +47,30 @@ function ActivityRow({ item, onUndo, undoUnavailableReason }: { item: Exclude<Ac
     </details>}
   </li>
   const completed = item.status === 'completed'
+  const unresolved = item.kind === 'tool' && item.status === 'unknown'
   const base = toolActivityLabel(item.tool, item.args, completed)
-  const label = item.undone ? 'Change undone' : item.status === 'failed' ? failedToolActivityLabel(item.tool) : base
+  const label = item.undone ? 'Change undone' : item.status === 'failed' ? failedToolActivityLabel(item.tool) : unresolved ? 'Needs review' : base
   return (
     <li className={`flex items-start gap-2 py-1 text-xs ${completed ? 'nox-resolve' : ''}`}>
-      <span className={item.status === 'failed' ? 'nox-danger' : completed ? 'nox-success' : 'nox-active'}>
-        {item.status === 'failed' ? '×' : completed ? '✓' : '●'}
+      <span className={item.status === 'failed' ? 'nox-danger' : completed ? 'nox-success' : unresolved ? 'nox-warning' : 'nox-active'}>
+        {item.status === 'failed' ? '×' : completed ? '✓' : unresolved ? '!' : '●'}
       </span>
       <div className="min-w-0 flex-1 text-zinc-300">
-        <span>{label}</span>
+        <span className={unresolved ? 'nox-warning font-medium' : undefined}>{label}</span>
         {item.error && <span className="nox-danger ml-1">— {item.error}</span>}
         <ActivityResult item={item} />
+        {unresolved && item.unresolvedDetail && <p className="mt-1 text-[11px] leading-relaxed text-zinc-400">{item.unresolvedDetail}</p>}
+        {unresolved && item.inspectUrl && <a href={item.inspectUrl} target="_blank" rel="noreferrer" className="nox-active mt-1 inline-block text-[11px] underline-offset-2 hover:underline">Open in Notion</a>}
+        {unresolved && !item.reviewed && onMarkReviewed && item.journalId && (
+          <button onClick={() => onMarkReviewed(item.journalId!)} className="nox-active mt-1 block text-[11px] underline-offset-2 hover:underline">
+            Mark reviewed
+          </button>
+        )}
+        {unresolved && onCheckState && item.journalId && (
+          <button onClick={() => onCheckState(item.journalId!)} className="nox-active mt-1 block text-[11px] underline-offset-2 hover:underline">
+            Check current state
+          </button>
+        )}
         <details className="mt-1 text-[10px] text-zinc-600">
           <summary className="cursor-pointer">Technical details</summary>
           <div className="mt-1 font-mono">{item.tool}</div>

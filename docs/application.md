@@ -250,7 +250,10 @@ and pre-image — before dispatch and settles it to applied, failed, or unknown
 afterwards, so a crash can never leave a dispatched effect without a durable
 identity. Mutations require a persisted thread and an established workspace;
 a success the store cannot record surfaces as an applied-with-recovery-warning
-instead of plain success.
+instead of plain success. Unresolved operations restore as prominent
+Needs-review activity with inspect links and readback evidence, and block new
+writes and undo until marked reviewed. Undo reserves its original atomically
+and completes only when the inverse is known applied.
 
 ```text
 change requested

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyActivityEvent, applyUndoResult, deriveActivitySummary, followUpsForActivity, toolActivityLabel, type ActivityItem } from '../src/lib/agent/activity'
+import { applyActivityEvent, applyReviewEvidence, applyReviewResult, applyUndoResult, deriveActivitySummary, followUpsForActivity, toolActivityLabel, type ActivityItem } from '../src/lib/agent/activity'
 
 describe('agent activity', () => {
   it('correlates a completed tool with its running activity', () => {
@@ -62,6 +62,14 @@ describe('activity summary', () => {
     expect(deriveActivitySummary(completed, { active: false, answerStarted: true })).toMatchObject({ label: 'Answer ready', actionCount: 2, durationMs: 1200 })
     expect(deriveActivitySummary([...completed, { kind: 'tool', id: 'c', tool: 'notion-update-page', args: {}, status: 'failed' }], { active: false, answerStarted: false }).label).toBe('Failed to update a page')
   })
+
+  it('flags unresolved operations as needing review', () => {
+    const items: ActivityItem[] = [
+      { kind: 'tool', id: 'a', tool: 'notion-fetch', args: {}, status: 'completed' },
+      { kind: 'tool', id: 'u', tool: 'notion-update-page', args: {}, status: 'unknown', journalId: 'op-1', unresolvedDetail: 'Outcome unknown.' },
+    ]
+    expect(deriveActivitySummary(items, { active: false, answerStarted: false }).label).toBe('Needs review')
+  })
 })
 
 describe('contextual follow-ups', () => {
@@ -84,6 +92,22 @@ describe('activity undo state', () => {
 
   it('marks the matching action undone after success', () => {
     expect(applyUndoResult([item], 'j1')[0]).toMatchObject({ undoable: false, resultText: 'Change undone' })
+  })
+
+  it('records user review on the matching unresolved action', () => {
+    const unresolved: ActivityItem = { kind: 'tool', id: 'u', tool: 'notion-update-page', args: {}, status: 'unknown', journalId: 'op-1', unresolvedDetail: 'Outcome unknown.' }
+    expect(applyReviewResult([unresolved, item], 'op-1')).toEqual([
+      expect.objectContaining({ journalId: 'op-1', reviewed: true, unresolvedDetail: expect.stringMatching(/eviewed/) }),
+      item,
+    ])
+    expect(applyReviewResult([unresolved], 'missing')).toEqual([unresolved])
+  })
+
+  it('attaches readback evidence to the matching unresolved action', () => {
+    const unresolved: ActivityItem = { kind: 'tool', id: 'u', tool: 'notion-update-page', args: {}, status: 'unknown', journalId: 'op-1' }
+    expect(applyReviewEvidence([unresolved], 'op-1', 'Checked: matches.')).toEqual([
+      expect.objectContaining({ journalId: 'op-1', unresolvedDetail: 'Checked: matches.' }),
+    ])
   })
 })
 
