@@ -1,4 +1,4 @@
-import type { ThreadRepository } from './repository'
+import type { OwnedAttachmentInput, ThreadRepository } from './repository'
 import type { ActivityItem } from '../agent/activity'
 
 export type PersistedOutcome = 'streaming' | 'complete' | 'interrupted' | 'failed'
@@ -43,6 +43,23 @@ export interface PersistedTurn {
 }
 
 /**
+ * Fallback for repositories predating the atomic header (memory fakes in
+ * older tests). Production always goes through `beginTurn` above; fakes
+ * carrying attachments without it fail closed instead of writing orphans.
+ */
+async function legacyHeader(
+  repo: ThreadRepository,
+  threadId: string | null,
+  userText: string,
+  attachments: OwnedAttachmentInput[],
+): Promise<string> {
+  if (attachments.length > 0) throw new Error('attachment ownership requires an atomic turn header')
+  const id = threadId ?? (await repo.createThread()).id
+  await repo.appendMessage(id, { role: 'user', text: userText })
+  return id
+}
+
+/**
  * Durable per-turn history writer (Epoch 09 / M16).
  *
  * At most one save is in flight and at most one waits; rapid streaming
@@ -56,9 +73,16 @@ export async function startPersistedTurn(
   repo: ThreadRepository,
   threadId: string | null,
   userText: string,
+  attachments: OwnedAttachmentInput[] = [],
 ): Promise<PersistedTurn> {
-  const id = threadId ?? (await repo.createThread()).id
-  await repo.appendMessage(id, { role: 'user', text: userText })
+  // Epoch 10 / M7: the turn header (thread creation when needed, user
+  // message, attachment bytes with thread ownership) lands in one bounded
+  // transaction. A failure rejects before any Codex/upload request, so the
+  // caller can retain the local draft and send nothing.
+  const beginTurn = (repo as Partial<ThreadRepository>).beginTurn
+  const id = beginTurn
+    ? (await beginTurn.call(repo, threadId, userText, attachments)).threadId
+    : await legacyHeader(repo, threadId, userText, attachments)
   // Captured once, up front: every save below lands under these identities.
   const assistantId = crypto.randomUUID()
   let inFlight: Promise<void> | null = null

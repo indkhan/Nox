@@ -15,7 +15,9 @@ import { logError, logInfo } from '../lib/log'
 import { requestRuntimeUndo } from '../lib/writes/undo'
 import { restoreTurns } from '../lib/history/restore'
 import type { MentionRef } from '../shared/notion-page'
-import type { LocalAttachment } from '../shared/attachments'
+import type { DraftAttachment, LocalAttachment } from '../shared/attachments'
+import { validateDraftSelection } from '../shared/attachments'
+import type { OwnedAttachmentInput } from '../lib/history/repository'
 
 interface TurnView {
   activity: ActivityItem[]
@@ -144,7 +146,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
     logError('Storage deletion was requested from another Nox window — the active turn was cancelled.')
   }), [])
 
-  async function send(text: string, mentions: MentionRef[] = [], attachments: LocalAttachment[] = [], allowSmallEdits = false) {
+  async function send(text: string, mentions: MentionRef[] = [], drafts: DraftAttachment[] = [], allowSmallEdits = false) {
     if (busyRef.current || readOnly) return
     historyRestoreCancelledRef.current = true
     historyGenerationRef.current++
@@ -152,6 +154,12 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
       setTurns((t) => [...t, { id: crypto.randomUUID(), userText: text, view: { activity: [], answer: '', error: 'Connect Notion first — open Settings (top right) to connect.', pending: false } }])
       return
     }
+    // Epoch 10 / M7: stage attachment bytes before anything else. Sizes are
+    // re-checked here (the composer already validated) before any bytes are
+    // read, and the atomic header below commits thread + user message + bytes
+    // in one transaction. A failure throws before prepareAgentTurn and before
+    // any Codex/upload request, so the composer retains its in-memory draft.
+    const owned = await stageOwnedDrafts(drafts)
     const currentPage = useNoxStore.getState().currentPage ?? undefined
     const sendAbort = new AbortController()
     sendAbortRef.current = sendAbort
@@ -159,28 +167,42 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
     lastUsageRef.current = null
     const mode = useNoxStore.getState().mode
     const turnPageIds = [...mentions.map((mention) => mention.pageId), ...(currentPage ? [currentPage.pageId] : [])]
+    const turnId = crypto.randomUUID()
+    let persisted: Awaited<ReturnType<typeof startPersistedTurn>> | null = null
+    try {
+      persisted = await startPersistedTurn(historyRepo, currentThreadIdRef.current, text, owned)
+    } catch (error) {
+      if (owned.length > 0) {
+        const message = error instanceof Error ? error.message : String(error)
+        setTurns((t) => [...t, { id: crypto.randomUUID(), userText: text, view: { activity: [], answer: '', error: `Attachments could not be saved locally — nothing was sent. ${message}`, pending: false } }])
+        clearTimeout(deadline)
+        sendAbortRef.current = null
+        throw error
+      }
+      /* persistence is best-effort when no attachments ride along; never block the chat */
+    }
+    // Only ids committed for this turn reach the agent: the grant and the
+    // model context are built from the persisted rows, never the live draft.
+    const committed: LocalAttachment[] = owned.map(({ id, name, mimeType, size }) => ({ id, name, mimeType, size }))
     // The small-edit grant is captured here at Send — normalized targets,
     // grant flag, mode, and turn binding — and reset for the next turn. Only
     // Auto with an explicit grant permits silent small edits.
-    prepareAgentTurn(mode, turnPageIds, attachments.map((attachment) => attachment.id), mode === 'auto' && allowSmallEdits ? { allowed: true, pages: turnPageIds } : undefined)
+    prepareAgentTurn(mode, turnPageIds, committed.map((attachment) => attachment.id), mode === 'auto' && allowSmallEdits ? { allowed: true, pages: turnPageIds } : undefined)
     busyRef.current = true
     setAgentBusy(true)
     setBusy(true)
     logInfo(`Send: ${text.slice(0, 120)}`)
-    const turnId = crypto.randomUUID()
-    setTurns((t) => [...t, { id: turnId, userText: text, view: { activity: [], answer: '', error: null, pending: true } }])
+    setTurns((t) => [...t, { id: turnId, userText: text, view: { activity: [], answer: '', error: null, pending: true, historyError: persisted ? null : HISTORY_SAVE_ERROR } }])
     const patch = (fn: (v: TurnView) => TurnView) =>
       setTurns((all) => all.map((turn) => turn.id === turnId ? { ...turn, view: fn(turn.view) } : turn))
     let pendingReasoning = ''
     let currentActivity: ActivityItem[] = []
     let streamedAnswer = ''
     let unsubscribe: (() => void) | null = null
-    let persisted: Awaited<ReturnType<typeof startPersistedTurn>> | null = null
     let unsubscribeHistoryErrors: (() => void) | null = null
 
     try {
-      try {
-        persisted = await startPersistedTurn(historyRepo, currentThreadIdRef.current, text)
+      if (persisted) {
         currentThreadIdRef.current = persisted.threadId
         persistedHandles.current.set(turnId, persisted)
         // Final-save failures surface near the answer with retry/copy;
@@ -191,9 +213,6 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
         setActiveThreadId(persisted.threadId)
         setAgentHistoryThread(persisted.threadId)
         void chrome.storage.local.set({ nox_thread_id: persisted.threadId })
-      } catch {
-        /* persistence is best-effort; never block the chat */
-        patch((v) => ({ ...v, historyError: HISTORY_SAVE_ERROR }))
       }
       unsubscribe = agentLoop.onTurnEvent((event) => {
         switch (event.kind) {
@@ -266,7 +285,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
         currentPage,
         signal: sendAbort.signal,
         prepareContext: (signal) => Promise.all(mentions.map(m => fetchMentionContext(m, signal))),
-        attachments,
+        attachments: committed,
       })
 
       currentActivity = attachJournalEntries(currentActivity, await writeGate.journal.newestFirst())
@@ -377,11 +396,31 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
       <Composer
         busy={busy}
         readOnly={readOnly}
-        onSend={(t, mentions, attachments, allowSmallEdits) => void send(t, mentions, attachments, allowSmallEdits)}
+        onSend={(t, mentions, drafts, allowSmallEdits) => send(t, mentions, drafts, allowSmallEdits)}
         onCancel={() => { sendAbortRef.current?.abort(); agentLoop.cancel() }}
       />
       </>}
     </section>
+  )
+}
+
+/**
+ * Re-check draft sizes and read bytes staged for the atomic send (Epoch 10 /
+ * M7). Aggregate size is checked before any bytes are read; a rejection
+ * throws before thread creation, turn setup, or any Codex/upload request.
+ */
+async function stageOwnedDrafts(drafts: DraftAttachment[]): Promise<OwnedAttachmentInput[]> {
+  if (drafts.length === 0) return []
+  const { rejected } = validateDraftSelection([], drafts.map((draft) => draft.file))
+  if (rejected.length > 0) throw new Error(rejected[0].reason)
+  return Promise.all(
+    drafts.map(async (draft) => ({
+      id: draft.id,
+      name: draft.name,
+      mimeType: draft.mimeType,
+      size: draft.size,
+      bytes: await draft.file.arrayBuffer(),
+    })),
   )
 }
 

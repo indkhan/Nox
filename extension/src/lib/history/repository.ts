@@ -1,8 +1,28 @@
 import type { IDBPDatabase } from 'idb'
 import type { MessageRow, ThreadRow } from './schema'
+import type { AttachmentRow } from '../../shared/attachments'
+import { MAX_ATTACHMENT_FILES, MAX_ATTACHMENT_FILE_BYTES, MAX_ATTACHMENT_TOTAL_BYTES } from '../../shared/attachments'
+
+/** Attachment bytes staged for atomic send: validated sizes, read before the transaction. */
+export interface OwnedAttachmentInput {
+  id: string
+  name: string
+  mimeType: string
+  size: number
+  bytes: ArrayBuffer
+}
 
 export interface ThreadRepository {
   createThread(title?: string): Promise<ThreadRow>
+  /**
+   * Atomically persist thread creation (when needed), the user message, and
+   * the selected attachment bytes with thread ownership in one bounded
+   * IndexedDB transaction (Epoch 10 / M7). The caller must read file bytes
+   * and check aggregate sizes before invoking; bounds are re-enforced here
+   * so an over-limit send fails with zero partial writes. Attachment rows
+   * use `add`, never `put`: one row is never reused across threads.
+   */
+  beginTurn(threadId: string | null, userText: string, attachments?: OwnedAttachmentInput[]): Promise<{ threadId: string; userMessage: MessageRow }>
   getThread(id: string): Promise<ThreadRow | undefined>
   setCodexThreadId(id: string, codexThreadId: string): Promise<void>
   listThreads(): Promise<ThreadRow[]>
@@ -26,6 +46,53 @@ export function threadRepository(db: () => Promise<IDBPDatabase>): ThreadReposit
       const thread: ThreadRow = { id: uid(), title, createdAt: now, updatedAt: now, mode: 'ask', pinned: false }
       await conn.put('threads', thread)
       return thread
+    },
+
+    async beginTurn(threadId, userText, attachments = []) {
+      if (attachments.length > MAX_ATTACHMENT_FILES) {
+        throw new Error(`too many attachments: at most ${MAX_ATTACHMENT_FILES} files per turn`)
+      }
+      let total = 0
+      for (const item of attachments) {
+        if (item.size > MAX_ATTACHMENT_FILE_BYTES || item.bytes.byteLength > MAX_ATTACHMENT_FILE_BYTES) {
+          throw new Error(`"${item.name}" exceeds the 20 MiB per-file limit and was not sent.`)
+        }
+        if (item.bytes.byteLength !== item.size) {
+          throw new Error(`"${item.name}" no longer matches its recorded size — reselect it before retrying.`)
+        }
+        total += item.size
+      }
+      if (total > MAX_ATTACHMENT_TOTAL_BYTES) {
+        throw new Error('attachments exceed the 25 MiB per-turn total and were not sent.')
+      }
+      // Data first, then one short atomic storage transaction — the
+      // transaction is never held across file reads or network work.
+      const conn = await db()
+      const now = Date.now()
+      lastMessageTimestamp = Math.max(now, lastMessageTimestamp + 1)
+      const resolvedThreadId = threadId ?? uid()
+      const userMessage: MessageRow = { id: uid(), threadId: resolvedThreadId, role: 'user', text: userText, ts: lastMessageTimestamp }
+      const existing = threadId ? ((await conn.get('threads', threadId)) as ThreadRow | undefined) : undefined
+      const thread: ThreadRow = existing ?? { id: resolvedThreadId, title: 'New chat', createdAt: now, updatedAt: now, mode: 'ask', pinned: false }
+      const rows: AttachmentRow[] = attachments.map((item) => ({
+        id: item.id,
+        name: item.name,
+        mimeType: item.mimeType,
+        size: item.size,
+        bytes: item.bytes,
+        threadId: resolvedThreadId,
+        createdAt: now,
+      }))
+      const tx = conn.transaction(['threads', 'messages', 'attachments'], 'readwrite')
+      await Promise.all([
+        tx.objectStore('threads').put({ ...thread, updatedAt: now }),
+        tx.objectStore('messages').put(userMessage),
+        // `add` refuses a reused id instead of silently overwriting another
+        // thread's row with new bytes.
+        ...rows.map((row) => tx.objectStore('attachments').add(row)),
+        tx.done,
+      ])
+      return { threadId: resolvedThreadId, userMessage }
     },
 
     async getThread(id) {

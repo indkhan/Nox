@@ -198,6 +198,12 @@ the same 12-call limit and source capability check. Its memory is ephemeral, cap
 one million characters per turn, and cleared on completion. Remote Notion truncation
 requires fetching the returned omitted subtree IDs or using supported targeted tools.
 Attachments remain local-only inputs; their metadata does not provide PDF/image contents.
+Selected files stay as in-memory drafts until Send (at most ten files, 20 MiB
+each, 25 MiB total, with named rejections): removing a chip, starting a new
+chat, or refreshing discards them without leaving rows behind. Send persists
+the user message, the draft bytes, and thread ownership in one bounded
+transaction before Codex starts; only those committed ids reach the turn, and
+a persistence failure sends nothing while the draft is retained.
 
 Failed resume never starts a replacement thread. Only a recoverable connection failure
 is retried once against the same thread, before any turn is sent. Codex events are

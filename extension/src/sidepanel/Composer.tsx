@@ -6,9 +6,8 @@ import { loadSettings, saveSettings, type NoxSettings } from '../lib/settings'
 import { agentLoop } from '../lib/agent/panel'
 import { notion } from '../lib/notion/panel'
 import { parseNotionUrl, type MentionRef } from '../shared/notion-page'
-import type { LocalAttachment } from '../shared/attachments'
-import { attachmentRepository } from '../lib/history/attachments'
-import { openNoxDB } from '../lib/history/schema'
+import type { DraftAttachment } from '../shared/attachments'
+import { createDraftAttachments, validateDraftSelection } from '../shared/attachments'
 import {
   ArrowUpIcon,
   ChevronDownIcon,
@@ -109,13 +108,18 @@ export function Composer({
 }: {
   busy: boolean
   readOnly?: boolean
-  onSend: (text: string, mentions: MentionRef[], attachments: LocalAttachment[], allowSmallEdits?: boolean) => void
+  onSend: (text: string, mentions: MentionRef[], drafts: DraftAttachment[], allowSmallEdits?: boolean) => Promise<void> | void
   onCancel: () => void
 }) {
   const editorRef = useRef<HTMLDivElement>(null)
   const [value, setValue] = useState('')
   const [mentions, setMentions] = useState<PickerItem[]>([])
-  const [attachments, setAttachments] = useState<LocalAttachment[]>([])
+  // Epoch 10 / M7: unsent files live only here in composer memory. Selecting
+  // a file writes nothing to IndexedDB; removing its chip, starting a new
+  // chat, or refreshing discards the bytes (unsent files are intentionally
+  // not restored).
+  const [drafts, setDrafts] = useState<DraftAttachment[]>([])
+  const [rejections, setRejections] = useState<string[]>([])
   const [allowSmallEdits, setAllowSmallEdits] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const mentionCache = useRef(new Map<string, PickerItem>())
@@ -131,6 +135,15 @@ export function Composer({
   const currentPage = useNoxStore((s) => s.currentPage)
   const mode = useNoxStore((s) => s.mode)
   const setMode = useNoxStore((s) => s.setMode)
+  const newChatTick = useNoxStore((s) => s.newChatTick)
+
+  // A new chat releases draft references without touching storage: there is
+  // nothing persisted to clean up.
+  useEffect(() => {
+    if (newChatTick === 0) return
+    setDrafts([])
+    setRejections([])
+  }, [newChatTick])
 
   // Mirror of `picker` for imperative code paths (chip insertion).
   const pickerRef = useRef(picker)
@@ -289,17 +302,38 @@ export function Composer({
     setCaretAtEnd(el)
   }, [])
 
-  function submit() {
+  /** Send the draft. The composer clears only after the atomic send commits;
+   * a persistence failure retains the text, mentions, and file drafts. */
+  async function submit() {
     const el = editorRef.current
     if (!el || busy || readOnly) return
     const text = editorText(el).trim()
-    if (!text && attachments.length === 0) return
-    onSend(text || 'Files attached for local reference (upload into Notion is unavailable in this alpha).', mentions.map(({ pageId, title, iconEmoji, iconUrl }) => ({ pageId, title, iconEmoji, iconUrl })), attachments, allowSmallEdits)
+    if (!text && drafts.length === 0) return
+    const outgoing = drafts
+    try {
+      await onSend(text || 'Files attached for local reference (upload into Notion is unavailable in this alpha).', mentions.map(({ pageId, title, iconEmoji, iconUrl }) => ({ pageId, title, iconEmoji, iconUrl })), outgoing, allowSmallEdits)
+    } catch (error) {
+      // Atomic send failed before any Codex/upload request: keep the draft
+      // and surface the reason so the user can retry Send.
+      const message = error instanceof Error ? error.message : String(error)
+      setRejections((all) => (all.includes(message) ? all : [...all, message]))
+      return
+    }
     el.innerHTML = ''
     setMentions([])
-    setAttachments([])
+    setDrafts([])
+    setRejections([])
     setValue('')
     setAllowSmallEdits(false)
+  }
+
+  function pickFiles(files: File[]) {
+    if (files.length === 0) return
+    // Sizes are validated before any bytes are read; every rejected file is
+    // named with its reason instead of being silently filtered.
+    const { accepted, rejected } = validateDraftSelection(drafts, files)
+    if (accepted.length > 0) setDrafts((all) => [...all, ...createDraftAttachments(accepted)])
+    if (rejected.length > 0) setRejections((all) => [...all, ...rejected.map((item) => item.reason)])
   }
 
   const grantTargets = [...mentions, ...(currentPage && !mentions.some((m) => m.pageId === currentPage.pageId) ? [currentPage] : [])]
@@ -307,7 +341,8 @@ export function Composer({
   return (
     <div className="p-2.5" data-testid="composer-root">
       <div className="relative rounded-2xl border border-zinc-700 bg-zinc-900 px-3 pb-2 pt-2.5 transition-colors focus-within:border-sky-500">
-        {attachments.length > 0 && <div className="mb-2 flex flex-wrap gap-1">{attachments.map((attachment) => <span key={attachment.id} className="rounded-md bg-zinc-800 px-2 py-1 text-[11px] text-zinc-300">{attachment.name}<button aria-label={`Remove ${attachment.name}`} onClick={() => setAttachments((all) => all.filter((item) => item.id !== attachment.id))} className="ml-1 text-zinc-500">×</button></span>)}</div>}
+        {drafts.length > 0 && <div className="mb-2 flex flex-wrap gap-1">{drafts.map((draft) => <span key={draft.id} className="rounded-md bg-zinc-800 px-2 py-1 text-[11px] text-zinc-300">{draft.name}<button aria-label={`Remove ${draft.name}`} onClick={() => setDrafts((all) => all.filter((item) => item.id !== draft.id))} className="ml-1 text-zinc-500">×</button></span>)}</div>}
+        {rejections.length > 0 && <div className="mb-2 rounded-md border border-amber-700/60 bg-amber-950/40 px-2 py-1.5 text-[11px] text-amber-200" role="alert" data-testid="attachment-rejections">{rejections.map((reason) => <p key={reason}>{reason}</p>)}<button onClick={() => setRejections([])} className="mt-0.5 underline underline-offset-2 hover:no-underline">Dismiss</button></div>}
         {picker.open && (
           <div
             data-testid="mention-picker"
@@ -393,12 +428,12 @@ export function Composer({
             }
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault()
-              submit()
+              void submit()
             }
           }}
         />
         <div className="mt-1 flex items-center gap-0.5">
-          <input ref={fileInputRef} type="file" multiple className="hidden" onChange={(event) => { const files = [...(event.target.files ?? [])].slice(0, 10); void Promise.all(files.filter((file) => file.size <= 20 * 1024 * 1024).map((file) => attachmentRepository(openNoxDB).save(file))).then((added) => setAttachments((all) => [...all, ...added])); event.target.value = '' }} />
+          <input ref={fileInputRef} type="file" multiple className="hidden" onChange={(event) => { pickFiles([...(event.target.files ?? [])]); event.target.value = '' }} />
           <button
             onClick={() => currentPage && insertChip(currentPage)}
             disabled={readOnly || !currentPage || mentions.some((m) => m.pageId === currentPage.pageId)}
@@ -409,7 +444,7 @@ export function Composer({
           >
             <PlusCircleIcon />
           </button>
-          <button onClick={() => fileInputRef.current?.click()} disabled={readOnly || busy} aria-label="Attach file" title="Attach file" className="rounded-md px-1.5 py-1 text-[11px] text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300 disabled:opacity-40">File</button>
+          <button onClick={() => fileInputRef.current?.click()} disabled={readOnly || busy} aria-label="Attach file" title="Attach files (up to 10 files, 20 MiB each, 25 MiB total). Files stay on this device until Send; unsent files are discarded." className="rounded-md px-1.5 py-1 text-[11px] text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300 disabled:opacity-40">File</button>
           <ModelControls disabled={readOnly} />
           <span className="flex-1" />
           {mode === 'auto' && !readOnly && (
@@ -452,8 +487,8 @@ export function Composer({
             </button>
           ) : (
             <button
-              onClick={submit}
-              disabled={readOnly || (!value.trim() && attachments.length === 0)}
+              onClick={() => void submit()}
+              disabled={readOnly || (!value.trim() && drafts.length === 0)}
               aria-label="Send"
               data-testid="send"
               className="ml-1 flex h-7 w-7 items-center justify-center rounded-full bg-zinc-200 text-zinc-900 hover:bg-white disabled:bg-zinc-800 disabled:text-zinc-600"
