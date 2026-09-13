@@ -9,7 +9,10 @@ const state = vi.hoisted(() => ({
   connectionError: null as string | null,
   identity: null as { workspaceName?: string; userName?: string } | null,
   limitations: [] as Array<{ tool: string; reason: string }>,
-  codexStatus: 'disconnected',
+  codexStatus: 'disconnected' as string,
+  codexVersion: null as string | null,
+  codexHint: null as string | null,
+  activeThreadId: null as string | null,
   threadTitle: 'New chat',
   settingsOpen: false,
   agentBusy: false,
@@ -45,7 +48,7 @@ vi.mock('../src/sidepanel/store', () => ({
 }))
 vi.mock('../src/lib/notion/panel', () => ({
   notion: {
-    tokens: { hasRefreshToken: state.hasRefreshToken },
+    tokens: { hasRefreshToken: state.hasRefreshToken, setReauthHandler: vi.fn() },
     refreshIdentity: state.refreshIdentity,
     capabilities: { toolsWith: vi.fn(() => []) },
     explain: vi.fn((error: Error) => ({ userMessage: error.message })),
@@ -68,7 +71,11 @@ vi.mock('../src/sidepanel/Icons', () => ({
 vi.mock('../src/lib/agent/panel', () => ({ agentLoop: { setOverrides: state.setOverrides } }))
 vi.mock('../src/lib/history/panel', () => ({ claimWindowRole: vi.fn(async () => 'owner') }))
 vi.mock('../src/lib/log', () => ({ installLogCapture: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
-vi.mock('../src/sidepanel/codex-connect', () => ({ connectCodexAction: vi.fn(async () => undefined) }))
+vi.mock('../src/sidepanel/codex-connect', () => ({
+  connectCodexAction: vi.fn(async () => undefined),
+  reconnectCodexAction: vi.fn(async () => undefined),
+  ensureCodexLifecycleSubscribed: vi.fn(() => () => undefined),
+}))
 vi.mock('../src/lib/settings', () => ({
   applyTheme: vi.fn(),
   loadSettings: state.loadSettings,
@@ -84,6 +91,10 @@ describe('first-run setup', () => {
     state.identity = null
     state.limitations = []
     state.codexStatus = 'disconnected'
+    state.codexVersion = null
+    state.codexHint = null
+    state.activeThreadId = null
+    state.threadTitle = 'New chat'
     state.currentPage = null
     state.setConnection.mockClear()
     state.setOverrides.mockClear()
@@ -236,6 +247,62 @@ describe('first-run setup', () => {
 
     expect(state.refreshIdentity).toHaveBeenCalledOnce()
     expect(state.connectionStatus).toBe('connected')
+    await act(async () => root.unmount())
+  })
+})
+
+describe('reconnect banner (Epoch 11 / L6)', () => {
+  beforeEach(() => {
+    state.connectionStatus = 'disconnected'
+    state.connectionError = null
+    state.identity = null
+    state.limitations = []
+    state.codexStatus = 'disconnected'
+    state.codexVersion = null
+    state.codexHint = 'Codex disconnected'
+    state.activeThreadId = null
+    state.threadTitle = 'New chat'
+    state.currentPage = null
+    state.loadSettings.mockReset().mockResolvedValue({})
+  })
+
+  it('keeps the interrupted conversation visible with a reconnect banner instead of a blank setup screen', async () => {
+    // Prior session: Codex was connected (version preserved) with history.
+    state.codexVersion = 'codex/test'
+    state.activeThreadId = 'thread-1'
+    state.threadTitle = 'Plain A edit'
+    const container = document.createElement('div')
+    const root = createRoot(container)
+
+    await act(async () => {
+      root.render(<App />)
+      await Promise.resolve()
+    })
+
+    // Conversation stays visible; setup screen does not replace it.
+    expect(container.textContent).toContain('Chat ready')
+    expect(container.textContent).not.toContain('Welcome to Nox')
+    const banner = container.querySelector('[data-testid="reconnect-banner"]')
+    expect(banner).not.toBeNull()
+    expect(banner?.textContent).toMatch(/history is preserved/i)
+    expect(banner?.textContent).toMatch(/no turn was replayed/i)
+    await act(async () => root.unmount())
+  })
+
+  it('still uses the setup screen for initial onboarding with no prior session', async () => {
+    state.codexVersion = null
+    state.activeThreadId = null
+    state.threadTitle = 'New chat'
+    const container = document.createElement('div')
+    const root = createRoot(container)
+
+    await act(async () => {
+      root.render(<App />)
+      await Promise.resolve()
+    })
+
+    expect(container.textContent).toContain('Welcome to Nox')
+    expect(container.querySelector('[data-testid="reconnect-banner"]')).toBeNull()
     await act(async () => root.unmount())
   })
 })

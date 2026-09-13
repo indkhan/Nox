@@ -103,11 +103,14 @@ function PageChipContent({ item }: { item: PickerItem }) {
 export function Composer({
   busy,
   readOnly = false,
+  sendDisabledReason = null,
   onSend,
   onCancel,
 }: {
   busy: boolean
   readOnly?: boolean
+  /** Epoch 11 / L6: Send stays disabled until both transports are connected. */
+  sendDisabledReason?: string | null
   onSend: (text: string, mentions: MentionRef[], drafts: DraftAttachment[], allowSmallEdits?: boolean) => Promise<void> | void
   onCancel: () => void
 }) {
@@ -488,9 +491,10 @@ export function Composer({
           ) : (
             <button
               onClick={() => void submit()}
-              disabled={readOnly || (!value.trim() && drafts.length === 0)}
+              disabled={readOnly || sendDisabledReason != null || (!value.trim() && drafts.length === 0)}
               aria-label="Send"
               data-testid="send"
+              title={sendDisabledReason ?? undefined}
               className="ml-1 flex h-7 w-7 items-center justify-center rounded-full bg-zinc-200 text-zinc-900 hover:bg-white disabled:bg-zinc-800 disabled:text-zinc-600"
             >
               <ArrowUpIcon />

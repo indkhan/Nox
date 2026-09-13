@@ -65,6 +65,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
   const historyRestoreCancelledRef = useRef(false)
   const historyGenerationRef = useRef(0)
   const connectionStatus = useNoxStore((s) => s.connectionStatus)
+  const codexStatus = useNoxStore((s) => s.codexStatus)
   const threadTitle = useNoxStore((s) => s.threadTitle)
   const setThreadTitle = useNoxStore((s) => s.setThreadTitle)
   const newChatTick = useNoxStore((s) => s.newChatTick)
@@ -154,12 +155,20 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
     logError('Storage deletion was requested from another Nox window — the active turn was cancelled.')
   }), [])
 
+  // Send stays disabled until both transports report connected (Epoch 11 / L6):
+  // the composer button is disabled and this guard blocks direct calls.
+  const transportDown = connectionStatus !== 'connected' || codexStatus === 'disconnected' || codexStatus === 'error'
+  const transportDownReason =
+    codexStatus === 'disconnected' || codexStatus === 'error'
+      ? 'Codex disconnected — reconnect to continue. Your history is preserved and no turn was replayed.'
+      : 'Connect Notion first — open Settings (top right) to connect.'
+
   async function send(text: string, mentions: MentionRef[] = [], drafts: DraftAttachment[] = [], allowSmallEdits = false) {
     if (busyRef.current || readOnly) return
     historyRestoreCancelledRef.current = true
     historyGenerationRef.current++
-    if (connectionStatus !== 'connected') {
-      setTurns((t) => [...t, { id: crypto.randomUUID(), userText: text, view: { activity: [], answer: '', error: 'Connect Notion first — open Settings (top right) to connect.', pending: false } }])
+    if (transportDown) {
+      setTurns((t) => [...t, { id: crypto.randomUUID(), userText: text, view: { activity: [], answer: '', error: transportDownReason, pending: false } }])
       return
     }
     // Epoch 10 / M7: stage attachment bytes before anything else. Sizes are
@@ -338,7 +347,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
     <section className="flex min-h-0 flex-1 flex-col" data-testid="chat-panel">
       {reviewingPlan && !readOnly ? <PlanCards /> : <>
       {!hasMessages ? (
-        <EmptyState readOnly={readOnly} onSend={(t, mentions) => void send(t, mentions)} />
+        <EmptyState readOnly={readOnly || transportDown} onSend={(t, mentions) => void send(t, mentions)} />
       ) : (
         <div ref={scrollRef} className="min-h-0 flex-1 space-y-5 overflow-y-auto px-3 pb-2 pt-1" data-testid="chat-messages">
           {turns.map(({ id, userText, view }) => (
@@ -404,6 +413,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
       <Composer
         busy={busy}
         readOnly={readOnly}
+        sendDisabledReason={transportDown ? transportDownReason : null}
         onSend={(t, mentions, drafts, allowSmallEdits) => send(t, mentions, drafts, allowSmallEdits)}
         onCancel={() => { sendAbortRef.current?.abort(); agentLoop.cancel() }}
       />

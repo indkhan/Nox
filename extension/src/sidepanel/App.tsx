@@ -8,8 +8,8 @@ import { agentLoop } from '../lib/agent/panel'
 import { claimWindowRole, type WindowRole } from '../lib/history/panel'
 import { defaultDeletionStore, watchDeletionChanges } from '../lib/history/deletion'
 import { installLogCapture, logInfo } from '../lib/log'
-import { connectCodexAction } from './codex-connect'
-import { restoreNotionAction } from './notion-connect'
+import { connectCodexAction, ensureCodexLifecycleSubscribed, reconnectCodexAction } from './codex-connect'
+import { restoreNotionAction, watchCredentialSignout, wireNotionReauthHandler } from './notion-connect'
 import { GearIcon, NoxMark, PlusCircleIcon } from './Icons'
 import { ThreadMenu } from './ThreadMenu'
 import { SetupScreen } from './SetupScreen'
@@ -17,6 +17,8 @@ import { SetupScreen } from './SetupScreen'
 export function App() {
   const connectionStatus = useNoxStore((s) => s.connectionStatus)
   const codexStatus = useNoxStore((s) => s.codexStatus)
+  const codexVersion = useNoxStore((s) => s.codexVersion)
+  const activeThreadId = useNoxStore((s) => s.activeThreadId)
   const threadTitle = useNoxStore((s) => s.threadTitle)
   const requestNewChat = useNoxStore((s) => s.requestNewChat)
   const settingsOpen = useNoxStore((s) => s.settingsOpen)
@@ -50,13 +52,20 @@ export function App() {
     void hydrateCurrentPage()
     void claimWindowRole().then(setRole)
     hydrateSettings()
+    wireNotionReauthHandler()
+    const unwatchCredentials = watchCredentialSignout()
     // Deletion tombstone push for this already-open panel; the tombstone
     // itself (checked on every database open) covers missed events.
-    return watchDeletionChanges(defaultDeletionStore())
+    const unwatchDeletion = watchDeletionChanges(defaultDeletionStore())
+    return () => {
+      unwatchCredentials()
+      unwatchDeletion()
+    }
   }, [])
 
   useEffect(() => {
     if (role === 'owner') {
+      ensureCodexLifecycleSubscribed()
       void connectCodexAction()
       void restoreNotionAction()
     }
@@ -64,6 +73,11 @@ export function App() {
 
   // Amber dot on the gear until both connections are up.
   const setupIncomplete = connectionStatus !== 'connected' || codexStatus !== 'connected'
+  // After a connection loss, keep the interrupted conversation visible with a
+  // reconnect banner instead of replacing it with a blank setup screen (L6).
+  // Initial onboarding (never connected, no history) still uses SetupScreen.
+  const hasPriorSession = codexVersion != null || activeThreadId != null || threadTitle !== 'New chat'
+  const showSetupScreen = role === 'owner' && setupIncomplete && !hasPriorSession
 
   return (
     <div className="flex h-full flex-col bg-zinc-950 text-zinc-100">
@@ -104,11 +118,65 @@ export function App() {
           <p>Could not load settings: {settingsError}</p>
           <button onClick={hydrateSettings} className="mt-2 rounded-md border border-zinc-700 px-2 py-1 text-xs hover:bg-zinc-800">Retry</button>
         </section> : !settingsReady ? <p className="p-3 text-sm text-zinc-400" role="status">Loading settings…</p>
-          : role === 'owner' && setupIncomplete
+          : showSetupScreen
           ? <SetupScreen />
-          : <ChatPanel readOnly={role !== 'owner'} />}
+          : <>
+              {role === 'owner' && setupIncomplete && hasPriorSession && <ReconnectBanner />}
+              <ChatPanel readOnly={role !== 'owner'} />
+            </>}
       </main>
       {settingsOpen && role === 'owner' && <SettingsModal />}
     </div>
+  )
+}
+
+/**
+ * Reconnect banner (Epoch 11 / L6): after a connection loss, the interrupted
+ * conversation stays visible with explicit reconnect controls. Send stays
+ * disabled in ChatPanel until both transports report connected.
+ */
+function ReconnectBanner() {
+  const connectionStatus = useNoxStore((s) => s.connectionStatus)
+  const codexStatus = useNoxStore((s) => s.codexStatus)
+  const connectionError = useNoxStore((s) => s.connectionError)
+  const codexHint = useNoxStore((s) => s.codexHint)
+  const parts: string[] = []
+  if (codexStatus !== 'connected') parts.push(`Codex ${codexStatus}`)
+  if (connectionStatus !== 'connected') parts.push(`Notion ${connectionStatus}`)
+  return (
+    <section
+      className="mx-3 mt-2 shrink-0 rounded-md border border-amber-700/60 bg-amber-950/30 p-2 text-xs text-amber-200"
+      role="alert"
+      data-testid="reconnect-banner"
+    >
+      <p>
+        Connection lost ({parts.join(' · ') || 'reconnecting'}). Your visible history is preserved and no turn was
+        replayed.
+        {connectionError ? ` Notion: ${connectionError}` : ''}
+        {codexHint ? ` Codex: ${codexHint}` : ''}
+      </p>
+      <span className="mt-1.5 flex gap-2">
+        {codexStatus !== 'connected' && (
+          <button
+            onClick={() => void reconnectCodexAction()}
+            disabled={codexStatus === 'connecting'}
+            data-testid="banner-reconnect-codex"
+            className="rounded-md border border-zinc-700 px-2 py-1 text-xs hover:bg-zinc-800 disabled:opacity-50"
+          >
+            {codexStatus === 'connecting' ? 'Reconnecting…' : 'Reconnect Codex'}
+          </button>
+        )}
+        {connectionStatus !== 'connected' && (
+          <button
+            onClick={() => void restoreNotionAction()}
+            disabled={connectionStatus === 'connecting'}
+            data-testid="banner-reconnect-notion"
+            className="rounded-md border border-zinc-700 px-2 py-1 text-xs hover:bg-zinc-800 disabled:opacity-50"
+          >
+            {connectionStatus === 'connecting' ? 'Reconnecting…' : 'Reconnect Notion'}
+          </button>
+        )}
+      </span>
+    </section>
   )
 }

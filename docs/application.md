@@ -80,7 +80,10 @@ The panel is the only product surface. Until both Codex and Notion are connected
 owner panel shows the existing connection controls as a dedicated setup screen and moves
 to chat automatically when both are ready. On startup, the owner reconnects Codex and
 silently restores Notion when a durable refresh token is available; OAuth consent is
-available when the saved authorization cannot be restored. A Web Lock named
+available when the saved authorization cannot be restored. After a connection loss, the
+interrupted conversation stays visible with a reconnect banner instead of a blank setup
+screen (initial onboarding still uses the setup screen); Send stays disabled until both
+transports report connected. A Web Lock named
 `nox-agent-owner` lets one
 browser window run turns; another open panel becomes a read-only viewer. This avoids
 duplicate agents writing into the same thread.
@@ -170,6 +173,13 @@ account, and starts or resumes a persistent thread with:
 
 `approvalPolicy: "never"` applies to Codex's own computer actions. Notion changes still
 pass through Nox's separate write gate.
+
+Native disconnects and exited/dead statuses downgrade the Codex store label from transport
+reality instead of leaving a stale "Connected". Explicit reconnect clears stale
+transport/client state and lists models again even when the UI still said connected,
+preserves visible history and the stored Codex thread ID, never resubmits the failed turn,
+reapplies effective research/model settings, and expires old plan/Auto/upload grants and
+read baselines.
 
 ### Web research
 
