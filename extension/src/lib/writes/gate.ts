@@ -8,6 +8,7 @@ import { hashMarkdown } from './guard'
 import { normalizeId } from '../../shared/notion-page'
 import { UncertainDispatchError } from '../mcp/scheduler'
 import { isPreDispatchFailure } from '../mcp/client'
+import { validateEffect, type ValidatedEffect } from './effects'
 
 export type MutationRejectionCode =
   | 'NOT_OWNER'
@@ -191,6 +192,7 @@ export class WriteGate {
         const guard = await this.runGuardPhase(
           { rid: 0, tool, args, namespace: null, provenance: 'user-only', signal: opts.signal },
           classifyToolCall(tool, args),
+          trustedPageId(args),
         )
         if (!guard.ok) {
           const guardDetail = textOfResult(guard.result)
@@ -205,7 +207,9 @@ export class WriteGate {
         }
         let result: unknown
         try {
-          result = await this.deps.callTool(tool, frozenArgs, opts.signal)
+          // Trusted internal fields (undo hashes) travel in the journal but
+          // never reach the provider.
+          result = await this.deps.callTool(tool, stripReservedArgs(frozenArgs), opts.signal)
         } catch (e) {
           const [status, detail] = classifyDispatchOutcome(e)
           await this.settleUndo(undoOpId, opts.journalId, status, detail)
@@ -454,6 +458,15 @@ export class WriteGate {
       return result
     }
 
+    // Proposal validation precedes everything else: malformed proposals and
+    // unsupported effects never reach approval UI or transport.
+    let effect: ValidatedEffect
+    try {
+      effect = validateEffect(req.tool, req.args)
+    } catch (e) {
+      return textResult(e instanceof Error ? e.message : String(e))
+    }
+
     // Owner admission precedes approval UI: viewers fail fast with zero
     // transport and no pending cards. Scope is captured synchronously here
     // so a later thread switch cannot reassign the operation.
@@ -470,9 +483,9 @@ export class WriteGate {
       return textResult(e instanceof Error ? e.message : String(e))
     }
 
-    const needsWorkspacePlan = requiresWorkspacePlan(classification, req.args)
+    const needsWorkspacePlan = requiresWorkspacePlan(classification, effect.args)
     if (needsWorkspacePlan) {
-      const authorization = this.deps.authorizeStructuralChange?.(req.tool, req.args)
+      const authorization = this.deps.authorizeStructuralChange?.(req.tool, effect.args)
       if (!authorization?.allowed) {
         return textResult(authorization?.reason ?? 'PLAN_REQUIRED: structural workspace changes require an approved plan.')
       }
@@ -481,7 +494,7 @@ export class WriteGate {
     const mode = this.deps.getMode()
     const verdict = needsWorkspacePlan && mode === 'auto'
       ? { action: 'allow' as const }
-      : evaluateApproval({ ...classification, name: req.tool, args: req.args, provenance: req.provenance }, {
+      : evaluateApproval({ ...classification, name: req.tool, args: effect.args, provenance: req.provenance }, {
           mode,
           contextSet: this.deps.getContextSet(),
         })
@@ -489,7 +502,7 @@ export class WriteGate {
       return textResult(`REFUSED: ${verdict.reasons.join('; ')}. No changes were made.`)
     }
     if (verdict.action === 'require-approval' && !approved) {
-      const approved = await this.approvals.request({ ...classification, name: req.tool, args: req.args }, verdict)
+      const approved = await this.approvals.request({ ...classification, name: req.tool, args: effect.args }, verdict)
       if (!approved) {
         return textResult('REJECTED_BY_USER: the user declined this change. Do not retry it without asking.')
       }
@@ -501,7 +514,7 @@ export class WriteGate {
       } catch (e) {
         return textResult(e instanceof Error ? e.message : String(e))
       }
-      return this.executeMutation(req, classification, scope)
+      return this.executeMutation(req, classification, scope, effect)
     })
   }
 
@@ -511,10 +524,12 @@ export class WriteGate {
    * The intent (with frozen args and pre-image) is persisted before dispatch;
    * a storage failure there returns a storage error with zero external calls.
    */
-  private async executeMutation(req: ToolCallRequest, classification: CallClassification, scope: IntentScope): Promise<unknown> {
-    const guard = await this.runGuardPhase(req, classification)
+  private async executeMutation(req: ToolCallRequest, classification: CallClassification, scope: IntentScope, effect: ValidatedEffect): Promise<unknown> {
+    const guard = await this.runGuardPhase(req, classification, contentTarget(effect))
     if (!guard.ok) return guard.result
-    const frozenArgs = stripReservedArgs(req.args)
+    // effect.args is the canonical frozen copy from admission: later edits
+    // of the request object cannot change what is journaled or dispatched.
+    const frozenArgs = effect.args
 
     let intent: JournalEntry
     try {
@@ -524,7 +539,7 @@ export class WriteGate {
         kind: classification.kind,
         scope,
         preImage: guard.preImage,
-        targetPageId: guard.preImage.pageId,
+        targetPageId: effect.targets[0],
         callId: req.callId,
       })
     } catch (e) {
@@ -568,7 +583,7 @@ export class WriteGate {
       if (inverse.kind === 'execute-tool' && guard.preImage.pageId) {
         try {
           const postWrite = await capturePageSnapshot((id) => this.deps.fetchPageMarkdown(id, req.signal), guard.preImage.pageId)
-          const command = req.args.command as Record<string, unknown> | undefined
+          const command = effect.args.command as Record<string, unknown> | undefined
           const intendedContent = command?.type === 'replace_content' && typeof command.content === 'string' ? command.content : null
           if (intendedContent == null || postWrite.hash !== await hashMarkdown(intendedContent)) {
             throw new Error('post-write state cannot be attributed safely')
@@ -610,16 +625,18 @@ export class WriteGate {
   /**
    * Pre-image + guard for content writes; snapshot config/properties/moves
    * otherwise. Reads only — no intent needed and no dispatch happens here.
+   * The guarded page comes from the validated effect for forward writes, or
+   * from trusted journal-sourced shapes for undo.
    */
   private async runGuardPhase(
     req: ToolCallRequest,
     classification: CallClassification,
+    pageId: string | undefined,
   ): Promise<{ ok: true; snapshot: PageSnapshot | null; preImage: PreImage } | { ok: false; result: unknown }> {
     let snapshot: PageSnapshot | null = null
     let preImage: PreImage = { kind: classification.kind }
     try {
       if (CONTENT_WRITE_KINDS.has(classification.kind)) {
-        const pageId = firstString(req.args.page_id) ?? firstString((req.args.data as Record<string, unknown> | undefined)?.page_id)
         if (pageId) {
           const fetchPage = (id: string) => this.deps.fetchPageMarkdown(id, req.signal)
           snapshot = await capturePageSnapshot(fetchPage, pageId)
@@ -666,6 +683,20 @@ function textResult(text: string): unknown {
 
 function firstString(v: unknown): string | undefined {
   return typeof v === 'string' && v ? v : undefined
+}
+
+/** Guarded page for content writes from a validated effect. */
+function contentTarget(effect: ValidatedEffect): string | undefined {
+  if (effect.kind !== 'content-replace' && effect.kind !== 'content-update') return undefined
+  return effect.targets[0]
+}
+
+/**
+ * Guarded page from journal-sourced inverse shapes. Trusted internal input
+ * only — model proposals go through effect adapters instead.
+ */
+function trustedPageId(args: Record<string, unknown>): string | undefined {
+  return firstString(args.page_id) ?? firstString((args.data as Record<string, unknown> | undefined)?.page_id)
 }
 
 function stripReservedArgs(args: Record<string, unknown>): Record<string, unknown> {

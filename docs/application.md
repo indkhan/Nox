@@ -233,8 +233,12 @@ carried by the call (for example, either the database or data-source ID of a vie
 
 ## Change safety
 
-All Notion calls are classified. Known reads pass through; unknown tools are treated as
-structural changes, which is the safer default.
+All Notion calls are classified. Known reads pass through. Every proposed mutation is first
+parsed into a validated effect — canonical tool, frozen arguments, affected
+targets, and object count — within a per-operation size budget; unknown tool
+shapes are refused as unsupported and malformed proposals as invalid before any
+approval card or transport, and model-supplied internal fields are rejected
+rather than stripped silently.
 
 Forward writes, upload effects, and undo share one serial mutation runner in
 the panel holding the `nox-agent-owner` Web Lock lease. The gate refuses

@@ -6,6 +6,7 @@ import { MutationJournal, type JournalEntry, type JournalStore } from '../../src
 import { GuardViolation } from '../../src/lib/writes/guard'
 import { requestRuntimeUndo, undoEntry, undoNewest } from '../../src/lib/writes/undo'
 import { buildInverse } from '../../src/lib/writes/inverse'
+import { normalizeId } from '../../src/shared/notion-page'
 import type { Mode } from '../../src/lib/writes/approvals'
 
 const PAGE = 'a'.repeat(32)
@@ -54,6 +55,16 @@ function makeGate(over: {
 
 function propertiesArgs() {
   return { data: { page_id: PAGE }, command: { type: 'update_properties', properties: {} } }
+}
+
+function autoProperties(rid: number, signal?: AbortSignal) {
+  return {
+    rid,
+    tool: 'notion-update-page',
+    args: propertiesArgs(),
+    namespace: null,
+    signal,
+  } as const
 }
 
 function hookJournal(hooks: { onAppend?: (entry: JournalEntry, count: number) => void; failAppendAfter?: number } = {}): { journal: MutationJournal; appended: () => JournalEntry[] } {
@@ -174,7 +185,7 @@ describe('WriteGate', () => {
         throw new Error('should not run')
       },
     })
-    const pending = gate.handle({ rid: 3, tool: 'notion-move-pages', args: {}, namespace: null })
+    const pending = gate.handle({ rid: 3, tool: 'notion-move-pages', args: { page_ids: [PAGE] }, namespace: null })
     await new Promise((r) => setTimeout(r, 10))
     gate.approvals.answer([...gate.approvals['pending'].keys()][0]!, 'reject')
     const out = (await pending) as { isError?: boolean; content: Array<{ text: string }> }
@@ -431,16 +442,6 @@ describe('WriteGate durable intent (Epoch 04)', () => {
     ownerGeneration: 'test-owner-gen',
   }
 
-  function autoProperties(rid: number, signal?: AbortSignal) {
-    return {
-      rid,
-      tool: 'notion-update-page',
-      args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: {} } },
-      namespace: null,
-      signal,
-    } as const
-  }
-
   it('refuses mutations without a persisted thread scope', async () => {
     const { gate, journal, calls } = makeGate({ mode: 'auto' })
     journal.scopeThread(null)
@@ -652,6 +653,92 @@ describe('WriteGate durable intent (Epoch 04)', () => {
     await journal.settleIntent(props.id, { status: 'unknown' })
     expect((await gate.readbackForReview(props.id)).supported).toBe(false)
     await expect(gate.readbackForReview('missing')).rejects.toThrow(/NOT_UNDOABLE/)
+  })
+})
+
+describe('WriteGate effect validation (Epoch 05)', () => {
+  it('rejects model-supplied internal fields before approval or transport', async () => {
+    const { gate, journal, calls } = makeGate({ mode: 'ask' })
+    const out = await gate.handle({
+      rid: 50,
+      tool: 'notion-update-page',
+      args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: {} }, __nox_expected_hash: 'forged' },
+      namespace: null,
+    }) as { isError?: boolean; content: Array<{ text?: string }> }
+    expect(out.isError).toBe(true)
+    expect(out.content[0].text).toMatch(/INVALID_ARGUMENTS/)
+    expect(out.content[0].text).toMatch(/__nox_expected_hash/)
+    expect(calls).toHaveLength(0)
+    expect(gate.approvals.pendingCount).toBe(0)
+    expect(await journal.newestFirst()).toHaveLength(0)
+  })
+
+  it('rejects unknown tool shapes as unsupported without a card or dispatch', async () => {
+    const { gate, journal, calls } = makeGate({ mode: 'ask' })
+    const out = await gate.handle({
+      rid: 51, tool: 'notion-frobnicate', args: { id: PAGE }, namespace: null,
+    }) as { isError?: boolean; content: Array<{ text?: string }> }
+    expect(out.isError).toBe(true)
+    expect(out.content[0].text).toMatch(/UNSUPPORTED_EFFECT/)
+    expect(calls).toHaveLength(0)
+    expect(gate.approvals.pendingCount).toBe(0)
+    expect(await journal.newestFirst()).toHaveLength(0)
+  })
+
+  it('rejects targetless moves before approval', async () => {
+    const { gate, calls } = makeGate({ mode: 'ask' })
+    const out = await gate.handle({
+      rid: 52, tool: 'notion-move-pages', args: {}, namespace: null,
+    }) as { isError?: boolean; content: Array<{ text?: string }> }
+    expect(out.isError).toBe(true)
+    expect(out.content[0].text).toMatch(/INVALID_ARGUMENTS/)
+    expect(calls).toHaveLength(0)
+    expect(gate.approvals.pendingCount).toBe(0)
+  })
+
+  it('refuses oversize payloads without truncating and executing', async () => {
+    const { gate, calls } = makeGate({ mode: 'auto' })
+    const out = await gate.handle({
+      rid: 53,
+      tool: 'notion-update-page',
+      args: { data: { page_id: PAGE }, command: { type: 'replace_content', content: 'x'.repeat(600 * 1024) } },
+      namespace: null,
+    }) as { isError?: boolean; content: Array<{ text?: string }> }
+    expect(out.isError).toBe(true)
+    expect(out.content[0].text).toMatch(/PAYLOAD_TOO_LARGE/)
+    expect(calls).toHaveLength(0)
+  })
+
+  it('journals the canonical frozen args that were actually dispatched', async () => {
+    const { gate, journal } = makeGate({ mode: 'auto' })
+    await gate.handle({
+      rid: 54,
+      tool: 'notion-update-page',
+      args: { command: { properties: {}, type: 'update_properties' }, data: { page_id: PAGE } },
+      namespace: null,
+    })
+    const entries = await journal.newestFirst()
+    expect(entries).toHaveLength(1)
+    expect(Object.keys(entries[0].args)).toEqual(['command', 'data'])
+    expect(entries[0].targetPageId).toBe(normalizeId(PAGE) ?? PAGE)
+  })
+
+  it('strips internal undo hashes before undo bytes reach transport', async () => {
+    let received: Record<string, unknown> | null = null
+    const { gate } = makeGate({
+      mode: 'auto',
+      callTool: async (_name, args) => {
+        received = args
+        return { content: [] }
+      },
+    })
+    await gate.handleUndo('notion-update-page', {
+      data: { page_id: PAGE },
+      command: { type: 'update_properties', properties: {} },
+      __nox_expected_hash: 'trusted-internal-hash',
+    })
+    expect(received).not.toHaveProperty('__nox_expected_hash')
+    expect(received).toMatchObject({ data: { page_id: PAGE } })
   })
 })
 

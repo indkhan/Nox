@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { classifyToolCall, detectRichPage, isSafePropertyType, requiresWorkspacePlan } from '../../src/lib/writes/classify'
+import { canonicalizeArgs, EffectValidationError, validateEffect } from '../../src/lib/writes/effects'
 
 describe('classifyToolCall', () => {
   it('treats the known read tools as reads', () => {
@@ -46,6 +47,124 @@ describe('classifyToolCall', () => {
   it('escalates bulk page creation without penalizing a small explicit create', () => {
     expect(requiresWorkspacePlan(classifyToolCall('notion-create-pages'), { pages: [{}, {}] })).toBe(false)
     expect(requiresWorkspacePlan(classifyToolCall('notion-create-pages'), { pages: Array.from({ length: 6 }, () => ({})) })).toBe(true)
+  })
+})
+
+describe('validateEffect', () => {
+  const PAGE = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+
+  it('parses update-page targets once with a canonical frozen copy', () => {
+    const args = { data: { page_id: PAGE }, command: { type: 'update_properties', properties: { a: 1 } } }
+    const effect = validateEffect('notion-update-page', args)
+    expect(effect.targets).toEqual([PAGE])
+    expect(effect.count).toBe(1)
+    expect(effect.kind).toBe('properties')
+    expect(effect.args).toEqual(args)
+    expect(effect.args).not.toBe(args)
+  })
+
+  it('collects move targets and destinations without scanning every id-like string', () => {
+    const effect = validateEffect('notion-move-pages', {
+      page_ids: [PAGE, 'bbbbbbbb-cccc-dddd-eeee-ffffffffffff'],
+      destination: { page_id: 'cccccccc-dddd-eeee-ffff-000000000000' },
+      note: 'not-an-id-field',
+    })
+    expect(effect.targets).toHaveLength(2)
+    expect(effect.parents).toEqual(['cccccccc-dddd-eeee-ffff-000000000000'])
+    expect(effect.count).toBe(2)
+    expect(effect.args.note).toBe('not-an-id-field')
+  })
+
+  it('rejects targetless moves as invalid arguments', () => {
+    expect(() => validateEffect('notion-move-pages', {})).toThrowError(EffectValidationError)
+    try {
+      validateEffect('notion-move-pages', {})
+      expect.unreachable()
+    } catch (e) {
+      expect((e as EffectValidationError).code).toBe('INVALID_ARGUMENTS')
+    }
+  })
+
+  it('rejects unknown tools as unsupported effects', () => {
+    try {
+      validateEffect('notion-frobnicate', { id: PAGE })
+      expect.unreachable()
+    } catch (e) {
+      expect(e).toBeInstanceOf(EffectValidationError)
+      expect((e as EffectValidationError).code).toBe('UNSUPPORTED_EFFECT')
+      expect((e as Error).message).toMatch(/UNSUPPORTED_EFFECT/)
+    }
+  })
+
+  it('rejects model-supplied internal fields', () => {
+    try {
+      validateEffect('notion-update-page', { data: { page_id: PAGE }, __nox_expected_hash: 'abc' })
+      expect.unreachable()
+    } catch (e) {
+      expect((e as EffectValidationError).code).toBe('INVALID_ARGUMENTS')
+      expect((e as Error).message).toMatch(/__nox_expected_hash/)
+    }
+  })
+
+  it('requires schema and view target identity', () => {
+    expect(validateEffect('notion-update-data-source', { data_source_id: 'ds-1' }).targets).toEqual(['ds-1'])
+    expect(() => validateEffect('notion-update-data-source', {})).toThrowError(EffectValidationError)
+    expect(validateEffect('notion-update-view', { view_id: 'view-1' }).targets).toEqual(['view-1'])
+    expect(() => validateEffect('notion-create-view', {})).toThrowError(EffectValidationError)
+  })
+
+  it('counts created objects without inventing affected targets', () => {
+    const effect = validateEffect('notion-create-pages', {
+      pages: [{ parent: { page_id: PAGE } }, { parent: { page_id: PAGE } }],
+    })
+    expect(effect.targets).toEqual([])
+    expect(effect.parents).toEqual([PAGE, PAGE])
+    expect(effect.count).toBe(2)
+  })
+})
+
+describe('canonicalizeArgs', () => {
+  it('sorts keys deterministically and copies instead of aliasing', () => {
+    const args = { z: 1, a: { y: [3, 2], x: 's' } }
+    const canonical = canonicalizeArgs(args)
+    expect(Object.keys(canonical)).toEqual(['a', 'z'])
+    expect(canonical).toEqual(args)
+    expect(canonical).not.toBe(args)
+    expect(canonical.a).not.toBe(args.a)
+  })
+
+  it('rejects cycles and non-JSON values', () => {
+    const cyclic: Record<string, unknown> = {}
+    cyclic.self = cyclic
+    expect(() => canonicalizeArgs(cyclic)).toThrowError(EffectValidationError)
+    expect(() => canonicalizeArgs({ fn: () => undefined })).toThrowError(EffectValidationError)
+  })
+
+  it('rejects excessive nesting and oversize lists', () => {
+    let deep: Record<string, unknown> = {}
+    let cursor = deep
+    for (let i = 0; i < 25; i++) {
+      const next: Record<string, unknown> = {}
+      cursor.nested = next
+      cursor = next
+    }
+    expect(() => canonicalizeArgs(deep)).toThrowError(EffectValidationError)
+    expect(() => canonicalizeArgs({ pages: Array.from({ length: 101 }, (_, i) => i) })).toThrowError(EffectValidationError)
+  })
+
+  it('rejects payloads over the per-operation byte budget', () => {
+    expect(() => canonicalizeArgs({ content: 'x'.repeat(600 * 1024) })).toThrowError(EffectValidationError)
+    try {
+      canonicalizeArgs({ content: 'x'.repeat(600 * 1024) })
+      expect.unreachable()
+    } catch (e) {
+      expect((e as EffectValidationError).code).toBe('PAYLOAD_TOO_LARGE')
+    }
+  })
+
+  it('accepts ordinary operations comfortably inside the budget', () => {
+    const canonical = canonicalizeArgs({ data: { page_id: 'p1' }, command: { type: 'replace_content', content: '# Hello\n\nBody text.' } })
+    expect(canonical).toMatchObject({ data: { page_id: 'p1' } })
   })
 })
 
