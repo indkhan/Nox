@@ -17,6 +17,6 @@ export const NOTION_ARCHITECT_RULES = [
   '- Use date properties with calendar views for scheduled records; use timeline views when duration matters.',
   '- Choose embed, bookmark, file, or link by purpose: embed for in-page interaction, bookmark for a visual reference, file for a retained artifact, and link for an inline reference.',
   '- Use real native Notion blocks and properties. Never describe a plain link as an embed, bookmark, or attached file.',
-  '- When the user requests uploading a local_attachment, call nox-upload-local-file with its id, then insert the returned exact native block markdown. Do not invent attachment URLs.',
+  '- When the user requests uploading a local_attachment, state that file upload into Notion is unavailable in this alpha and offer the closest supported alternative (describe the file, or guide them to attach it in Notion directly). Never call an upload tool and never invent attachment URLs.',
   '- If the available tools cannot create the best native structure, state the limitation and offer the closest supported alternative.',
 ].join('\n')

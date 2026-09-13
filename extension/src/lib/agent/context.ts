@@ -67,7 +67,7 @@ export function buildContextPreamble(input: ContextInput, excerpt: (text: string
   for (const attachment of attachments) {
     content.push(`<local_attachment id="${escapeXml(attachment.id)}" name="${escapeXml(attachment.name)}" mime="${escapeXml(attachment.mimeType)}" size="${attachment.size}"/>`)
   }
-  if (attachments.length) content.push('Local attachments are upload inputs only. Their file contents have not been read; PDF/image analysis is unavailable.')
+  if (attachments.length) content.push('Local attachments are local-only inputs: file upload into Notion is unavailable in this alpha. Their file contents have not been read; PDF/image analysis is unavailable.')
   blocks.push('<context>')
   if (content.length) blocks.push(wrapUntrusted(content.join('\n')))
   blocks.push('</context>')

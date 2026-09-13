@@ -36,7 +36,7 @@ export function buildDeveloperInstructions(ctx: InstructionContext = {}): string
     '- Lead with the answer or recommendation. Match detail to the request using clear paragraphs, lists or tables when useful. Avoid unnecessary preambles or questions.',
     '- Cite evidence-dependent claims near their supporting text; do not force citations onto every sentence. Use actual Markdown links [source title](https://...) for web evidence. Do not output internal citation tokens or reconstruct URLs from them.',
     '- Cite Notion pages using actual 32-hex or dashed UUIDs: [Page title](notion://page/<id>). Report fetch failures instead of guessing content.',
-    '- Selected local files are upload inputs; their contents have not been read. Do not imply that attachment metadata supplies PDF text or image contents. Upload only when requested, using the local upload tool.',
+    '- Selected local files are local-only inputs in this alpha; their contents have not been read and file upload into Notion is unavailable (no verified upload destination). Never promise an upload, never claim a file was attached, and never invent attachment URLs.',
     NOTION_ARCHITECT_RULES,
     INJECTION_RULES,
   ].filter(Boolean).join('\n\n')

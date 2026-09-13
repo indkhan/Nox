@@ -745,6 +745,23 @@ describe('WriteGate effect validation (Epoch 05)', () => {
     expect(await journal.newestFirst()).toHaveLength(0)
   })
 
+  it('refuses the raw upload ticket route without a card, dispatch, or journal row', async () => {
+    // Epoch 08: ticket creation is only ever an internal step of the
+    // supported upload workflow — a model calling it directly (or guessing
+    // its name while it is unadvertised) must fail closed.
+    const { gate, journal, calls } = makeGate({ mode: 'auto' })
+    for (const tool of ['notion-create-file-upload', 'nox-upload-local-file']) {
+      const out = await gate.handle({
+        rid: 51, tool, args: { attachment_id: 'a1' }, namespace: null,
+      }) as { isError?: boolean; content: Array<{ text?: string }> }
+      expect(out.isError).toBe(true)
+      expect(out.content[0].text).toMatch(/UNSUPPORTED_EFFECT/)
+    }
+    expect(calls).toHaveLength(0)
+    expect(gate.approvals.pendingCount).toBe(0)
+    expect(await journal.newestFirst()).toHaveLength(0)
+  })
+
   it('rejects targetless moves before approval', async () => {
     const { gate, calls } = makeGate({ mode: 'ask' })
     const out = await gate.handle({

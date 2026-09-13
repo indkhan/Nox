@@ -1,4 +1,5 @@
-import type { McpCallResult } from '../mcp/client'
+import type { McpCallResult, McpTool } from '../mcp/client'
+import type { CapabilityGate } from '../notion/capabilities'
 import type { StoredAttachment } from '../../shared/attachments'
 import type { DynamicTool } from '../agent/dynamic-tools'
 
@@ -8,6 +9,49 @@ export const UPLOAD_FILE_TOOL: DynamicTool = {
   name: UPLOAD_FILE_TOOL_NAME,
   description: 'Upload a local attachment selected in this turn to Notion and return native file-block markdown.',
   inputSchema: { type: 'object', required: ['attachment_id'], properties: { attachment_id: { type: 'string' } } },
+}
+
+/** Raw provider ticket route. Never advertised to the model (08.1.4). */
+export const UPLOAD_TICKET_TOOL_NAME = 'notion-create-file-upload'
+const RAW_UPLOAD_TICKET_TOOLS: ReadonlySet<string> = new Set([UPLOAD_TICKET_TOOL_NAME])
+
+/** Discovered tool names the model must never be offered directly. */
+export function isRawUploadTicketTool(name: unknown): boolean {
+  return typeof name === 'string' && RAW_UPLOAD_TICKET_TOOLS.has(name)
+}
+
+/**
+ * Whether the upload workflow may be advertised or executed (08.1.1, 08.2.5).
+ * All three must hold: the discovered tool list carries the underlying ticket
+ * tool, the capability gate allows it, and the ticket envelope is verified.
+ *
+ * The envelope is NOT verified: the authoritative REST file-upload reference
+ * (developers.notion.com, API 2026-03-11) documents create → upload_url →
+ * multipart send → file_upload-id attach with no form_fields / field_name /
+ * suggested_markdown fields, while the MCP ticket envelope itself has no
+ * redacted live fixture. Until that fixture exists, support stays off and
+ * upload fails closed everywhere with UPLOAD_UNSUPPORTED. Do not enable
+ * without it.
+ */
+export function isUploadWorkflowSupported(discovered: McpTool[], gate: CapabilityGate): boolean {
+  const ticketTool = discovered.find((tool) => isRawUploadTicketTool(tool?.name))
+  if (!ticketTool || typeof ticketTool.name !== 'string') return false
+  if (!gate.can(ticketTool.name).allowed) return false
+  return isUploadTicketContractVerified()
+}
+
+/** False until a redacted live MCP ticket fixture verifies the envelope. */
+export function isUploadTicketContractVerified(): boolean {
+  return false
+}
+
+/** Clear unsupported reason, shared by advertisement and execution refusal. */
+export function uploadUnsupportedMessage(): string {
+  return (
+    'UPLOAD_UNSUPPORTED: file upload into Notion is unavailable in this alpha — ' +
+    'no verified upload-ticket contract exists yet, so no file bytes leave this browser for upload. ' +
+    'Selected files stay local-only inputs; describe them from metadata instead.'
+  )
 }
 
 export async function uploadLocalAttachment(attachment: StoredAttachment, deps: {

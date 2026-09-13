@@ -312,6 +312,13 @@ precise reason with the real target link, and readback that cannot verify report
 applied-but-unverified rather than a fabricated failure. Nox labels such changes as not
 undoable rather than promising a partial restore.
 
+File upload into Notion is unavailable in this alpha: the MCP ticket envelope
+has no verified live fixture, so `nox-upload-local-file` is never advertised
+and upload calls fail closed with `UPLOAD_UNSUPPORTED` before ticket creation,
+transport, or journaling. Selection still binds files to the current turn with
+stored-metadata integrity checks, the raw ticket tool is never advertised and
+is refused as an unsupported effect, and local attachment handling is unchanged.
+
 ## Local data
 
 IndexedDB database `nox` is currently version 3.

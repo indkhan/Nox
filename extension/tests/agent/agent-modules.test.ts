@@ -21,15 +21,28 @@ describe('toDynamicTools', () => {
 
   it('passes allowed tools through with function shape', () => {
     const out = toDynamicTools(tools, new CapabilityGate())
-    expect(out).toHaveLength(5) // empty name dropped; local tools added
+    expect(out).toHaveLength(4) // empty name dropped; plan + continuation added, upload hidden
     expect(out[0]).toMatchObject({ type: 'function', name: 'notion-search', description: 'Search' })
-    expect(out.slice(-3).map((tool) => tool.name)).toEqual(['nox-propose-workspace-plan', 'nox-upload-local-file', 'nox-read-continuation'])
+    expect(out.slice(-2).map((tool) => tool.name)).toEqual(['nox-propose-workspace-plan', 'nox-read-continuation'])
+    expect(out.map((tool) => tool.name)).not.toContain('nox-upload-local-file')
   })
 
   it('drops plan-gated tools entirely', () => {
     const gate = new CapabilityGate({ 'query-meeting-notes': 'upgrade_required' })
     const out = toDynamicTools(tools, gate)
-    expect(out.map((t) => t.name)).toEqual(['notion-search', 'nox-propose-workspace-plan', 'nox-upload-local-file', 'nox-read-continuation'])
+    expect(out.map((t) => t.name)).toEqual(['notion-search', 'nox-propose-workspace-plan', 'nox-read-continuation'])
+  })
+
+  it('never advertises the raw upload ticket route, even when the server lists it', () => {
+    const gate = new CapabilityGate()
+    const out = toDynamicTools(
+      [...tools, { name: 'notion-create-file-upload', description: 'Ticket', inputSchema: { type: 'object' } }],
+      gate,
+    )
+    expect(out.map((t) => t.name)).not.toContain('notion-create-file-upload')
+    // Positive support also requires a verified ticket contract, which does
+    // not exist yet — so the local upload tool stays hidden as well.
+    expect(out.map((t) => t.name)).not.toContain('nox-upload-local-file')
   })
 
   it('defaults a missing inputSchema to an object schema', () => {
@@ -100,10 +113,11 @@ describe('truncateResult / context preamble', () => {
     expect(instructions).toMatch(/ask only.*materially change/i)
   })
 
-  it('names the local planning and upload tools for structural work and files', () => {
+  it('names the local planning tool and marks upload unavailable for structural work and files', () => {
     const instructions = buildDeveloperInstructions()
     expect(instructions).toContain('nox-propose-workspace-plan')
-    expect(instructions).toContain('nox-upload-local-file')
+    expect(instructions).not.toContain('nox-upload-local-file')
+    expect(instructions).toMatch(/upload.*unavailable/i)
   })
 
   it('requires the plan tool instead of asking for typed approval', () => {
@@ -299,7 +313,8 @@ it('builds capability-aware evidence instructions without authorizing discussion
   expect(prompt).toMatch(/discussion.*do not authorize mutations/i)
   expect(prompt).toMatch(/Auto mode does not expand/i)
   expect(prompt).toMatch(/reference-only.*fetch/i)
-  expect(prompt).toMatch(/upload inputs.*contents have not been read/i)
+  expect(prompt).toMatch(/local-only inputs.*contents have not been read/i)
+  expect(prompt).toMatch(/upload.*unavailable/i)
   expect(prompt).not.toContain('Your tools operate on the connected Notion workspace only.')
 })
 

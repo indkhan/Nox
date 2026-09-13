@@ -294,7 +294,7 @@ export function Composer({
     if (!el || busy || readOnly) return
     const text = editorText(el).trim()
     if (!text && attachments.length === 0) return
-    onSend(text || 'Attach these files to the appropriate Notion page.', mentions.map(({ pageId, title, iconEmoji, iconUrl }) => ({ pageId, title, iconEmoji, iconUrl })), attachments, allowSmallEdits)
+    onSend(text || 'Files attached for local reference (upload into Notion is unavailable in this alpha).', mentions.map(({ pageId, title, iconEmoji, iconUrl }) => ({ pageId, title, iconEmoji, iconUrl })), attachments, allowSmallEdits)
     el.innerHTML = ''
     setMentions([])
     setAttachments([])

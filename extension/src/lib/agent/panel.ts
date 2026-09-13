@@ -13,7 +13,7 @@ import type { MentionRef } from '../../shared/notion-page'
 import { createTurnAccessState } from './turn-access'
 import { PlanEngine } from '../architect/plan-engine'
 import { WORKSPACE_PLAN_TOOL_NAME } from '../architect/tool'
-import { UPLOAD_FILE_TOOL_NAME, uploadLocalAttachment } from '../attachments/upload-tool'
+import { UPLOAD_FILE_TOOL_NAME, UPLOAD_TICKET_TOOL_NAME, uploadUnsupportedMessage } from '../attachments/upload-tool'
 import { normalizePageFetch } from '../notion/page-content'
 import { attachmentRepository } from '../history/attachments'
 
@@ -84,23 +84,30 @@ export const agentLoop = new AgentLoop({
         return { content: [{ type: 'text', text: decision === 'approved' ? 'PLAN_APPROVED: execute only the listed operations.' : 'PLAN_REJECTED: no changes were authorized.' }] }
       }
       if (name === UPLOAD_FILE_TOOL_NAME) {
+        // Selected-file identity first: only an id chosen in this turn that
+        // resolves to a stored row with intact metadata may proceed — a model
+        // can never name an arbitrary attachment in history. Every refusal
+        // below happens before ticket creation, transport, and journaling.
         const id = typeof args.attachment_id === 'string' ? args.attachment_id : ''
         if (!turnAccess.attachments().has(id)) throw new Error('ATTACHMENT_UNAVAILABLE: select this file in the current turn first.')
         const attachment = await attachments.get(id)
         if (!attachment) throw new Error('ATTACHMENT_UNAVAILABLE: local file was not found.')
-        // Upload ticket + bytes share the serial mutation boundary with
-        // forward writes and undo, under the same owner lease, scope, and
-        // durable intent. Intent args carry file metadata only, never bytes.
-        const markdown = await writeGate.runEffectExclusive(() => uploadLocalAttachment(attachment, {
-          createTicket: () => notion.scheduleCallTool('notion-create-file-upload', { filename: attachment.name, content_type: attachment.mimeType }, signal),
-          fetchImpl: fetch,
-          signal,
-        }), signal, {
-          tool: UPLOAD_FILE_TOOL_NAME,
-          args: { attachment_id: id, name: attachment.name, size: attachment.size, content_type: attachment.mimeType },
-          kind: 'upload',
-        })
-        return { content: [{ type: 'text', text: `UPLOAD_COMPLETE: insert this exact native block markdown into the requested page:\n${markdown}` }] }
+        if (attachment.blob.size !== attachment.size) {
+          throw new Error('ATTACHMENT_CHANGED: the stored file no longer matches its recorded size — reselect it before retrying.')
+        }
+        if (attachment.threadId != null && historyThreadId != null && attachment.threadId !== historyThreadId) {
+          throw new Error('ATTACHMENT_UNAVAILABLE: this file belongs to a different conversation.')
+        }
+        // Capability recheck at execution: a stale advertised tool fails safe.
+        const ticketAccess = notion.capabilities.can(UPLOAD_TICKET_TOOL_NAME)
+        if (!ticketAccess.allowed) {
+          throw new Error(`UPLOAD_UNAVAILABLE: the Notion connection does not support file upload (${ticketAccess.reason ?? ticketAccess.state}). No bytes were sent.`)
+        }
+        // Epoch 08: no verified MCP ticket contract exists, so the workflow
+        // stays disabled everywhere. The owner/serial effect path, exact
+        // consent, and durable journal in runEffectExclusive remain the
+        // boundary the enabled flow must use; nothing reaches them yet.
+        throw new Error(uploadUnsupportedMessage())
       }
       const result = (await writeGate.handle({ rid: 0, tool: name, args, namespace: null, signal, provenance })) as {
         content?: Array<{ type: string; text?: string }>
