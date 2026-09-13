@@ -3,9 +3,11 @@ import { classifyToolCall, detectRichPage, requiresWorkspacePlan, type CallClass
 import { buildInverse, type PreImage } from './inverse'
 import { capturePageSnapshot, assertUnchanged, GuardViolation, type PageSnapshot } from './guard'
 import { ApprovalEngine, evaluateApproval, type Mode } from './approvals'
-import { MutationJournal } from './journal'
+import { MutationJournal, type IntentScope, type JournalEntry } from './journal'
 import { hashMarkdown } from './guard'
 import { normalizeId } from '../../shared/notion-page'
+import { UncertainDispatchError } from '../mcp/scheduler'
+import { isPreDispatchFailure } from '../mcp/client'
 
 export type MutationRejectionCode =
   | 'NOT_OWNER'
@@ -14,6 +16,10 @@ export type MutationRejectionCode =
   | 'TURN_ACTIVE'
   | 'UNDO_IN_PROGRESS'
   | 'NOT_UNDOABLE'
+  | 'NO_PERSISTED_THREAD'
+  | 'NO_WORKSPACE_SCOPE'
+  | 'CONFLICT_UNRESOLVED'
+  | 'JOURNAL_STORAGE_ERROR'
 
 /** Typed refusal for a mutation that must not reach the transport. */
 export class MutationRejectedError extends Error {
@@ -42,6 +48,13 @@ interface OwnershipSnapshot {
   connectionGeneration: string | null
 }
 
+export interface ReadbackEvidence {
+  supported: boolean
+  match?: boolean
+  detail: string
+  targetPageId?: string
+}
+
 export interface WriteGateDeps {
   callTool: (name: string, args: Record<string, unknown>, signal?: AbortSignal) => Promise<{ content: Array<{ type: string; text?: string }> }>
   fetchPageMarkdown: (pageId: string, signal?: AbortSignal) => Promise<string>
@@ -51,6 +64,10 @@ export interface WriteGateDeps {
   onApproval?: ApprovalEngine['notify']
   authorizeStructuralChange?: (name: string, args: Record<string, unknown>) => { allowed: boolean; reason?: string }
   ownership?: MutationOwnership
+  /** Workspace scope for intents; mutations are refused without one. */
+  getWorkspaceId?: () => string | null
+  /** Capability check for inverse tools, which bypass the executor pre-check. */
+  assertToolAllowed?: (tool: string) => void
 }
 
 const CONTENT_WRITE_KINDS = new Set(['content-replace', 'content-update'])
@@ -73,6 +90,12 @@ export class WriteGate {
   private mutationTail: Promise<void> = Promise.resolve()
   private turnActive = false
   private undoActive = false
+  /**
+   * Intent ids with a live critical interval in this panel. The conflict
+   * check skips them so queued work is not blocked by its own in-flight
+   * intent; a crash clears this set, so stale rows block until reviewed.
+   */
+  private readonly activeIntentIds = new Set<string>()
 
   constructor(private readonly deps: WriteGateDeps) {
     this.journal = deps.journal ?? new MutationJournal()
@@ -101,62 +124,235 @@ export class WriteGate {
   }
 
   async handle(req: ToolCallRequest): Promise<unknown> {
-    return this.handleRequest(req, false, true)
+    return this.handleRequest(req, false)
   }
 
   /**
    * Undo entry through the same ownership + serial boundary as forward
-   * writes. Rejects while a turn is active (never queues for later) and
-   * re-validates the journal entry from storage inside the exclusive section
-   * so a restored row cannot authorize a stale or repeated undo.
+   * writes. Creates its own durable intent linked to the original operation,
+   * reserves the original atomically, and marks it undone only when the
+   * inverse is known applied. Rejects while a turn is active or unresolved
+   * work conflicts (never queues for later).
    */
   async handleUndo(tool: string, args: Record<string, unknown>, opts: { journalId?: string; signal?: AbortSignal } = {}): Promise<unknown> {
     const snapshot = this.admitMutation(opts.signal)
     if (this.turnActive) {
       throw new MutationRejectedError('TURN_ACTIVE', 'Nox is working — wait for the turn to finish before undoing. No changes were made.')
     }
+    const scope = this.captureIntentScope(snapshot)
+    await this.requireNoConflict(scope.threadId)
     return this.runExclusive(async () => {
       this.reassertMutation(snapshot, opts.signal)
       if (this.turnActive) {
         throw new MutationRejectedError('TURN_ACTIVE', 'a turn started while this undo was queued — the undo was refused. No changes were made.')
       }
-      if (opts.journalId) await this.revalidateUndoEntry(opts.journalId, tool, args)
+      let original: JournalEntry | undefined
+      if (opts.journalId) {
+        original = await this.revalidateUndoEntry(opts.journalId, tool, args)
+        this.deps.assertToolAllowed?.(original.inverse!.tool)
+      } else {
+        this.deps.assertToolAllowed?.(tool)
+      }
+      const frozenArgs = { ...args }
+      // Every undo dispatches an external effect, so every undo — linked or
+      // not — gets its own durable intent. Linked undo additionally reserves
+      // the original atomically; a lost reservation race refuses without
+      // transport instead of double-dispatching.
+      let undoOp: JournalEntry | undefined
+      if (opts.journalId) {
+        const reservation = await this.journal.beginUndoReservation(opts.journalId, {
+          tool,
+          args: frozenArgs,
+          kind: 'undo',
+          scope,
+          targetPageId: original?.targetPageId,
+        })
+        if (!reservation) {
+          throw new MutationRejectedError('NOT_UNDOABLE', 'this change is no longer available to undo.')
+        }
+        undoOp = reservation.undo
+      } else {
+        try {
+          undoOp = await this.journal.beginIntent({
+            tool,
+            args: frozenArgs,
+            kind: 'undo',
+            scope,
+            targetPageId: undefined,
+          })
+        } catch (e) {
+          throw new Error(`JOURNAL_STORAGE_ERROR: the recovery record could not be persisted (${e instanceof Error ? e.message : String(e)}). No changes were made.`)
+        }
+      }
+      const undoOpId = undoOp.id
+      this.activeIntentIds.add(undoOpId)
       this.undoActive = true
       try {
-        const result = await this.executeMutation(
+        const guard = await this.runGuardPhase(
           { rid: 0, tool, args, namespace: null, provenance: 'user-only', signal: opts.signal },
           classifyToolCall(tool, args),
-          false,
         )
-        if (isErrorResult(result)) throw new Error(result.content.map((part) => part.text ?? '').join('\n'))
-        if (opts.journalId) {
+        if (!guard.ok) {
+          const guardDetail = textOfResult(guard.result)
+          await this.settleUndo(undoOpId, opts.journalId, 'failed', `undo guard refused: ${guardDetail}`)
+          throw new Error(guardDetail)
+        }
+        try {
+          opts.signal?.throwIfAborted()
+        } catch {
+          await this.settleUndo(undoOpId, opts.journalId, 'failed', 'cancelled before dispatch')
+          throw new Error('TURN_CANCELLED: the undo was cancelled before dispatch. No changes were made.')
+        }
+        let result: unknown
+        try {
+          result = await this.deps.callTool(tool, frozenArgs, opts.signal)
+        } catch (e) {
+          const [status, detail] = classifyDispatchOutcome(e)
+          await this.settleUndo(undoOpId, opts.journalId, status, detail)
+          throw e
+        }
+        if (isErrorResult(result)) {
+          const detail = result.content.map((part) => part.text ?? '').join('\n')
+          await this.settleUndo(undoOpId, opts.journalId, 'failed', detail)
+          throw new Error(detail || 'the undo was rejected by the provider')
+        }
+        if (undoOpId) {
           try {
-            await this.journal.setStatus(opts.journalId, 'undone')
+            await this.journal.settleIntent(undoOpId, { status: 'applied' })
           } catch (e) {
             console.error('[nox] undo applied but journal status update failed', e)
+            throw appliedRecoveryWarning(result)
+          }
+        }
+        if (opts.journalId) {
+          try {
+            await this.journal.settleIntent(opts.journalId, { status: 'undone', reservedByUndoOpId: null })
+          } catch (e) {
+            // The undo applied and its intent is durable; the original stays
+            // reserved (never safely clickable twice) with a visible warning.
+            console.error('[nox] undo applied but original status update failed', e)
+            throw appliedRecoveryWarning(result)
           }
         }
         return result
       } finally {
         this.undoActive = false
+        if (undoOpId) this.activeIntentIds.delete(undoOpId)
       }
     })
+  }
+
+  /** Settle an undo intent and release (or retain) the original reservation. */
+  private async settleUndo(
+    undoOpId: string | undefined,
+    originalId: string | undefined,
+    status: 'applied' | 'failed' | 'unknown',
+    detail?: string,
+  ): Promise<void> {
+    try {
+      if (undoOpId) await this.journal.settleIntent(undoOpId, { status, outcomeDetail: detail })
+      if (originalId && status === 'failed' && undoOpId) {
+        await this.journal.releaseUndoReservation(originalId, undoOpId)
+      }
+    } catch (e) {
+      console.error('[nox] undo outcome bookkeeping failed', e)
+    }
   }
 
   /**
    * Shared serial boundary for external effects that do not flow through
    * handle() (currently the upload ticket + byte upload). Enforces the same
-   * owner lease and undo exclusion as forward writes.
+   * owner lease, scope, conflict, and undo exclusion as forward writes, and
+   * persists its own pending intent so every dispatched effect has a durable
+   * identity. Intent args must be metadata only — never blob bytes.
    */
-  async runEffectExclusive<T>(fn: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  async runEffectExclusive<T>(
+    fn: () => Promise<T>,
+    signal?: AbortSignal,
+    intent?: { tool: string; args: Record<string, unknown>; kind?: string; targetPageId?: string },
+  ): Promise<T> {
+    if (!intent) throw new Error('runEffectExclusive requires an intent description')
     if (this.undoActive) {
       throw new MutationRejectedError('UNDO_IN_PROGRESS', 'an undo is running — wait for it to finish. No changes were made.')
     }
     const snapshot = this.admitMutation(signal)
+    const scope = this.captureIntentScope(snapshot)
+    await this.requireNoConflict(scope.threadId)
     return this.runExclusive(async () => {
       this.reassertMutation(snapshot, signal)
-      return fn()
+      let op: JournalEntry
+      try {
+        op = await this.journal.beginIntent({
+          tool: intent.tool,
+          args: { ...intent.args },
+          kind: intent.kind ?? 'upload',
+          scope,
+          targetPageId: intent.targetPageId,
+        })
+      } catch (e) {
+        throw new MutationRejectedError('JOURNAL_STORAGE_ERROR', `the recovery record could not be persisted (${e instanceof Error ? e.message : String(e)}). No changes were made.`)
+      }
+      this.activeIntentIds.add(op.id)
+      try {
+        try {
+          signal?.throwIfAborted()
+        } catch {
+          await this.settleProtected(op.id, { status: 'failed', outcomeDetail: 'cancelled before dispatch' })
+          throw new Error('TURN_CANCELLED: the effect was cancelled before dispatch. No changes were made.')
+        }
+        try {
+          const value = await fn()
+          try {
+            await this.journal.settleIntent(op.id, { status: 'applied' })
+          } catch (e) {
+            console.error('[nox] effect succeeded but journal persistence failed', e)
+            throw appliedRecoveryWarning(value)
+          }
+          return value
+        } catch (e) {
+          if (e instanceof Error && e.message.startsWith('APPLIED_WITH_RECOVERY_WARNING')) throw e
+          const [status, detail] = classifyDispatchOutcome(e)
+          await this.settleProtected(op.id, { status, outcomeDetail: detail })
+          throw e
+        }
+      } finally {
+        this.activeIntentIds.delete(op.id)
+      }
     })
+  }
+
+  /**
+   * Narrow readback for an unresolved operation: only a content replacement
+   * with a known page and exact intended content can be compared. Evidence
+   * never proves authorship — a match means the current state looks like
+   * what Nox attempted, nothing more.
+   */
+  async readbackForReview(journalId: string): Promise<ReadbackEvidence> {
+    const entry = (await this.journal.newestFirst()).find((candidate) => candidate.id === journalId)
+    if (!entry) {
+      throw new MutationRejectedError('NOT_UNDOABLE', 'this change is no longer available to review.')
+    }
+    if (entry.status !== 'pending' && entry.status !== 'unknown') {
+      throw new MutationRejectedError('NOT_UNDOABLE', 'only unresolved operations can be checked this way.')
+    }
+    const intended = intendedReplaceContent(entry)
+    if (!intended) {
+      return {
+        supported: false,
+        targetPageId: entry.targetPageId,
+        detail: 'This change cannot be verified by readback — inspect it in Notion before marking it reviewed.',
+      }
+    }
+    const current = await this.deps.fetchPageMarkdown(intended.pageId)
+    const match = (await hashMarkdown(current)) === (await hashMarkdown(intended.content))
+    return {
+      supported: true,
+      match,
+      targetPageId: intended.pageId,
+      detail: match
+        ? 'Current content matches what Nox attempted (this does not prove Nox wrote it).'
+        : 'Current content differs from what Nox attempted — inspect it in Notion.',
+    }
   }
 
   private runExclusive<T>(fn: () => Promise<T>): Promise<T> {
@@ -195,18 +391,58 @@ export class WriteGate {
   }
 
   /** Fresh storage read so a restored activity row cannot replay a stale undo. */
-  private async revalidateUndoEntry(journalId: string, tool: string, args: Record<string, unknown>): Promise<void> {
+  private async revalidateUndoEntry(journalId: string, tool: string, args: Record<string, unknown>): Promise<JournalEntry> {
     const entries = await this.journal.newestFirst()
     const entry = entries.find((candidate) => candidate.id === journalId)
     if (!entry || entry.status !== 'applied' || !entry.inverse) {
       throw new MutationRejectedError('NOT_UNDOABLE', 'this change is no longer available to undo.')
     }
+    if (entry.reservedByUndoOpId != null) {
+      throw new MutationRejectedError('NOT_UNDOABLE', 'an undo is already recorded for this change — inspect it before retrying.')
+    }
     if (entry.inverse.tool !== tool || JSON.stringify(entry.inverse.args) !== JSON.stringify(args)) {
       throw new MutationRejectedError('NOT_UNDOABLE', 'the stored undo no longer matches this change. No changes were made.')
     }
+    return entry
   }
 
-  private async handleRequest(req: ToolCallRequest, approved: boolean, record: boolean): Promise<unknown> {
+  /**
+   * Runtime scope for intent capture: owner/connection generations from the
+   * admission snapshot plus the journal thread/turn and workspace identity,
+   * all read synchronously before any await that could observe a switch.
+   */
+  private captureIntentScope(snapshot: OwnershipSnapshot): IntentScope {
+    const { threadId, turnId } = this.journal.captureScope()
+    if (!threadId || !turnId) {
+      throw new MutationRejectedError('NO_PERSISTED_THREAD', 'there is no persisted conversation thread for this change — reconnect or start a new chat. No changes were made.')
+    }
+    const workspaceId = this.deps.getWorkspaceId?.() ?? null
+    if (!workspaceId) {
+      throw new MutationRejectedError('NO_WORKSPACE_SCOPE', 'the connected Notion workspace is not established — reconnect Notion. No changes were made.')
+    }
+    return {
+      threadId,
+      turnId,
+      workspaceId,
+      connectionGeneration: snapshot.connectionGeneration,
+      ownerGeneration: snapshot.ownerGeneration,
+    }
+  }
+
+  /** Refuse new effects while another operation in scope is unresolved. Reads stay available. */
+  private async requireNoConflict(threadId: string): Promise<void> {
+    const blocking = await this.journal.unresolvedInScope(threadId, this.activeIntentIds)
+    if (blocking.length > 0) {
+      const kinds = [...new Set(blocking.map((entry) => entry.tool))].slice(0, 3).join(', ')
+      throw new MutationRejectedError(
+        'CONFLICT_UNRESOLVED',
+        `${blocking.length} change${blocking.length === 1 ? '' : 's'} (${kinds}) still ${blocking.length === 1 ? 'has' : 'have'} an unknown outcome. ` +
+          'Inspect the unresolved activity and mark it reviewed before new writes. No changes were made.',
+      )
+    }
+  }
+
+  private async handleRequest(req: ToolCallRequest, approved: boolean): Promise<unknown> {
     const classification = classifyToolCall(req.tool, req.args)
     if (!classification.mutates) {
       const result = await this.deps.callTool(req.tool, req.args, req.signal)
@@ -219,13 +455,17 @@ export class WriteGate {
     }
 
     // Owner admission precedes approval UI: viewers fail fast with zero
-    // transport and no pending cards.
+    // transport and no pending cards. Scope is captured synchronously here
+    // so a later thread switch cannot reassign the operation.
     let snapshot: OwnershipSnapshot
+    let scope: IntentScope
     try {
       if (this.undoActive) {
         throw new MutationRejectedError('UNDO_IN_PROGRESS', 'an undo is running — wait for it to finish before writing. No changes were made.')
       }
       snapshot = this.admitMutation(req.signal)
+      scope = this.captureIntentScope(snapshot)
+      await this.requireNoConflict(scope.threadId)
     } catch (e) {
       return textResult(e instanceof Error ? e.message : String(e))
     }
@@ -261,16 +501,120 @@ export class WriteGate {
       } catch (e) {
         return textResult(e instanceof Error ? e.message : String(e))
       }
-      return this.executeMutation(req, classification, record)
+      return this.executeMutation(req, classification, scope)
     })
   }
 
   /**
-   * Final guard → dispatch → journal update. Runs only inside the serial
-   * runner; no IndexedDB transaction is held across the network await.
+   * Final guard → durable intent → dispatch → settle. Runs only inside the
+   * serial runner; no IndexedDB transaction is held across the network await.
+   * The intent (with frozen args and pre-image) is persisted before dispatch;
+   * a storage failure there returns a storage error with zero external calls.
    */
-  private async executeMutation(req: ToolCallRequest, classification: CallClassification, record: boolean): Promise<unknown> {
-    // Pre-image + guard for content writes; snapshot config/properties/moves otherwise.
+  private async executeMutation(req: ToolCallRequest, classification: CallClassification, scope: IntentScope): Promise<unknown> {
+    const guard = await this.runGuardPhase(req, classification)
+    if (!guard.ok) return guard.result
+    const frozenArgs = stripReservedArgs(req.args)
+
+    let intent: JournalEntry
+    try {
+      intent = await this.journal.beginIntent({
+        tool: req.tool,
+        args: frozenArgs,
+        kind: classification.kind,
+        scope,
+        preImage: guard.preImage,
+        targetPageId: guard.preImage.pageId,
+        callId: req.callId,
+      })
+    } catch (e) {
+      return textResult(`JOURNAL_STORAGE_ERROR: the recovery record could not be persisted (${e instanceof Error ? e.message : String(e)}). No changes were made.`)
+    }
+    this.activeIntentIds.add(intent.id)
+    try {
+      try {
+        req.signal?.throwIfAborted()
+      } catch {
+        await this.settleProtected(intent.id, { status: 'failed', outcomeDetail: 'cancelled before dispatch' })
+        return textResult('TURN_CANCELLED: the turn was cancelled before dispatch. No changes were made.')
+      }
+
+      let result: unknown
+      try {
+        result = await this.deps.callTool(req.tool, frozenArgs, req.signal)
+      } catch (e) {
+        const [status, detail] = classifyDispatchOutcome(e)
+        await this.settleProtected(intent.id, { status, outcomeDetail: detail })
+        throw e
+      }
+      if (isToolError(result)) {
+        const detail = textOfResult(result)
+        await this.settleProtected(intent.id, { status: 'failed', outcomeDetail: detail || 'the provider reported the change as failed' })
+        return result
+      }
+      if (guard.preImage.pageId) this.readHashes.delete(normalizeId(guard.preImage.pageId) ?? guard.preImage.pageId)
+
+      // Record applied immediately after the confirmed response, before
+      // optional verification reads. A success-record failure keeps the
+      // pending row and surfaces a session-visible recovery warning.
+      try {
+        await this.journal.settleIntent(intent.id, { status: 'applied' })
+      } catch (e) {
+        console.error('[nox] write succeeded but journal persistence failed', e)
+        throw appliedRecoveryWarning(result)
+      }
+
+      const inverse = buildInverse(guard.preImage)
+      if (inverse.kind === 'execute-tool' && guard.preImage.pageId) {
+        try {
+          const postWrite = await capturePageSnapshot((id) => this.deps.fetchPageMarkdown(id, req.signal), guard.preImage.pageId)
+          const command = req.args.command as Record<string, unknown> | undefined
+          const intendedContent = command?.type === 'replace_content' && typeof command.content === 'string' ? command.content : null
+          if (intendedContent == null || postWrite.hash !== await hashMarkdown(intendedContent)) {
+            throw new Error('post-write state cannot be attributed safely')
+          }
+          inverse.args = { ...inverse.args, __nox_expected_hash: postWrite.hash }
+        } catch {
+          inverse.kind = 'not-undoable'
+          inverse.reason = 'the page could not be verified after the change'
+          inverse.tool = undefined
+          inverse.args = undefined
+        }
+      }
+
+      try {
+        await this.journal.settleIntent(intent.id, {
+          status: 'applied',
+          inverse: inverse.kind === 'execute-tool' ? { tool: inverse.tool!, args: inverse.args! } : undefined,
+          notUndoableReason: inverse.kind === 'not-undoable' ? inverse.reason : undefined,
+        })
+      } catch (e) {
+        console.error('[nox] write succeeded but inverse persistence failed', e)
+        throw appliedRecoveryWarning(result)
+      }
+      return result
+    } finally {
+      this.activeIntentIds.delete(intent.id)
+    }
+  }
+
+  /** Settle an intent without letting bookkeeping failures mask the outcome. */
+  private async settleProtected(id: string, update: { status: 'applied' | 'failed' | 'unknown'; outcomeDetail?: string }): Promise<void> {
+    try {
+      await this.journal.settleIntent(id, update)
+    } catch (e) {
+      console.error('[nox] intent outcome bookkeeping failed', e)
+    }
+  }
+
+  /**
+   * Pre-image + guard for content writes; snapshot config/properties/moves
+   * otherwise. Reads only — no intent needed and no dispatch happens here.
+   */
+  private async runGuardPhase(
+    req: ToolCallRequest,
+    classification: CallClassification,
+  ): Promise<{ ok: true; snapshot: PageSnapshot | null; preImage: PreImage } | { ok: false; result: unknown }> {
     let snapshot: PageSnapshot | null = null
     let preImage: PreImage = { kind: classification.kind }
     try {
@@ -301,49 +645,11 @@ export class WriteGate {
         }
       }
     } catch (e) {
-      if (e instanceof GuardViolation) return textResult(e.message)
+      if (e instanceof GuardViolation) return { ok: false, result: textResult(e.message) }
       // Snapshot failure must not block the write silently — say so.
-      return textResult(`ERROR: could not capture a pre-image (${e instanceof Error ? e.message : e}). Write aborted.`)
+      return { ok: false, result: textResult(`ERROR: could not capture a pre-image (${e instanceof Error ? e.message : e}). Write aborted.`) }
     }
-
-    const result = await this.deps.callTool(req.tool, stripReservedArgs(req.args), req.signal)
-    if (isToolError(result)) return result
-    if (preImage.pageId) this.readHashes.delete(normalizeId(preImage.pageId) ?? preImage.pageId)
-    const inverse = buildInverse(preImage)
-    if (inverse.kind === 'execute-tool' && preImage.pageId) {
-      try {
-        const postWrite = await capturePageSnapshot((id) => this.deps.fetchPageMarkdown(id, req.signal), preImage.pageId)
-        const command = req.args.command as Record<string, unknown> | undefined
-        const intendedContent = command?.type === 'replace_content' && typeof command.content === 'string' ? command.content : null
-        if (intendedContent == null || postWrite.hash !== await hashMarkdown(intendedContent)) {
-          throw new Error('post-write state cannot be attributed safely')
-        }
-        inverse.args = { ...inverse.args, __nox_expected_hash: postWrite.hash }
-      } catch {
-        inverse.kind = 'not-undoable'
-        inverse.reason = 'the page could not be verified after the change'
-        inverse.tool = undefined
-        inverse.args = undefined
-      }
-    }
-
-    try {
-      if (!record) return result
-      await this.journal.record({
-        tool: req.tool,
-        args: stripReservedArgs(req.args),
-        kind: classification.kind,
-        preImage: snapshot ? { hash: snapshot.hash, markdownChars: snapshot.markdown.length } : undefined,
-        inverse: inverse.kind === 'execute-tool' ? { tool: inverse.tool!, args: inverse.args! } : undefined,
-        notUndoableReason: inverse.kind === 'not-undoable' ? inverse.reason : undefined,
-        targetPageId: preImage.pageId,
-        callId: req.callId,
-      })
-    } catch (e) {
-      console.error('[nox] write succeeded but journal persistence failed', e)
-    }
-
-    return result
+    return { ok: true, snapshot, preImage }
   }
 }
 
@@ -371,4 +677,52 @@ function stripReservedArgs(args: Record<string, unknown>): Record<string, unknow
 
 function isErrorResult(result: unknown): result is { isError: true; content: Array<{ text?: string }> } {
   return typeof result === 'object' && result !== null && (result as { isError?: boolean }).isError === true
+}
+
+function textOfResult(result: unknown): string {
+  if (isErrorResult(result)) return result.content.map((part) => part.text ?? '').join('\n')
+  return 'unknown guard outcome'
+}
+
+/**
+ * Outcome for a thrown dispatch failure. Pre-dispatch proof settles known
+ * failure; the safe default after dispatch is unknown — no contract here
+ * proves non-execution, including for thrown provider rejections.
+ */
+function classifyDispatchOutcome(e: unknown): ['unknown' | 'failed', string | undefined] {
+  const detail = e instanceof Error ? e.message : String(e)
+  if (isPreDispatchFailure(e)) return ['failed', `not dispatched: ${detail}`]
+  if (e instanceof UncertainDispatchError) return ['unknown', detail]
+  if (isAbortError(e)) return ['unknown', `cancelled after dispatch was attempted: ${detail}`]
+  return ['unknown', detail]
+}
+
+function isAbortError(e: unknown): boolean {
+  return e instanceof Error && e.name === 'AbortError'
+}
+
+/**
+ * Session-visible warning for a confirmed effect whose durable record could
+ * not be updated. The older pending row remains recoverable on restart, and
+ * the provider result travels in the message so the turn can still use it.
+ */
+function appliedRecoveryWarning(result: unknown): Error {
+  const text = isErrorResult(result)
+    ? result.content.map((part) => part.text ?? '').join('\n')
+    : typeof result === 'object' && result !== null
+      ? JSON.stringify(result).slice(0, 2000)
+      : String(result ?? '')
+  return new Error(
+    'APPLIED_WITH_RECOVERY_WARNING: the change was applied but the local recovery record could not be updated — ' +
+      'reopening Nox will show it as unresolved. Do not assume undo is available. ' +
+      (text ? `Provider result was: ${text.slice(0, 2000)}` : 'No provider result text was returned.'),
+  )
+}
+
+/** Exact intended post-content for a replace_content operation, if knowable. */
+function intendedReplaceContent(entry: JournalEntry): { pageId: string; content: string } | null {
+  if (!entry.targetPageId) return null
+  const command = (entry.args as Record<string, unknown> | undefined)?.command as Record<string, unknown> | undefined
+  if (command?.type !== 'replace_content' || typeof command.content !== 'string') return null
+  return { pageId: entry.targetPageId, content: command.content }
 }

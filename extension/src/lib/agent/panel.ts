@@ -51,6 +51,11 @@ export const writeGate = new WriteGate({
     getOwnerGeneration: () => getOwnerGeneration(),
     getConnectionGeneration: () => notion.connectionGeneration,
   },
+  getWorkspaceId: () => notion.identity?.workspaceId ?? null,
+  assertToolAllowed: (tool) => {
+    const verdict = notion.capabilities.can(tool)
+    if (!verdict.allowed) throw new Error(`"${tool}" ${verdict.reason ?? 'is unavailable'}`)
+  },
 })
 
 /** Production assembly: real Notion facade + real Codex client behind the gate. */
@@ -69,12 +74,17 @@ export const agentLoop = new AgentLoop({
         const attachment = await attachments.get(id)
         if (!attachment) throw new Error('ATTACHMENT_UNAVAILABLE: local file was not found.')
         // Upload ticket + bytes share the serial mutation boundary with
-        // forward writes and undo, under the same owner lease.
+        // forward writes and undo, under the same owner lease, scope, and
+        // durable intent. Intent args carry file metadata only, never bytes.
         const markdown = await writeGate.runEffectExclusive(() => uploadLocalAttachment(attachment, {
           createTicket: () => notion.scheduleCallTool('notion-create-file-upload', { filename: attachment.name, content_type: attachment.mimeType }, signal),
           fetchImpl: fetch,
           signal,
-        }), signal)
+        }), signal, {
+          tool: UPLOAD_FILE_TOOL_NAME,
+          args: { attachment_id: id, name: attachment.name, size: attachment.size, content_type: attachment.mimeType },
+          kind: 'upload',
+        })
         return { content: [{ type: 'text', text: `UPLOAD_COMPLETE: insert this exact native block markdown into the requested page:\n${markdown}` }] }
       }
       const result = (await writeGate.handle({ rid: 0, tool: name, args, namespace: null, signal, provenance })) as {
@@ -93,7 +103,9 @@ export const agentLoop = new AgentLoop({
     },
   }),
   beginTurn: () => {
-    writeGate.journal.setThread(historyThreadId ?? 'unscoped')
+    // A null thread leaves the journal unscopable: mutations are refused
+    // until persistence recovers, instead of journaling under 'unscoped'.
+    writeGate.journal.setThread(historyThreadId)
     writeGate.beginTurn()
     planEngine.beginTurn(crypto.randomUUID())
   },

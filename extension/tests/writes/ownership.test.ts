@@ -22,6 +22,8 @@ function makeGate(opts: {
   let ownerGen: string | null = opts.ownerGen ?? 'owner-gen-1'
   let connGen: string | null = opts.connGen ?? 'conn-1'
   const calls: Array<{ name: string; args: Record<string, unknown> }> = []
+  const journal = opts.journal ?? new MutationJournal()
+  journal.setThread('thread-owner')
   const gate = new WriteGate({
     callTool: opts.transport ?? (async (name, args) => {
       calls.push({ name, args })
@@ -30,12 +32,13 @@ function makeGate(opts: {
     fetchPageMarkdown: async () => '# Simple\noriginal text',
     getMode: () => opts.mode ?? 'auto',
     getContextSet: () => new Set([PAGE]),
-    journal: opts.journal ?? new MutationJournal(),
+    journal,
     ownership: {
       isOwner: () => owner,
       getOwnerGeneration: opts.onOwnerGen ?? (() => ownerGen),
       getConnectionGeneration: opts.onConnGen ?? (() => connGen),
     },
+    getWorkspaceId: () => 'workspace-1',
   })
   return {
     gate,
@@ -153,6 +156,7 @@ describe('mutation ownership (Epoch 02.1)', () => {
       return { content: [{ type: 'text', text: 'ok' }] }
     }
     const { gate } = makeGate({ transport: slow })
+    const uploadIntent = { tool: 'nox-upload-local-file', args: { attachment_id: 'a1' }, kind: 'upload' }
     await Promise.all([
       gate.handle(propertiesWrite(1)),
       gate.runEffectExclusive(async () => {
@@ -160,7 +164,7 @@ describe('mutation ownership (Epoch 02.1)', () => {
         maxInFlight = Math.max(maxInFlight, inFlight)
         await new Promise((r) => setTimeout(r, 5))
         inFlight--
-      }),
+      }, undefined, uploadIntent),
     ])
     expect(maxInFlight).toBe(1)
   })
@@ -168,7 +172,8 @@ describe('mutation ownership (Epoch 02.1)', () => {
   it('viewer upload effects make zero transport calls', async () => {
     const { gate } = makeGate({ owner: false })
     const effect = vi.fn(async () => 'uploaded')
-    await expect(gate.runEffectExclusive(effect)).rejects.toThrow(/NOT_OWNER/)
+    const uploadIntent = { tool: 'nox-upload-local-file', args: { attachment_id: 'a1' }, kind: 'upload' }
+    await expect(gate.runEffectExclusive(effect, undefined, uploadIntent)).rejects.toThrow(/NOT_OWNER/)
     expect(effect).not.toHaveBeenCalled()
   })
 
@@ -188,6 +193,7 @@ describe('mutation ownership (Epoch 02.1)', () => {
   it('forward writes are rejected while an undo is active', async () => {
     const release = deferred<{ content: Array<{ type: string; text?: string }> }>()
     const journal = new MutationJournal()
+    journal.setThread('thread-owner')
     const entry = await journal.record({
       tool: 'notion-update-page',
       args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: {} } },
@@ -215,6 +221,7 @@ describe('mutation ownership (Epoch 02.1)', () => {
 
   it('double undo dispatches exactly once', async () => {
     const journal = new MutationJournal()
+    journal.setThread('thread-owner')
     const entry = await journal.record({
       tool: 'notion-update-page',
       args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: {} } },

@@ -4,7 +4,7 @@ import { openDB, deleteDB } from 'idb'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { openNoxDB, DB_VERSION } from '../src/lib/history/schema'
 import { threadRepository, type ThreadRepository } from '../src/lib/history/repository'
-import { MutationJournal, idbJournalStore } from '../src/lib/writes/journal'
+import { MutationJournal, idbJournalStore, type JournalEntry } from '../src/lib/writes/journal'
 import { startPersistedTurn } from '../src/lib/history/turn'
 
 describe('IndexedDB schema', () => {
@@ -113,13 +113,107 @@ describe('persistent mutation journal', () => {
     expect(await journal.newestFirst()).toEqual([])
   })
 
-  it('continues timestamp order after reopening persisted future entries', async () => {
-    const entries = [{ id: 'old', ts: Date.now() + 10_000, threadId: 't', turnId: 'x', status: 'applied' as const, tool: 'old', args: {}, kind: 'write' }]
-    const store = { append: async (entry: typeof entries[number]) => { entries.push(entry) }, list: async () => [...entries] }
-    const reopened = new MutationJournal(store)
-    reopened.setThread('t')
-    await reopened.record({ tool: 'new', args: {}, kind: 'write' })
-    expect((await reopened.newestFirst()).map((entry) => entry.tool)).toEqual(['new', 'old'])
+  it('orders same-timestamp entries deterministically by id', async () => {
+    const fixed = Date.now()
+    const entries = [
+      { id: 'z-last', ts: fixed, threadId: 't', turnId: 'x', status: 'applied' as const, tool: 'old', args: {}, kind: 'write' },
+      { id: 'a-first', ts: fixed, threadId: 't', turnId: 'x', status: 'applied' as const, tool: 'new', args: {}, kind: 'write' },
+    ]
+    const journal = new MutationJournal({ append: async () => undefined, list: async () => entries })
+    const first = await journal.newestFirst()
+    const second = await journal.newestFirst()
+    expect(first.map((entry) => entry.id)).toEqual(second.map((entry) => entry.id))
+    expect(first).toHaveLength(2)
+  })
+
+  it('assigns timestamps without scanning stored payloads', async () => {
+    let lists = 0
+    const kept: JournalEntry[] = []
+    const journal = new MutationJournal({
+      append: async (entry) => { kept.push(entry) },
+      list: async () => { lists++; throw new Error('must not scan') },
+    })
+    journal.setThread('t')
+    await journal.record({ tool: 'write', args: {}, kind: 'write' })
+    expect(kept).toHaveLength(1)
+    expect(kept[0].ts).toBeGreaterThan(0)
+    expect(lists).toBe(0)
+  })
+
+  it('keeps intent and settlement under one operation id', async () => {
+    const journal = new MutationJournal()
+    journal.setThread('thread-a')
+    const scope = { threadId: 'thread-a', turnId: 'turn-1', workspaceId: 'ws', connectionGeneration: 'c', ownerGeneration: 'o' }
+    const intent = await journal.beginIntent({ tool: 'notion-update-page', args: { a: 1 }, kind: 'content-update', scope })
+    expect(intent.status).toBe('pending')
+    expect(intent.scope).toEqual(scope)
+    const settled = await journal.settleIntent(intent.id, { status: 'applied', outcomeDetail: 'ok' })
+    expect(settled?.id).toBe(intent.id)
+    expect(settled?.status).toBe('applied')
+    expect(await journal.newestFirst()).toHaveLength(1)
+  })
+
+  it('reserves an undo atomically so a second claim loses', async () => {
+    const journal = new MutationJournal()
+    journal.setThread('thread-a')
+    const scope = { threadId: 'thread-a', turnId: 'turn-1', workspaceId: 'ws', connectionGeneration: 'c', ownerGeneration: 'o' }
+    const original = await journal.record({
+      tool: 'write', args: {}, kind: 'content-update', inverse: { tool: 'undo', args: {} },
+    })
+    const first = await journal.beginUndoReservation(original.id, { tool: 'undo', args: {}, kind: 'undo', scope })
+    expect(first).not.toBeNull()
+    expect((await journal.getEntry(original.id))?.reservedByUndoOpId).toBe(first!.undo.id)
+    expect(await journal.undoable()).toHaveLength(0)
+    const second = await journal.beginUndoReservation(original.id, { tool: 'undo', args: {}, kind: 'undo', scope })
+    expect(second).toBeNull()
+  })
+
+  it('records user review without rewriting the outcome', async () => {
+    const journal = new MutationJournal()
+    journal.setThread('thread-a')
+    const scope = { threadId: 'thread-a', turnId: 'turn-1', workspaceId: 'ws', connectionGeneration: 'c', ownerGeneration: 'o' }
+    const intent = await journal.beginIntent({ tool: 't', args: {}, kind: 'write', scope })
+    expect(await journal.markReviewed(intent.id, 'inspected')).toBe(true)
+    expect(await journal.markReviewed('missing', 'x')).toBe(false)
+    const entry = await journal.getEntry(intent.id)
+    expect(entry?.status).toBe('pending')
+    expect(entry?.reviewedAt).toBeGreaterThan(0)
+  })
+
+  it('serves thread-scoped journal reads without loading other threads', async () => {
+    const db = await openNoxDB()
+    await db.clear('journal')
+    const journal = new MutationJournal(idbJournalStore(openNoxDB))
+    journal.setThread('thread-a')
+    await journal.record({ tool: 'a-write', args: {}, kind: 'write' })
+    journal.setThread('thread-b')
+    await journal.record({ tool: 'b-write', args: {}, kind: 'write' })
+    const scoped = new MutationJournal(idbJournalStore(openNoxDB))
+    scoped.scopeThread('thread-a')
+    expect((await scoped.newestFirst()).map((e) => e.tool)).toEqual(['a-write'])
+    expect((await scoped.newestForThread('thread-b')).map((e) => e.tool)).toEqual(['b-write'])
+    db.close()
+  })
+
+  it('resolves concurrent undo reservations atomically in IndexedDB', async () => {
+    const db = await openNoxDB()
+    await db.clear('journal')
+    const scope = { threadId: 'thread-a', turnId: 'turn-1', workspaceId: 'ws', connectionGeneration: 'c', ownerGeneration: 'o' }
+    const first = new MutationJournal(idbJournalStore(openNoxDB))
+    first.setThread('thread-a')
+    const original = await first.record({
+      tool: 'write', args: {}, kind: 'content-update', inverse: { tool: 'undo', args: {} },
+    })
+    const second = new MutationJournal(idbJournalStore(openNoxDB))
+    second.setThread('thread-a')
+    const [a, b] = await Promise.all([
+      first.beginUndoReservation(original.id, { tool: 'undo', args: {}, kind: 'undo', scope }),
+      second.beginUndoReservation(original.id, { tool: 'undo', args: {}, kind: 'undo', scope }),
+    ])
+    expect([a, b].filter(Boolean)).toHaveLength(1)
+    const winner = a ?? b
+    expect((await first.getEntry(original.id))?.reservedByUndoOpId).toBe(winner!.undo.id)
+    db.close()
   })
 
   it('releases a failed undo claim instead of wedging later undo', async () => {

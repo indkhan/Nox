@@ -245,6 +245,13 @@ holds the runner). Timeline and Undo-bar undo share one runtime path that
 re-reads the journal entry from storage before dispatch; viewer and busy
 panels show why undo is unavailable instead of an enabled control.
 
+Every mutation persists a pending intent — operation scope, frozen arguments,
+and pre-image — before dispatch and settles it to applied, failed, or unknown
+afterwards, so a crash can never leave a dispatched effect without a durable
+identity. Mutations require a persisted thread and an established workspace;
+a success the store cannot record surfaces as an applied-with-recovery-warning
+instead of plain success.
+
 ```text
 change requested
       │
