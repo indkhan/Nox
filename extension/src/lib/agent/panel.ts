@@ -14,6 +14,7 @@ import { createTurnAccessState } from './turn-access'
 import { PlanEngine } from '../architect/plan-engine'
 import { WORKSPACE_PLAN_TOOL_NAME } from '../architect/tool'
 import { UPLOAD_FILE_TOOL_NAME, uploadLocalAttachment } from '../attachments/upload-tool'
+import { normalizePageFetch } from '../notion/page-content'
 import { attachmentRepository } from '../history/attachments'
 
 // The store dynamically imports this module, so a static import back is cycle-free.
@@ -39,6 +40,9 @@ export const writeGate = new WriteGate({
   callTool: (name, args, signal) => notion.scheduleCallTool(name, args, signal),
   fetchPageMarkdown: async (pageId, signal) => {
     const result = await notion.scheduleCallTool('notion-fetch', { id: pageId }, signal)
+    // A tool-declared failure is never page content: surface it so the guard
+    // refuses instead of snapshotting error text as a baseline.
+    if (result.isError) throw new Error(result.content.map((c) => c.text ?? '').join('\n') || 'the page read failed')
     return result.content.filter((c) => c.type === 'text').map((c) => c.text ?? '').join('\n')
   },
   getMode: () => turnAccess.mode(),
@@ -142,6 +146,8 @@ export const agentLoop = new AgentLoop({
 export interface PageWithContext extends MentionRef {
   markdown?: string
   error?: string
+  /** Provider completeness of the read behind `markdown`, when established. */
+  remoteStatus?: 'complete' | 'partial' | 'unavailable'
 }
 
 /** Fetches a mentioned page's content for context injection (best effort). */
@@ -150,14 +156,25 @@ export async function fetchMentionContext(page: MentionRef, signal?: AbortSignal
     const result = await notion.scheduleCallTool('notion-fetch', { id: page.pageId }, signal)
     if (result.isError) throw new Error(result.content.map(c => c.text ?? '').join('\n'))
     signal?.throwIfAborted()
+    // Judge completeness from the full envelope (never error text as
+    // content); partial reads stay available for analysis but establish no
+    // replacement baseline. Unrecognized/unavailable payloads are reported
+    // as unavailable rather than fed to the model as page content.
+    await writeGate.rememberNormalizedRead(page.pageId, result)
+    let remoteStatus: PageWithContext['remoteStatus']
+    try {
+      remoteStatus = normalizePageFetch(page.pageId, result).status
+    } catch (error) {
+      return { ...page, error: error instanceof Error ? error.message : String(error) }
+    }
     const markdown = result.content
       .filter((c) => c.type === 'text')
       .map((c) => c.text)
       .join('\n')
-    await writeGate.rememberPageRead(page.pageId, markdown)
     return {
       ...page,
       markdown,
+      remoteStatus,
     }
   } catch (error) {
     signal?.throwIfAborted()

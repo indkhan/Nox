@@ -268,6 +268,15 @@ it('labels fetched empty, unavailable and partial context explicitly', () => {
   expect(text).toContain('status="partial"')
   expect(text).toContain('total_chars="9000"')
 })
+
+it('labels provider-partial reads partial even when short', () => {
+  const text = buildContextPreamble({ mentions: [
+    { pageId: 'short-partial', markdown: 'alpha\nbeta', remoteStatus: 'partial' },
+    { pageId: 'short-complete', markdown: 'alpha\nbeta', remoteStatus: 'complete' },
+  ] })
+  expect(text).toMatch(/id="short-partial"[\s\S]*?status="partial"/)
+  expect(text).toMatch(/id="short-complete"[\s\S]*?status="fetched"/)
+})
 it('can retrieve an omitted decisive fact and expires handles between turns', async () => {
   const executor = new ToolExecutor({ callTool: async () => ({ content: [{ type: 'text', text: 'x'.repeat(25000) + 'DECISION: ship' }] }), assertToolAllowed: () => {} })
   executor.beginTurn()

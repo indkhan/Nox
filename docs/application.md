@@ -253,6 +253,15 @@ collapsible details; approving dispatches the frozen snapshot, never the live
 request object, and there is no approve-all. Workspace plans validate every
 field with 1–10 operations, and evidence must be pages Nox actually retrieved
 in the conversation — unknown ids are rejected, never shown as inspected.
+Content replacement additionally requires a successful, complete read baseline
+the model observed in the current thread, workspace, and connection: failed,
+partial (truncated/omitted blocks), unavailable, and unrecognized fetch
+payloads never authorize replacement, and a missing baseline forces a
+re-fetch instead of reusing guard reads the model never saw. The baseline hash
+binds approval; the gate re-checks it at guard time and again immediately
+before dispatch, retiring it after a write or unknown outcome. An external
+edit between the final read and the provider write remains a documented race
+without provider conditional-write support.
 
 Forward writes, upload effects, and undo share one serial mutation runner in
 the panel holding the `nox-agent-owner` Web Lock lease. The gate refuses
@@ -284,7 +293,7 @@ approval ─► Ask mode: ask for changes
       │       Auto mode: allow only low-risk, in-context changes
       │       untrusted/out-of-context/bulk changes: always ask or refuse
       ▼
-guard ─────► fetch + hash page; refuse if it changed since Nox read it
+guard ─────► normalized re-fetch; refuse stale, partial, or unrecognized baselines
       │
       ▼
 execute ───► call Notion MCP and verify content writes

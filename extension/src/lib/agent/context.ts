@@ -10,7 +10,12 @@ export function truncateResult(text: string, budgetChars: number): string {
   return text.slice(0, Math.max(0, budgetChars - TRUNCATION_MARKER.length)) + TRUNCATION_MARKER
 }
 
-export interface PageContext extends MentionRef { markdown?: string; error?: string }
+export interface PageContext extends MentionRef {
+  markdown?: string
+  error?: string
+  /** Provider completeness of the read behind `markdown`, when established. */
+  remoteStatus?: 'complete' | 'partial' | 'unavailable'
+}
 
 export interface ContextInput {
   currentPage?: CurrentPage
@@ -40,7 +45,15 @@ export function buildContextPreamble(input: ContextInput, excerpt: (text: string
     const active = currentPage && key(currentPage.pageId) === id
     const text = page.markdown
     const budget = Math.min(8000, remaining)
-    const status = page.error ? 'unavailable' : text === undefined ? 'reference-only' : text.length > budget ? 'partial' : 'fetched'
+    // Remote completeness outranks local length: a provider-partial read is
+    // partial even when short, so the model fetches the omitted scope.
+    const status = page.error || page.remoteStatus === 'unavailable'
+      ? 'unavailable'
+      : text === undefined
+        ? 'reference-only'
+        : page.remoteStatus === 'partial' || text.length > budget
+          ? 'partial'
+          : 'fetched'
     const view = active && currentPage.viewId ? ` view_id="${escapeXml(currentPage.viewId)}"` : ''
     const tag = active ? 'page' : 'mentioned_page'
     const location = active ? '<current_notion_location>\n' : ''

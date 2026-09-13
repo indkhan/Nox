@@ -1,0 +1,4 @@
+{
+  "isError": true,
+  "content": [{ "type": "text", "text": "mcp http 429: slow down" }]
+}

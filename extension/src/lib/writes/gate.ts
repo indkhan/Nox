@@ -2,6 +2,7 @@ import type { ToolCallRequest } from '../codex/client'
 import { classifyToolCall, detectRichPage, requiresWorkspacePlan, type CallClassification } from './classify'
 import { buildInverse, type PreImage } from './inverse'
 import { capturePageSnapshot, assertUnchanged, GuardViolation, type PageSnapshot } from './guard'
+import { normalizePageFetch, normalizePageText, requireCompleteBaseline, BaselineError, type NormalizedPageFetch, type PageFetchStatus } from '../notion/page-content'
 import { ApprovalEngine, evaluateApproval, type Mode, type SmallEditGrant } from './approvals'
 import { MutationJournal, type IntentScope, type JournalEntry } from './journal'
 import { hashMarkdown } from './guard'
@@ -51,6 +52,20 @@ interface OwnershipSnapshot {
   connectionGeneration: string | null
 }
 
+/**
+ * A model-visible read baseline: the normalized content hash plus the scope
+ * it was established in. Guard-only reads never populate this map, so a
+ * guard snapshot the model never saw cannot become an edit baseline.
+ */
+interface BaselineRecord {
+  hash: string
+  status: PageFetchStatus
+  workspaceId: string | null
+  connectionGeneration: string | null
+  threadId: string | null
+  capturedAt: number
+}
+
 export interface ReadbackEvidence {
   supported: boolean
   match?: boolean
@@ -59,7 +74,7 @@ export interface ReadbackEvidence {
 }
 
 export interface WriteGateDeps {
-  callTool: (name: string, args: Record<string, unknown>, signal?: AbortSignal) => Promise<{ content: Array<{ type: string; text?: string }> }>
+  callTool: (name: string, args: Record<string, unknown>, signal?: AbortSignal) => Promise<{ content: Array<{ type: string; text?: string }>; isError?: boolean }>
   fetchPageMarkdown: (pageId: string, signal?: AbortSignal) => Promise<string>
   getMode: () => Mode
   getContextSet: () => Set<string>
@@ -88,7 +103,14 @@ const CONTENT_WRITE_KINDS = new Set(['content-replace', 'content-update'])
 export class WriteGate {
   readonly approvals: ApprovalEngine
   readonly journal: MutationJournal
-  private readonly readHashes = new Map<string, string>()
+  /**
+   * Model-visible read baselines by normalized page id. Only successful reads
+   * the model actually observed are stored here — guard snapshots stay out,
+   * so two fresh guard reads can never bless a stale model proposal.
+   * Entries are scoped (thread/workspace/connection); stale scopes read as
+   * missing, which forces a re-fetch after resume or reconnect.
+   */
+  private readonly baselines = new Map<string, BaselineRecord>()
   /**
    * Serial mutation runner. Forward writes, upload effects, and undo all
    * share this chain so at most one critical interval (final guard →
@@ -127,8 +149,67 @@ export class WriteGate {
     return this.undoActive
   }
 
+  /**
+   * Record a model-visible page read as a candidate edit baseline. Partial
+   * reads are stored as partial (analysis only, never replacement); failed,
+   * unavailable, and unrecognized payloads establish nothing.
+   */
   async rememberPageRead(pageId: string, markdown: string): Promise<void> {
-    this.readHashes.set(normalizeId(pageId) ?? pageId, await hashMarkdown(markdown))
+    let record
+    try {
+      record = normalizePageText(pageId, markdown)
+    } catch {
+      return
+    }
+    this.baselines.set(record.pageId, {
+      hash: await hashMarkdown(record.markdown),
+      status: record.status,
+      workspaceId: this.deps.getWorkspaceId?.() ?? null,
+      connectionGeneration: this.deps.ownership?.getConnectionGeneration?.() ?? null,
+      threadId: this.journal.captureScope().threadId,
+      capturedAt: Date.now(),
+    })
+  }
+
+  /**
+   * Record a model-visible `notion-fetch` envelope, preserving provider
+   * completeness signals. Tool-declared failures and unrecognized wrappers
+   * establish no baseline; partial reads are stored as partial.
+   */
+  async rememberNormalizedRead(
+    pageId: string,
+    result: { isError?: unknown; content?: Array<{ type: string; text?: string }>; structuredContent?: unknown },
+  ): Promise<void> {
+    let record
+    try {
+      record = normalizePageFetch(pageId, result)
+    } catch {
+      return
+    }
+    this.baselines.set(record.pageId, {
+      hash: await hashMarkdown(record.markdown),
+      status: record.status,
+      workspaceId: this.deps.getWorkspaceId?.() ?? null,
+      connectionGeneration: this.deps.ownership?.getConnectionGeneration?.() ?? null,
+      threadId: this.journal.captureScope().threadId,
+      capturedAt: Date.now(),
+    })
+  }
+
+  /** In-scope baseline for a page, or null when no valid baseline exists. */
+  private currentBaseline(pageId: string): BaselineRecord | null {
+    const key = normalizeId(pageId) ?? pageId
+    const record = this.baselines.get(key)
+    if (!record) return null
+    if (record.threadId !== this.journal.captureScope().threadId) return null
+    if (record.workspaceId !== (this.deps.getWorkspaceId?.() ?? null)) return null
+    if (record.connectionGeneration !== (this.deps.ownership?.getConnectionGeneration?.() ?? null)) return null
+    return record
+  }
+
+  /** Retire the baseline after a write, unknown outcome, or incompatible read. */
+  private retireBaseline(pageId: string): void {
+    this.baselines.delete(normalizeId(pageId) ?? pageId)
   }
 
   async handle(req: ToolCallRequest): Promise<unknown> {
@@ -220,12 +301,20 @@ export class WriteGate {
         } catch (e) {
           const [status, detail] = classifyDispatchOutcome(e)
           await this.settleUndo(undoOpId, opts.journalId, status, detail)
+          if (status === 'unknown') {
+            const undoPage = trustedPageId(args)
+            if (undoPage) this.retireBaseline(undoPage)
+          }
           throw e
         }
         if (isErrorResult(result)) {
           const detail = result.content.map((part) => part.text ?? '').join('\n')
           await this.settleUndo(undoOpId, opts.journalId, 'failed', detail)
           throw new Error(detail || 'the undo was rejected by the provider')
+        }
+        {
+          const undoPage = trustedPageId(args)
+          if (undoPage) this.retireBaseline(undoPage)
         }
         if (undoOpId) {
           try {
@@ -354,8 +443,28 @@ export class WriteGate {
         detail: 'This change cannot be verified by readback — inspect it in Notion before marking it reviewed.',
       }
     }
-    const current = await this.deps.fetchPageMarkdown(intended.pageId)
-    const match = (await hashMarkdown(current)) === (await hashMarkdown(intended.content))
+    let current: NormalizedPageFetch
+    try {
+      current = normalizePageText(intended.pageId, await this.deps.fetchPageMarkdown(intended.pageId))
+    } catch (e) {
+      return {
+        supported: false,
+        targetPageId: intended.pageId,
+        detail:
+          e instanceof BaselineError
+            ? `${e.message} Inspect it in Notion before marking it reviewed.`
+            : `The current state could not be read (${e instanceof Error ? e.message : String(e)}). Inspect it in Notion before marking it reviewed.`,
+      }
+    }
+    if (current.status !== 'complete') {
+      return {
+        supported: false,
+        targetPageId: intended.pageId,
+        detail:
+          'The current read is incomplete, so the outcome cannot be verified by readback — inspect it in Notion before marking it reviewed.',
+      }
+    }
+    const match = (await hashMarkdown(current.markdown)) === (await hashMarkdown(intended.content))
     return {
       supported: true,
       match,
@@ -459,8 +568,19 @@ export class WriteGate {
       const result = await this.deps.callTool(req.tool, req.args, req.signal)
       const pageId = req.tool === 'notion-fetch' ? firstString(req.args.id) ?? firstString(req.args.page_id) : undefined
       if (pageId) {
-        const markdown = result.content.filter((c) => c.type === 'text').map((c) => c.text ?? '').join('\n')
-        await this.rememberPageRead(pageId, markdown)
+        // A tool-declared failure establishes no baseline and no evidence.
+        if (result?.isError === true) return result
+        // Only a successful, complete read establishes inspection evidence
+        // and an edit baseline. Partial reads are remembered as partial
+        // (analysis only); unrecognized payloads establish nothing.
+        let complete = false
+        try {
+          complete = normalizePageFetch(pageId, result).status === 'complete'
+        } catch {
+          complete = false
+        }
+        await this.rememberNormalizedRead(pageId, result)
+        if (!complete) return result
       }
       // Successful retrievals feed the plan-evidence ledger; a recording
       // failure must never fail the read itself.
@@ -495,6 +615,33 @@ export class WriteGate {
       await this.requireNoConflict(scope.threadId)
     } catch (e) {
       return textResult(e instanceof Error ? e.message : String(e))
+    }
+
+    // Content writes need a successful, complete, in-scope read baseline the
+    // model actually observed. This runs before any approval card: without a
+    // baseline there is nothing to consent to. Guard-only reads never
+    // populate baselines, and a missing baseline (fresh resume, reconnect,
+    // scope change) forces a re-fetch instead of blessing two matching guard
+    // reads against a stale proposal. The frozen hash binds the later
+    // approval and dispatch to the observed state.
+    let baselineHash: string | null = null
+    if (effect.needsBaseline) {
+      const target = effect.targets[0]
+      const baseline = target ? this.currentBaseline(target) : null
+      if (!baseline) {
+        return textResult(
+          'BASELINE_REQUIRED: Nox has no complete read of this page in the current conversation — ' +
+            'fetch it with notion-fetch and inspect the result before replacing its content. No changes were made.',
+        )
+      }
+      if (baseline.status !== 'complete') {
+        return textResult(
+          'PARTIAL_BASELINE: the available read of this page is incomplete (truncated content) — ' +
+            'fetch the returned omitted block ids or a targeted subtree before replacing its content. ' +
+            'A partial read cannot support whole-page replacement. No changes were made.',
+        )
+      }
+      baselineHash = baseline.hash
     }
 
     const needsWorkspacePlan = requiresWorkspacePlan(classification, req.tool, effect.args) &&
@@ -560,9 +707,10 @@ export class WriteGate {
     return this.runExclusive(async () => {
       try {
         this.reassertMutation(snapshot, req.signal)
-      } catch (e) {
-        return textResult(e instanceof Error ? e.message : String(e))
-      }
+    } catch (e) {
+      return textResult(e instanceof Error ? e.message : String(e))
+    }
+
       if (reservationId !== undefined && this.deps.checkPlanReservation && !this.deps.checkPlanReservation(reservationId, planScope)) {
         return textResult('PLAN_MISMATCH: the approved operation is no longer valid for this turn — request a fresh review. No changes were made.')
       }
@@ -575,7 +723,7 @@ export class WriteGate {
           return textResult('PLAN_REQUIRED: this turn already used its five unplanned small edits — propose a workspace plan for the remaining work. No changes were made.')
         }
       }
-      return this.executeMutation(req, classification, scope, effect, frozenArgs, reservationId)
+      return this.executeMutation(req, classification, scope, effect, frozenArgs, reservationId, baselineHash)
     })
   }
 
@@ -584,9 +732,13 @@ export class WriteGate {
    * serial runner; no IndexedDB transaction is held across the network await.
    * The intent (with frozen args and pre-image) is persisted before dispatch;
    * a storage failure there returns a storage error with zero external calls.
+   * A final guard recheck runs after intent persistence and immediately
+   * before dispatch, so admission delay cannot silently stale the write.
+   * Guard reads share the scheduler with dispatch but never hold its slot
+   * across each other: every read completes before dispatch is invoked.
    */
-  private async executeMutation(req: ToolCallRequest, classification: CallClassification, scope: IntentScope, effect: ValidatedEffect, frozenArgs: Record<string, unknown>, reservationId?: string): Promise<unknown> {
-    const guard = await this.runGuardPhase(req, classification, contentTarget(effect))
+  private async executeMutation(req: ToolCallRequest, classification: CallClassification, scope: IntentScope, effect: ValidatedEffect, frozenArgs: Record<string, unknown>, reservationId: string | undefined, baselineHash: string | null): Promise<unknown> {
+    const guard = await this.runGuardPhase(req, classification, contentTarget(effect), baselineHash)
     if (!guard.ok) return guard.result
 
     let intent: JournalEntry
@@ -612,12 +764,39 @@ export class WriteGate {
         return textResult('TURN_CANCELLED: the turn was cancelled before dispatch. No changes were made.')
       }
 
+      // Final recheck immediately before dispatch: the intent is durable,
+      // but the page may have changed while approval or intent persistence
+      // was in flight. A mismatch settles known failure (nothing was
+      // dispatched) and demands fresh review — the approved content was
+      // based on an older state. This check runs with no awaits between it
+      // and dispatch besides the settle on failure.
+      if (guard.snapshot) {
+        let finalHash: string
+        try {
+          const final = await capturePageSnapshot((id) => this.deps.fetchPageMarkdown(id, req.signal), guard.snapshot.pageId)
+          requireCompleteBaseline(final.record)
+          finalHash = final.hash
+        } catch (e) {
+          const detail = e instanceof BaselineError || e instanceof GuardViolation ? e.message : `could not re-read the page (${e instanceof Error ? e.message : String(e)})`
+          await this.settleProtected(intent.id, { status: 'failed', outcomeDetail: detail })
+          return textResult(`${detail} Write aborted before dispatch.`)
+        }
+        if (finalHash !== guard.snapshot.hash) {
+          await this.settleProtected(intent.id, { status: 'failed', outcomeDetail: 'page changed between guard and dispatch' })
+          return textResult(
+            'PAGE_CHANGED_SINCE_READ: this page was edited in Notion after Nox read it — ' +
+              'the approved change was based on an older state. Re-read the page and request a fresh review. No changes were made.',
+          )
+        }
+      }
+
       let result: unknown
       try {
         result = await this.deps.callTool(req.tool, frozenArgs, req.signal)
       } catch (e) {
         const [status, detail] = classifyDispatchOutcome(e)
         await this.settleProtected(intent.id, { status, outcomeDetail: detail })
+        if (status === 'unknown' && effect.targets[0]) this.retireBaseline(effect.targets[0])
         this.consumeReservation(reservationId)
         throw e
       }
@@ -627,7 +806,7 @@ export class WriteGate {
         this.consumeReservation(reservationId)
         return result
       }
-      if (guard.preImage.pageId) this.readHashes.delete(normalizeId(guard.preImage.pageId) ?? guard.preImage.pageId)
+      if (guard.preImage.pageId) this.retireBaseline(guard.preImage.pageId)
 
       // Record applied immediately after the confirmed response, before
       // optional verification reads. A success-record failure keeps the
@@ -697,12 +876,15 @@ export class WriteGate {
    * Pre-image + guard for content writes; snapshot config/properties/moves
    * otherwise. Reads only — no intent needed and no dispatch happens here.
    * The guarded page comes from the validated effect for forward writes, or
-   * from trusted journal-sourced shapes for undo.
+   * from trusted journal-sourced shapes for undo. `baselineHash` is the
+   * frozen model-observed baseline the approval was bound to; a mismatch
+   * means the approved content was based on an older state.
    */
   private async runGuardPhase(
     req: ToolCallRequest,
     classification: CallClassification,
     pageId: string | undefined,
+    baselineHash: string | null = null,
   ): Promise<{ ok: true; snapshot: PageSnapshot | null; preImage: PreImage } | { ok: false; result: unknown }> {
     let snapshot: PageSnapshot | null = null
     let preImage: PreImage = { kind: classification.kind }
@@ -711,14 +893,18 @@ export class WriteGate {
         if (pageId) {
           const fetchPage = (id: string) => this.deps.fetchPageMarkdown(id, req.signal)
           snapshot = await capturePageSnapshot(fetchPage, pageId)
+          // Only complete reads can anchor a replacement or an inverse.
+          // Partial reads stay usable for analysis elsewhere; here they
+          // refuse with a targeted re-fetch path.
+          requireCompleteBaseline(snapshot.record)
           const undoExpectedHash = firstString(req.args.__nox_expected_hash)
           if (undoExpectedHash && undoExpectedHash !== snapshot.hash) {
             throw new GuardViolation('PAGE_CHANGED_AFTER_NOX_WRITE: this page changed after Nox edited it. Undo was refused to protect the newer edits.')
           }
-          const expectedHash = this.readHashes.get(normalizeId(pageId) ?? pageId)
-          if (expectedHash && expectedHash !== snapshot.hash) {
+          if (baselineHash != null && baselineHash !== snapshot.hash) {
             throw new GuardViolation(
-              'PAGE_CHANGED_SINCE_READ: this page was edited in Notion after Nox read it. Re-read the page and try again — refusing to overwrite the newer edits.',
+              'PAGE_CHANGED_SINCE_READ: this page was edited in Notion after Nox read it — ' +
+                'the approved change was based on an older state. Re-read the page and request a fresh review. No changes were made.',
             )
           }
           preImage = {
@@ -733,7 +919,7 @@ export class WriteGate {
         }
       }
     } catch (e) {
-      if (e instanceof GuardViolation) return { ok: false, result: textResult(e.message) }
+      if (e instanceof GuardViolation || e instanceof BaselineError) return { ok: false, result: textResult(e.message) }
       // Snapshot failure must not block the write silently — say so.
       return { ok: false, result: textResult(`ERROR: could not capture a pre-image (${e instanceof Error ? e.message : e}). Write aborted.`) }
     }
