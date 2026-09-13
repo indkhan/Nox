@@ -29,7 +29,6 @@ const turnAccess = createTurnAccessState()
 export const planEngine = new PlanEngine(
   (plan) => useNoxStore.getState().addPlan(plan),
   (id) => useNoxStore.getState().removePlan(id),
-  { getThreadId: () => historyThreadId },
 )
 const attachments = attachmentRepository(openNoxDB)
 export function prepareAgentTurn(mode: Mode, pageIds: string[], attachmentIds: string[] = []): void {
@@ -46,7 +45,9 @@ export const writeGate = new WriteGate({
   getContextSet: () => turnAccess.contextPages(),
   journal: new MutationJournal(idbJournalStore(openNoxDB)),
   onApproval: (approval) => useNoxStore.getState().addApproval(approval),
-  authorizeStructuralChange: (name, args) => planEngine.authorize(name, args),
+  authorizeStructuralChange: (effect, scope) => planEngine.authorize(effect, scope),
+  checkPlanReservation: (reservationId, scope) => planEngine.checkReservation(reservationId, scope),
+  consumePlanReservation: (reservationId, resultText) => void planEngine.consume(reservationId, resultText),
   ownership: {
     isOwner: () => getWindowRole() === 'owner',
     getOwnerGeneration: () => getOwnerGeneration(),
@@ -66,7 +67,14 @@ export const agentLoop = new AgentLoop({
   executor: new ToolExecutor({
     callTool: async (name, args, signal, provenance) => {
       if (name === WORKSPACE_PLAN_TOOL_NAME) {
-        const decision = await planEngine.request(args, turnAccess.mode() === 'auto')
+        // Explicit human approval is required in both Ask and Auto modes:
+        // a proposed plan never authorizes itself.
+        const decision = await planEngine.request(args, {
+          workspaceId: notion.identity?.workspaceId ?? null,
+          connectionGeneration: notion.connectionGeneration,
+          threadId: historyThreadId,
+          turnId: writeGate.journal.captureScope().turnId,
+        })
         return { content: [{ type: 'text', text: decision === 'approved' ? 'PLAN_APPROVED: execute only the listed operations.' : 'PLAN_REJECTED: no changes were authorized.' }] }
       }
       if (name === UPLOAD_FILE_TOOL_NAME) {
@@ -117,6 +125,7 @@ export const agentLoop = new AgentLoop({
   cancelPending: () => {
     writeGate.approvals.rejectAllPending()
     planEngine.rejectPending()
+    planEngine.invalidateApproval()
     for (const approval of useNoxStore.getState().pendingApprovals) useNoxStore.getState().removeApproval(approval.id)
   },
   getDynamicTools: async () => toDynamicTools(await notion.listTools(), notion.capabilities),

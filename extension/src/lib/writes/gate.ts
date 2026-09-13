@@ -10,6 +10,7 @@ import { UncertainDispatchError } from '../mcp/scheduler'
 import { isPreDispatchFailure } from '../mcp/client'
 import { validateEffect, type ValidatedEffect } from './effects'
 import { recordRetrievals } from '../agent/retrievals'
+import type { PlanScope } from '../architect/plan-engine'
 
 export type MutationRejectionCode =
   | 'NOT_OWNER'
@@ -64,7 +65,9 @@ export interface WriteGateDeps {
   getContextSet: () => Set<string>
   journal?: MutationJournal
   onApproval?: ApprovalEngine['notify']
-  authorizeStructuralChange?: (name: string, args: Record<string, unknown>) => { allowed: boolean; reason?: string }
+  authorizeStructuralChange?: (effect: ValidatedEffect, scope: PlanScope) => { allowed: boolean; reason?: string; reservationId?: string }
+  checkPlanReservation?: (reservationId: string, scope: PlanScope) => boolean
+  consumePlanReservation?: (reservationId: string, resultText?: string) => void
   ownership?: MutationOwnership
   /** Workspace scope for intents; mutations are refused without one. */
   getWorkspaceId?: () => string | null
@@ -491,36 +494,49 @@ export class WriteGate {
     }
 
     const needsWorkspacePlan = requiresWorkspacePlan(classification, effect.args)
+    // Plan-covered operations skip only redundant ordinary consent: every
+    // other check still runs, and the reservation is revalidated before
+    // dispatch and consumed at dispatch, whatever the outcome.
+    const planScope: PlanScope = {
+      workspaceId: scope.workspaceId,
+      connectionGeneration: scope.connectionGeneration,
+      threadId: scope.threadId,
+      turnId: scope.turnId,
+    }
+    let reservationId: string | undefined
     if (needsWorkspacePlan) {
-      const authorization = this.deps.authorizeStructuralChange?.(req.tool, effect.args)
+      const authorization = this.deps.authorizeStructuralChange?.(effect, planScope)
       if (!authorization?.allowed) {
         return textResult(authorization?.reason ?? 'PLAN_REQUIRED: structural workspace changes require an approved plan.')
       }
+      reservationId = authorization.reservationId
     }
 
     const mode = this.deps.getMode()
-    const verdict = needsWorkspacePlan && mode === 'auto'
-      ? { action: 'allow' as const }
-      : evaluateApproval({ ...classification, name: req.tool, args: effect.args, provenance: req.provenance, targets: effect.targets, parents: effect.parents, affectedCount: effect.count }, {
-          mode,
-          contextSet: this.deps.getContextSet(),
-        })
-    if (verdict.action === 'refuse') {
-      return textResult(`REFUSED: ${verdict.reasons.join('; ')}. No changes were made.`)
-    }
-    // The frozen consent payload: approval displays effect.args and resolves
-    // the same snapshot for dispatch, so later edits of the request object
-    // cannot change what runs.
+    // Plan-covered operations skip only redundant ordinary consent: the plan
+    // card was the consent step, and every other check still runs below.
     let frozenArgs = effect.args
-    if (verdict.action === 'require-approval' && !approved) {
-      const decision = await this.approvals.request(
-        { ...classification, name: req.tool, args: effect.args, targets: effect.targets, parents: effect.parents, affectedCount: effect.count },
-        verdict,
-      )
-      if (!decision.approved) {
-        return textResult('REJECTED_BY_USER: the user declined this change. Do not retry it without asking.')
+    if (reservationId === undefined) {
+      const verdict = evaluateApproval({ ...classification, name: req.tool, args: effect.args, provenance: req.provenance, targets: effect.targets, parents: effect.parents, affectedCount: effect.count }, {
+        mode,
+        contextSet: this.deps.getContextSet(),
+      })
+      if (verdict.action === 'refuse') {
+        return textResult(`REFUSED: ${verdict.reasons.join('; ')}. No changes were made.`)
       }
-      frozenArgs = decision.frozenArgs
+      // The frozen consent payload: approval displays effect.args and resolves
+      // the same snapshot for dispatch, so later edits of the request object
+      // cannot change what runs.
+      if (verdict.action === 'require-approval' && !approved) {
+        const decision = await this.approvals.request(
+          { ...classification, name: req.tool, args: effect.args, targets: effect.targets, parents: effect.parents, affectedCount: effect.count },
+          verdict,
+        )
+        if (!decision.approved) {
+          return textResult('REJECTED_BY_USER: the user declined this change. Do not retry it without asking.')
+        }
+        frozenArgs = decision.frozenArgs
+      }
     }
 
     return this.runExclusive(async () => {
@@ -529,7 +545,10 @@ export class WriteGate {
       } catch (e) {
         return textResult(e instanceof Error ? e.message : String(e))
       }
-      return this.executeMutation(req, classification, scope, effect, frozenArgs)
+      if (reservationId !== undefined && this.deps.checkPlanReservation && !this.deps.checkPlanReservation(reservationId, planScope)) {
+        return textResult('PLAN_MISMATCH: the approved operation is no longer valid for this turn — request a fresh review. No changes were made.')
+      }
+      return this.executeMutation(req, classification, scope, effect, frozenArgs, reservationId)
     })
   }
 
@@ -539,7 +558,7 @@ export class WriteGate {
    * The intent (with frozen args and pre-image) is persisted before dispatch;
    * a storage failure there returns a storage error with zero external calls.
    */
-  private async executeMutation(req: ToolCallRequest, classification: CallClassification, scope: IntentScope, effect: ValidatedEffect, frozenArgs: Record<string, unknown>): Promise<unknown> {
+  private async executeMutation(req: ToolCallRequest, classification: CallClassification, scope: IntentScope, effect: ValidatedEffect, frozenArgs: Record<string, unknown>, reservationId?: string): Promise<unknown> {
     const guard = await this.runGuardPhase(req, classification, contentTarget(effect))
     if (!guard.ok) return guard.result
 
@@ -572,11 +591,13 @@ export class WriteGate {
       } catch (e) {
         const [status, detail] = classifyDispatchOutcome(e)
         await this.settleProtected(intent.id, { status, outcomeDetail: detail })
+        this.consumeReservation(reservationId)
         throw e
       }
       if (isToolError(result)) {
         const detail = textOfResult(result)
         await this.settleProtected(intent.id, { status: 'failed', outcomeDetail: detail || 'the provider reported the change as failed' })
+        this.consumeReservation(reservationId)
         return result
       }
       if (guard.preImage.pageId) this.readHashes.delete(normalizeId(guard.preImage.pageId) ?? guard.preImage.pageId)
@@ -619,9 +640,20 @@ export class WriteGate {
         console.error('[nox] write succeeded but inverse persistence failed', e)
         throw appliedRecoveryWarning(result)
       }
+      this.consumeReservation(reservationId, resultTextOf(result))
       return result
     } finally {
       this.activeIntentIds.delete(intent.id)
+    }
+  }
+
+  /** Consume a plan reservation at dispatch, whatever the outcome. Never throws. */
+  private consumeReservation(reservationId: string | undefined, resultText?: string): void {
+    if (reservationId === undefined) return
+    try {
+      this.deps.consumePlanReservation?.(reservationId, resultText)
+    } catch (e) {
+      console.error('[nox] plan reservation bookkeeping failed', e)
     }
   }
 
@@ -757,6 +789,16 @@ function isErrorResult(result: unknown): result is { isError: true; content: Arr
 function textOfResult(result: unknown): string {
   if (isErrorResult(result)) return result.content.map((part) => part.text ?? '').join('\n')
   return 'unknown guard outcome'
+}
+
+function resultTextOf(result: unknown): string | undefined {
+  if (typeof result !== 'object' || result === null) return undefined
+  const content = (result as { content?: unknown }).content
+  if (!Array.isArray(content)) return undefined
+  return content.filter((c): c is { type: string; text?: string } => typeof c === 'object' && c !== null)
+    .filter((c) => c.type === 'text')
+    .map((c) => c.text ?? '')
+    .join('\n')
 }
 
 /**

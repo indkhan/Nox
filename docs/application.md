@@ -238,7 +238,11 @@ parsed into a validated effect — canonical tool, frozen arguments, affected
 targets, and object count — within a per-operation size budget; unknown tool
 shapes are refused as unsupported and malformed proposals as invalid before any
 approval card or transport, and model-supplied internal fields are rejected
-rather than stripped silently. Approval cards show the complete canonical
+rather than stripped silently. Substantial work needs an explicit workspace
+plan with complete operation arguments in both Ask and Auto modes: approval
+covers exactly the listed operations once each, bound to the current
+workspace, connection, thread, and turn, and later creations are referenced
+only by operation label until a second concrete plan supplies their ids. Approval cards show the complete canonical
 payload with targets, object count, and destructive flags outside the
 collapsible details; approving dispatches the frozen snapshot, never the live
 request object, and there is no approve-all. Workspace plans validate every

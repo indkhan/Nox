@@ -6,7 +6,11 @@ import { buildContextPreamble, truncateResult, TRUNCATION_MARKER } from '../../s
 import { ToolExecutor, DEFAULT_STEP_LIMIT } from '../../src/lib/agent/executor'
 import type { McpTool } from '../../src/lib/mcp/client'
 import { CapabilityGate } from '../../src/lib/notion/capabilities'
-import { WORKSPACE_PLAN_TOOL } from '../../src/lib/architect/tool'
+import { WORKSPACE_PLAN_TOOL, WORKSPACE_PLAN_TOOL_NAME } from '../../src/lib/architect/tool'
+import { PlanEngine } from '../../src/lib/architect/plan-engine'
+import { recordRetrievals } from '../../src/lib/agent/retrievals'
+import { WriteGate } from '../../src/lib/writes/gate'
+import { MutationJournal } from '../../src/lib/writes/journal'
 
 describe('toDynamicTools', () => {
   const tools: McpTool[] = [
@@ -116,7 +120,8 @@ describe('truncateResult / context preamble', () => {
     }
     expect(schema.properties.evidence).toMatchObject({ minItems: 1, maxItems: 20 })
     expect(schema.properties.evidence.items?.required).toEqual(['id', 'title', 'kind', 'reason'])
-    expect(schema.properties.operations.items?.required).toEqual(['tool', 'summary'])
+    expect(schema.properties.operations).toMatchObject({ minItems: 1, maxItems: 10 })
+    expect(schema.properties.operations.items?.required).toEqual(['tool', 'args', 'summary'])
   })
 
   it('constrains plan operations to canonical Notion tool names', () => {
@@ -280,4 +285,111 @@ it('builds capability-aware evidence instructions without authorizing discussion
   expect(prompt).toMatch(/reference-only.*fetch/i)
   expect(prompt).toMatch(/upload inputs.*contents have not been read/i)
   expect(prompt).not.toContain('Your tools operate on the connected Notion workspace only.')
+})
+
+describe('plan-covered execution assembly (Epoch 06)', () => {
+  const THREAD = 'thread-assembly'
+  const ids = Array.from({ length: 10 }, (_, i) => `10000000-0000-4000-8000-0000000000${i.toString().padStart(2, '0')}`)
+
+  function assemble() {
+    const dispatches: string[] = []
+    const journal = new MutationJournal()
+    journal.setThread(THREAD)
+    const planScope = {
+      workspaceId: 'ws-1',
+      connectionGeneration: 'conn-1',
+      threadId: THREAD,
+      turnId: journal.captureScope().turnId ?? 'turn-assembly',
+    }
+    const engine = new PlanEngine(
+      (pending) => pending.resolve('approved'),
+    )
+    const gate = new WriteGate({
+      callTool: async (name, args) => {
+        dispatches.push(`${name}:${JSON.stringify(args)}`)
+        return { content: [{ type: 'text', text: 'ok' }] }
+      },
+      fetchPageMarkdown: async () => '# Simple\noriginal text',
+      getMode: () => 'ask',
+      getContextSet: () => new Set<string>(),
+      journal,
+      ownership: { isOwner: () => true, getOwnerGeneration: () => 'owner-1', getConnectionGeneration: () => 'conn-1' },
+      getWorkspaceId: () => 'ws-1',
+      authorizeStructuralChange: (effect, scope) => engine.authorize(effect, scope),
+      checkPlanReservation: (id, scope) => engine.checkReservation(id, scope),
+      consumePlanReservation: (id, text) => void engine.consume(id, text),
+    })
+    const executor = new ToolExecutor({
+      callTool: async (name, args, signal, provenance) => {
+        if (name === WORKSPACE_PLAN_TOOL_NAME) {
+          const decision = await engine.request(args, planScope)
+          return { content: [{ type: 'text', text: decision === 'approved' ? 'PLAN_APPROVED: execute only the listed operations.' : 'PLAN_REJECTED: no changes were authorized.' }] }
+        }
+        const result = (await gate.handle({ rid: 0, tool: name, args, namespace: null, signal, provenance })) as {
+          content?: Array<{ type: string; text?: string }>
+          isError?: boolean
+        }
+        if (result?.isError && Array.isArray(result.content)) {
+          throw new Error(result.content.map((c) => c.text).join('\n'))
+        }
+        return { content: result.content ?? [] }
+      },
+      assertToolAllowed: () => undefined,
+    })
+    return { dispatches, journal, engine, gate, executor }
+  }
+
+  function planArgs() {
+    return {
+      goal: 'Tune ten sources',
+      recommendation: 'Update each listed data source once',
+      evidence: ids.slice(0, 2).map((id, i) => ({ id, title: `Source ${i}`, kind: 'data-source', reason: 'listed' })),
+      operations: ids.map((id, i) => ({
+        tool: 'notion-update-data-source',
+        targetId: id,
+        args: { data_source_id: id },
+        summary: `Tune source ${i}`,
+      })),
+      consequences: [],
+    }
+  }
+
+  it('covers ten exact operations after one approval without extra cards', async () => {
+    const { dispatches, journal, gate, executor } = assemble()
+    recordRetrievals(THREAD, ids.slice(0, 2))
+    executor.beginTurn()
+    gate.beginTurn()
+    const planned = await executor.execute({ rid: 1, tool: WORKSPACE_PLAN_TOOL_NAME, args: planArgs(), namespace: null })
+    expect(planned.success).toBe(true)
+    for (let i = 0; i < 10; i++) {
+      const out = await executor.execute({
+        rid: 2 + i,
+        tool: 'notion-update-data-source',
+        args: { data_source_id: ids[i] },
+        namespace: null,
+      })
+      expect(out.success).toBe(true)
+    }
+    expect(dispatches).toHaveLength(10)
+    expect(gate.approvals.pendingCount).toBe(0)
+    expect(executor.stepsTaken).toBe(11)
+    expect((await journal.newestFirst()).filter((e) => e.status === 'applied')).toHaveLength(10)
+  })
+
+  it('refuses a deviation without dispatching or consuming another slot', async () => {
+    const { dispatches, gate, executor } = assemble()
+    recordRetrievals(THREAD, ids.slice(0, 2))
+    executor.beginTurn()
+    gate.beginTurn()
+    await executor.execute({ rid: 1, tool: WORKSPACE_PLAN_TOOL_NAME, args: planArgs(), namespace: null })
+    const deviated = await executor.execute({
+      rid: 2,
+      tool: 'notion-update-data-source',
+      args: { data_source_id: '20000000-0000-4000-8000-000000000000' },
+      namespace: null,
+    })
+    expect(deviated.success).toBe(false)
+    expect(deviated.displayText).toMatch(/PLAN_MISMATCH/)
+    expect(dispatches).toHaveLength(0)
+  })
 })

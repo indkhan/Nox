@@ -7,6 +7,8 @@ import { GuardViolation } from '../../src/lib/writes/guard'
 import { requestRuntimeUndo, undoEntry, undoNewest } from '../../src/lib/writes/undo'
 import { buildInverse } from '../../src/lib/writes/inverse'
 import { normalizeId } from '../../src/shared/notion-page'
+import type { ValidatedEffect } from '../../src/lib/writes/effects'
+import type { PlanScope } from '../../src/lib/architect/plan-engine'
 import type { Mode } from '../../src/lib/writes/approvals'
 
 const PAGE = 'a'.repeat(32)
@@ -16,7 +18,9 @@ function makeGate(over: {
   markdown?: () => string
   callTool?: (name: string, args: Record<string, unknown>) => Promise<{ content: Array<{ type: string; text?: string }>; isError?: boolean }>
   contextSet?: Set<string>
-  authorizeStructuralChange?: (name: string, args: Record<string, unknown>) => { allowed: boolean; reason?: string }
+  authorizeStructuralChange?: (effect: ValidatedEffect, scope: PlanScope) => { allowed: boolean; reason?: string; reservationId?: string }
+  checkPlanReservation?: (reservationId: string, scope: PlanScope) => boolean
+  consumePlanReservation?: (reservationId: string, resultText?: string) => void
   journal?: MutationJournal
   workspaceId?: string | null
   assertToolAllowed?: (tool: string) => void
@@ -39,6 +43,8 @@ function makeGate(over: {
     getContextSet: () => over.contextSet ?? new Set([PAGE]),
     journal,
     authorizeStructuralChange: over.authorizeStructuralChange ?? (() => ({ allowed: true })),
+    checkPlanReservation: over.checkPlanReservation,
+    consumePlanReservation: over.consumePlanReservation,
     // Existing suites exercise owner-panel behavior; viewer refusal is
     // pinned by tests/writes/ownership.test.ts and the default-deny test.
     ownership: {
@@ -122,22 +128,45 @@ describe('WriteGate', () => {
     expect(calls).toHaveLength(0)
   })
 
-  it('does not ask again for a plan-authorized structural write in Auto mode', async () => {
-    const { gate, calls } = makeGate({ mode: 'auto' })
-    const write = gate.handle({
+  it('plan-authorized operations skip redundant ordinary consent', async () => {
+    const seen: string[] = []
+    const { gate, calls } = makeGate({
+      mode: 'auto',
+      authorizeStructuralChange: () => ({ allowed: true, reservationId: 'res-1' }),
+      checkPlanReservation: (id) => {
+        seen.push(`check:${id}`)
+        return true
+      },
+      consumePlanReservation: (id) => void seen.push(`consume:${id}`),
+    })
+    const out = (await gate.handle({
       rid: 2,
       tool: 'notion-create-database',
       args: { parent: { page_id: PAGE } },
       namespace: null,
       provenance: 'untrusted-context',
-    })
-    const outcome = await Promise.race([
-      write.then(() => 'executed'),
-      new Promise<'blocked'>((resolve) => setTimeout(() => resolve('blocked'), 10)),
-    ])
-    if (outcome === 'blocked') gate.approvals.rejectAllPending()
-    expect(outcome).toBe('executed')
+    })) as { content: Array<{ text: string }> }
+    expect(out.content[0].text).toContain('ran notion-create-database')
     expect(calls).toHaveLength(1)
+    expect(gate.approvals.pendingCount).toBe(0)
+    expect(seen).toEqual(['check:res-1', 'consume:res-1'])
+  })
+
+  it('stale reservations refuse without dispatch', async () => {
+    const { gate, calls } = makeGate({
+      mode: 'auto',
+      authorizeStructuralChange: () => ({ allowed: true, reservationId: 'res-stale' }),
+      checkPlanReservation: () => false,
+    })
+    const out = (await gate.handle({
+      rid: 3,
+      tool: 'notion-create-database',
+      args: { parent: { page_id: PAGE } },
+      namespace: null,
+    })) as { isError?: boolean; content: Array<{ text?: string }> }
+    expect(out.isError).toBe(true)
+    expect(out.content[0].text).toMatch(/PLAN_MISMATCH/)
+    expect(calls).toHaveLength(0)
   })
 
   it('passes reads straight through without journaling', async () => {

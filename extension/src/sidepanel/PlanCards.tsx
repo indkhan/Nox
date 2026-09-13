@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useNoxStore } from './store'
+import type { PlannedOperation } from '../lib/architect/plan'
 
 export function PlanCards({ readOnly = false }: { readOnly?: boolean }) {
   const plans = useNoxStore((state) => state.pendingPlans)
@@ -19,6 +20,9 @@ export function PlanCards({ readOnly = false }: { readOnly?: boolean }) {
           pending.resolve(decision)
           removePlan(pending.id)
         }
+        const stepOf = new Map(
+          pending.plan.operations.map((operation, operationIndex) => [operation.opId, operationIndex + 1]),
+        )
 
         return (
           <div
@@ -56,7 +60,16 @@ export function PlanCards({ readOnly = false }: { readOnly?: boolean }) {
                       <span className="relative z-10 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-accent/30 bg-accent-tint text-[11px] font-semibold text-accent-ink">
                         {operationIndex + 1}
                       </span>
-                      <p className="pt-0.5 text-sm leading-relaxed text-ink">{operation.summary}</p>
+                      <div className="min-w-0 flex-1 pt-0.5">
+                        <p className="text-sm leading-relaxed text-ink">{operation.summary}</p>
+                        <OperationTarget operation={operation} stepOf={stepOf} />
+                        {operation.args != null && (
+                          <details className="mt-1">
+                            <summary className="cursor-pointer select-none text-[11px] text-ink-3">Operation details</summary>
+                            <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded bg-zinc-950 p-2 font-mono text-[10px] text-zinc-400">{JSON.stringify(operation.args, null, 2)}</pre>
+                          </details>
+                        )}
+                      </div>
                     </li>
                   ))}
                 </ol>
@@ -111,4 +124,17 @@ export function PlanCards({ readOnly = false }: { readOnly?: boolean }) {
       })}
     </div>
   )
+}
+
+/** Target line for one planned operation, including creation references. */
+function OperationTarget({ operation, stepOf }: { operation: PlannedOperation; stepOf: Map<string | undefined, number> }) {
+  const target = operation.targetId
+  if (target == null) return null
+  const text = typeof target === 'string'
+    ? `→ ${target}`
+    : (() => {
+        const step = stepOf.get(target.ref)
+        return step == null ? `← uses the new object from “${target.ref}”` : `← uses the new object from step ${step}`
+      })()
+  return <p className="mt-0.5 truncate text-[11px] text-ink-3">{text}</p>
 }
