@@ -9,6 +9,7 @@ import { normalizeId } from '../../shared/notion-page'
 import { UncertainDispatchError } from '../mcp/scheduler'
 import { isPreDispatchFailure } from '../mcp/client'
 import { validateEffect, type ValidatedEffect } from './effects'
+import { recordRetrievals } from '../agent/retrievals'
 
 export type MutationRejectionCode =
   | 'NOT_OWNER'
@@ -104,7 +105,6 @@ export class WriteGate {
   }
 
   beginTurn(): void {
-    this.approvals.beginTurn()
     this.turnActive = true
   }
 
@@ -455,6 +455,13 @@ export class WriteGate {
         const markdown = result.content.filter((c) => c.type === 'text').map((c) => c.text ?? '').join('\n')
         await this.rememberPageRead(pageId, markdown)
       }
+      // Successful retrievals feed the plan-evidence ledger; a recording
+      // failure must never fail the read itself.
+      try {
+        recordRetrievals(this.journal.captureScope().threadId, extractRetrievalIds(req.tool, req.args, result))
+      } catch {
+        // Evidence tracking is best-effort; the read already succeeded.
+      }
       return result
     }
 
@@ -494,18 +501,26 @@ export class WriteGate {
     const mode = this.deps.getMode()
     const verdict = needsWorkspacePlan && mode === 'auto'
       ? { action: 'allow' as const }
-      : evaluateApproval({ ...classification, name: req.tool, args: effect.args, provenance: req.provenance }, {
+      : evaluateApproval({ ...classification, name: req.tool, args: effect.args, provenance: req.provenance, targets: effect.targets, parents: effect.parents, affectedCount: effect.count }, {
           mode,
           contextSet: this.deps.getContextSet(),
         })
     if (verdict.action === 'refuse') {
       return textResult(`REFUSED: ${verdict.reasons.join('; ')}. No changes were made.`)
     }
+    // The frozen consent payload: approval displays effect.args and resolves
+    // the same snapshot for dispatch, so later edits of the request object
+    // cannot change what runs.
+    let frozenArgs = effect.args
     if (verdict.action === 'require-approval' && !approved) {
-      const approved = await this.approvals.request({ ...classification, name: req.tool, args: effect.args }, verdict)
-      if (!approved) {
+      const decision = await this.approvals.request(
+        { ...classification, name: req.tool, args: effect.args, targets: effect.targets, parents: effect.parents, affectedCount: effect.count },
+        verdict,
+      )
+      if (!decision.approved) {
         return textResult('REJECTED_BY_USER: the user declined this change. Do not retry it without asking.')
       }
+      frozenArgs = decision.frozenArgs
     }
 
     return this.runExclusive(async () => {
@@ -514,7 +529,7 @@ export class WriteGate {
       } catch (e) {
         return textResult(e instanceof Error ? e.message : String(e))
       }
-      return this.executeMutation(req, classification, scope, effect)
+      return this.executeMutation(req, classification, scope, effect, frozenArgs)
     })
   }
 
@@ -524,12 +539,9 @@ export class WriteGate {
    * The intent (with frozen args and pre-image) is persisted before dispatch;
    * a storage failure there returns a storage error with zero external calls.
    */
-  private async executeMutation(req: ToolCallRequest, classification: CallClassification, scope: IntentScope, effect: ValidatedEffect): Promise<unknown> {
+  private async executeMutation(req: ToolCallRequest, classification: CallClassification, scope: IntentScope, effect: ValidatedEffect, frozenArgs: Record<string, unknown>): Promise<unknown> {
     const guard = await this.runGuardPhase(req, classification, contentTarget(effect))
     if (!guard.ok) return guard.result
-    // effect.args is the canonical frozen copy from admission: later edits
-    // of the request object cannot change what is journaled or dispatched.
-    const frozenArgs = effect.args
 
     let intent: JournalEntry
     try {
@@ -583,7 +595,7 @@ export class WriteGate {
       if (inverse.kind === 'execute-tool' && guard.preImage.pageId) {
         try {
           const postWrite = await capturePageSnapshot((id) => this.deps.fetchPageMarkdown(id, req.signal), guard.preImage.pageId)
-          const command = effect.args.command as Record<string, unknown> | undefined
+          const command = frozenArgs.command as Record<string, unknown> | undefined
           const intendedContent = command?.type === 'replace_content' && typeof command.content === 'string' ? command.content : null
           if (intendedContent == null || postWrite.hash !== await hashMarkdown(intendedContent)) {
             throw new Error('post-write state cannot be attributed safely')
@@ -683,6 +695,38 @@ function textResult(text: string): unknown {
 
 function firstString(v: unknown): string | undefined {
   return typeof v === 'string' && v ? v : undefined
+}
+
+/** Object ids a successful read establishes as inspected evidence. */
+function extractRetrievalIds(
+  tool: string,
+  args: Record<string, unknown>,
+  result: { content: Array<{ type: string; text?: string }> },
+): string[] {
+  if (tool === 'notion-fetch') {
+    const id = firstString(args.id) ?? firstString(args.page_id)
+    return id ? [id] : []
+  }
+  if (tool === 'notion-search') {
+    try {
+      const text = result.content.filter((c) => c.type === 'text').map((c) => c.text ?? '').join('\n')
+      const parsed: unknown = JSON.parse(text)
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return []
+      const results = (parsed as Record<string, unknown>).results
+      if (!Array.isArray(results)) return []
+      const ids: string[] = []
+      for (const entry of results) {
+        if (entry && typeof entry === 'object' && !Array.isArray(entry)) {
+          const id = (entry as Record<string, unknown>).id
+          if (typeof id === 'string' && id) ids.push(id)
+        }
+      }
+      return ids
+    } catch {
+      return []
+    }
+  }
+  return []
 }
 
 /** Guarded page for content writes from a validated effect. */

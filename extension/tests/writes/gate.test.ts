@@ -165,7 +165,7 @@ describe('WriteGate', () => {
     expect(gate.approvals.pendingCount).toBe(1)
     const card = [...(await journal.newestFirst())]
     void card
-    gate.approvals.answer(gate.approvals['pending'].values().next().value!.id, 'approve')
+    gate.approvals.answer(gate.approvals.pendingIds[0], 'approve')
     const out = (await pending) as { content: Array<{ text: string }> }
     expect(out.content[0].text).toContain('ran notion-update-page')
 
@@ -739,6 +739,27 @@ describe('WriteGate effect validation (Epoch 05)', () => {
     })
     expect(received).not.toHaveProperty('__nox_expected_hash')
     expect(received).toMatchObject({ data: { page_id: PAGE } })
+  })
+
+  it('dispatches the frozen consent payload even when the request object changes afterwards', async () => {
+    const { gate, calls } = makeGate({ mode: 'ask' })
+    const args: Record<string, unknown> = {
+      data: { page_id: PAGE },
+      command: { type: 'update_properties', properties: { keep: 1 } },
+    }
+    const pending = gate.handle({ rid: 60, tool: 'notion-update-page', args, namespace: null })
+    await new Promise((r) => setTimeout(r, 10))
+    expect(gate.approvals.pendingCount).toBe(1)
+    // Mutate the original request object while the card is still open.
+    ;(args.command as Record<string, unknown>).properties = { swapped: 2 }
+    args.extra = 'late-target'
+    gate.approvals.answer([...gate.approvals['pending'].keys()][0]!, 'approve')
+    await pending
+    expect(calls).toHaveLength(1)
+    expect(calls[0].args).toEqual({
+      data: { page_id: PAGE },
+      command: { type: 'update_properties', properties: { keep: 1 } },
+    })
   })
 })
 

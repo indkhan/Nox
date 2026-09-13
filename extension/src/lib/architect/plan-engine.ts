@@ -1,5 +1,6 @@
 import { normalizeId } from '../../shared/notion-page'
-import { validateWorkspacePlan, type WorkspacePlan } from './plan'
+import { validateWorkspacePlan, type EvidenceScope, type WorkspacePlan } from './plan'
+import { isInspectedEvidence } from '../agent/retrievals'
 
 export interface PendingWorkspacePlan {
   id: string
@@ -15,6 +16,7 @@ export class PlanEngine {
   constructor(
     private readonly notify?: (plan: PendingWorkspacePlan) => void,
     private readonly dismiss?: (id: string) => void,
+    private readonly evidence?: { getThreadId: () => string | null },
   ) {}
 
   beginTurn(turnId: string): void {
@@ -24,7 +26,13 @@ export class PlanEngine {
   }
 
   request(input: unknown, approveAutomatically = false): Promise<'approved' | 'rejected'> {
-    const plan = validateWorkspacePlan(input)
+    // Structural validation first — including evidence-ledger membership —
+    // so malformed or fabricated plans fail before any card exists.
+    const scope: EvidenceScope = {
+      threadId: this.evidence?.getThreadId() ?? null,
+      isInspected: isInspectedEvidence,
+    }
+    const plan = validateWorkspacePlan(input, scope)
     if (approveAutomatically) {
       this.approved = plan
       return Promise.resolve('approved')

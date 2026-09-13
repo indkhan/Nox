@@ -25,7 +25,7 @@ export const WORKSPACE_PLAN_TOOL: DynamicTool = {
         },
       },
       operations: {
-        type: 'array', minItems: 1, maxItems: 20,
+        type: 'array', minItems: 1, maxItems: 10,
         items: {
           type: 'object', required: ['tool', 'summary'],
           properties: {

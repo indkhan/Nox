@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import type { CurrentPage } from '../shared/notion-page'
 import { isNoxMessage } from '../shared/messages'
 import type { Mode } from './Composer'
+import type { ApprovalDisplay } from '../lib/writes/approvals'
 import type { PendingWorkspacePlan } from '../lib/architect/plan-engine'
 
 export type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error'
@@ -31,8 +32,8 @@ interface NoxState {
   mode: Mode
   setMode: (mode: Mode) => void
 
-  pendingApprovals: Array<{ id: number; tool: string; summary: string; payloadJson: string; reasons: string[]; targetUrl?: string; reversibility: string }>
-  addApproval: (a: { id: number; tool: string; summary: string; payloadJson: string; reasons: string[]; targetUrl?: string; reversibility: string }) => void
+  pendingApprovals: ApprovalDisplay[]
+  addApproval: (a: ApprovalDisplay) => void
   removeApproval: (id: number) => void
 
   pendingPlans: PendingWorkspacePlan[]

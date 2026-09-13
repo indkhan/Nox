@@ -29,6 +29,7 @@ const turnAccess = createTurnAccessState()
 export const planEngine = new PlanEngine(
   (plan) => useNoxStore.getState().addPlan(plan),
   (id) => useNoxStore.getState().removePlan(id),
+  { getThreadId: () => historyThreadId },
 )
 const attachments = attachmentRepository(openNoxDB)
 export function prepareAgentTurn(mode: Mode, pageIds: string[], attachmentIds: string[] = []): void {

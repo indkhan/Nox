@@ -238,7 +238,12 @@ parsed into a validated effect — canonical tool, frozen arguments, affected
 targets, and object count — within a per-operation size budget; unknown tool
 shapes are refused as unsupported and malformed proposals as invalid before any
 approval card or transport, and model-supplied internal fields are rejected
-rather than stripped silently.
+rather than stripped silently. Approval cards show the complete canonical
+payload with targets, object count, and destructive flags outside the
+collapsible details; approving dispatches the frozen snapshot, never the live
+request object, and there is no approve-all. Workspace plans validate every
+field with 1–10 operations, and evidence must be pages Nox actually retrieved
+in the conversation — unknown ids are rejected, never shown as inspected.
 
 Forward writes, upload effects, and undo share one serial mutation runner in
 the panel holding the `nox-agent-owner` Web Lock lease. The gate refuses

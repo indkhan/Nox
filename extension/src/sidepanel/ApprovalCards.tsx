@@ -2,13 +2,14 @@ import { useEffect, useRef, useState } from 'react'
 import { useNoxStore } from './store'
 import { writeGate } from '../lib/agent/panel'
 import { requestRuntimeUndo } from '../lib/writes/undo'
+import type { ApprovalDisplay } from '../lib/writes/approvals'
 
-type CardApproval = { id: number; tool: string; summary: string; payloadJson: string; reasons: string[]; targetUrl?: string; reversibility: string }
+type CardApproval = ApprovalDisplay
 
 /**
- * Approval cards (MVP §7): tool, plain-language summary, exact payload,
- * Approve / Approve all this turn / Reject. Renders above the composer and
- * blocks the turn until answered.
+ * Approval cards (MVP §7): tool, plain-language summary, targets and effect
+ * scope, complete inspectable payload, Approve / Reject. Renders above the
+ * composer and blocks the turn until answered.
  */
 export function ApprovalCards({ readOnly = false }: { readOnly?: boolean }) {
   const pending = useNoxStore((s) => s.pendingApprovals)
@@ -32,13 +33,18 @@ export function ApprovalCards({ readOnly = false }: { readOnly?: boolean }) {
               <li key={reason}>{reason}</li>
             ))}
           </ul>
+          <p className="mt-1.5 text-[11px] text-zinc-400" data-testid={`approval-scope-${approval.id}`}>
+            {approval.affectedCount} object{approval.affectedCount === 1 ? '' : 's'}
+            {approval.targets.length > 0 && ` · ${approval.targets.slice(0, 5).join(', ')}${approval.targets.length > 5 ? ', …' : ''}`}
+            {approval.destructive ? ' · Destructive' : ' · Non-destructive'}
+          </p>
           <div className="mt-2 flex items-center gap-2 text-[11px] text-zinc-500">
             {approval.targetUrl && <a href={approval.targetUrl} target="_blank" rel="noreferrer" className="nox-active underline-offset-2 hover:underline">Open target</a>}
             <span>{approval.reversibility}</span>
           </div>
           <details className="mt-1.5">
             <summary className="cursor-pointer select-none text-[11px] text-zinc-500">Technical details</summary>
-            <pre className="mt-1 max-h-32 overflow-auto rounded bg-zinc-950 p-2 font-mono text-[10px] text-zinc-400">{approval.payloadJson}</pre>
+            <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded bg-zinc-950 p-2 font-mono text-[10px] text-zinc-400">{approval.payloadJson}</pre>
           </details>
           <div className="mt-3 flex flex-wrap gap-2">
             <button
@@ -50,15 +56,6 @@ export function ApprovalCards({ readOnly = false }: { readOnly?: boolean }) {
               className="rounded-md bg-zinc-100 px-3 py-1.5 text-xs font-semibold text-zinc-900 hover:bg-white"
             >
               Approve
-            </button>
-            <button
-              onClick={() => {
-                writeGate.approvals.answer(approval.id, 'approve-all')
-                useNoxStore.getState().pendingApprovals.forEach((a) => removeApproval(a.id))
-              }}
-              className="rounded-md border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800"
-            >
-              Approve all this turn
             </button>
             <button
               onClick={() => {
