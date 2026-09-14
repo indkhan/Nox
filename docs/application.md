@@ -469,7 +469,11 @@ Nox/
 
 Nox requires Node.js 22+. The main installer uses an existing pnpm 10+ installation or
 downloads a pinned pnpm release through Node's Corepack, then checks whether Codex is
-installed and signed in and whether Chrome is present.
+installed and signed in and whether Chrome is present. Codex discovery resolves to an
+absolute path with an explicit `CODEX_BIN` override that fails closed; release archives
+carry the root license plus assembled third-party notices, are staged in an isolated
+temporary directory, and share one version source (`extension/package.json`, display
+`v<version>-alpha`).
 
 ```bash
 node install.mjs                 # install, build, and register the bridge

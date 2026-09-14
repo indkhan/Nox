@@ -1,5 +1,7 @@
 import { researchConfig, verifyResearchTools } from './research'
 import type { NativeBridge } from './native'
+// Single version source: extension/package.json (see manifest.config.ts mapping).
+import { version as NOX_VERSION } from '../../../package.json'
 
 /** `model/list` entry — everything the UI needs to render a picker (MVP §10b). */
 export interface ModelInfo {
@@ -128,7 +130,7 @@ export class CodexClient {
   async initialize(): Promise<string> {
     this.wire()
     const result = (await this.bridge.rpc<Record<string, unknown>>('initialize', {
-      clientInfo: { name: 'nox', title: 'Nox', version: '0.1.0' },
+      clientInfo: { name: 'nox', title: 'Nox', version: NOX_VERSION },
       capabilities: { experimentalApi: true },
     })) as { userAgent?: string }
     this.bridge.notify('initialized')
