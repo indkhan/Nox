@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useNoxStore } from './store'
 import { launchConsentFlow, notion } from '../lib/notion/panel'
-import { logError, logInfo } from '../lib/log'
+import { logError, logInfo, safeErrorDetail } from '../lib/log'
 import { agentLoop, expireAgentGrants, planEngine, writeGate } from '../lib/agent/panel'
 
 /** Dev-only: paste a token JSON (from spikes/.notion-token.json) to skip consent. */
@@ -63,7 +63,8 @@ export function ConnectionCard() {
         }
         throw e
       }
-      logInfo(`Notion connected: ${info.identity.workspaceName ?? info.identity.userName ?? 'workspace'}`)
+      // Epoch 14 / L2: connection stage only — workspace/user names stay out of diagnostics.
+      logInfo('Notion connected')
       setConnection({
         connectionStatus: 'connected',
         identity: info.identity,
@@ -71,8 +72,7 @@ export function ConnectionCard() {
       })
     } catch (e) {
       const raw = e instanceof Error ? e.message : String(e)
-      console.error('[nox] Notion connect failed:', e)
-      logError(`Notion connect failed: ${raw}`)
+      logError(`Notion connect failed: ${safeErrorDetail(e)}`)
       const explained = notion.explain(e)
       // Friendly line + raw hop-level detail ([discovery]/[register]/[consent]/…)
       const detail = explained.userMessage === raw ? raw : `${explained.userMessage} (${raw})`
@@ -107,7 +107,7 @@ export function ConnectionCard() {
     } catch (e) {
       // Storage-clear failure is visible, never reported as complete (M8).
       const message = e instanceof Error ? e.message : String(e)
-      logError(`Notion disconnect failed: ${message}`)
+      logError(`Notion disconnect failed: ${safeErrorDetail(e)}`)
       setConnection({
         connectionStatus: 'error',
         identity: null,

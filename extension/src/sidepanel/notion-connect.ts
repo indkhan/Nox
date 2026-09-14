@@ -1,5 +1,5 @@
 import { notion } from '../lib/notion/panel'
-import { logError, logInfo } from '../lib/log'
+import { logError, logInfo, safeErrorDetail } from '../lib/log'
 import { useNoxStore } from './store'
 
 /** Restores an existing Notion authorization without opening the OAuth UI. */
@@ -52,7 +52,8 @@ export async function restoreNotionAction(): Promise<void> {
       }
       throw error
     }
-    logInfo(`Notion restored: ${info.identity.workspaceName ?? info.identity.userName ?? 'workspace'}`)
+    // Epoch 14 / L2: connection stage only — workspace/user names stay out of diagnostics.
+    logInfo('Notion restored: connected')
     setConnection({
       connectionStatus: 'connected',
       identity: info.identity,
@@ -63,7 +64,7 @@ export async function restoreNotionAction(): Promise<void> {
     const raw = error instanceof Error ? error.message : String(error)
     const explained = notion.explain(error)
     const detail = explained.userMessage === raw ? raw : `${explained.userMessage} (${raw})`
-    logError(`Notion restore failed: ${raw}`)
+    logError(`Notion restore failed: ${safeErrorDetail(error)}`)
     setConnection({ connectionStatus: 'error', identity: null, limitations: [], connectionError: detail })
   }
 }

@@ -172,7 +172,7 @@ function LogsSection() {
               .map((e) => `${new Date(e.t).toLocaleTimeString()} [${e.level}] ${e.msg}`)
               .join('\n')}
       </pre>
-      <p className="mt-1 text-[10px] text-zinc-600">Facing a problem? Copy this log and attach it to your bug report.</p>
+      <p className="mt-1 text-[10px] text-zinc-600">Review for private content before sharing. Facing a problem? Copy this log and attach it to your bug report.</p>
     </section>
   )
 }

@@ -133,7 +133,9 @@ export class NativeBridge {
       try {
         this.dispatch(JSON.parse(result.text))
       } catch {
-        console.error('[nox] reassembled envelope was not JSON (preview):', result.text.slice(0, 200))
+        // Epoch 14 / L2: category only — envelope text may carry answer or
+        // workspace content and must never enter diagnostics.
+        console.error('[nox] reassembled envelope was not JSON')
       }
       return
     }

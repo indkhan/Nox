@@ -1,7 +1,7 @@
 import { useNoxStore } from './store'
 import { connectCodex, bridge } from '../lib/codex/panel'
 import { classifyBridgeFailure, healthHint } from '../lib/codex/health'
-import { logError, logInfo } from '../lib/log'
+import { logError, logInfo, safeErrorDetail } from '../lib/log'
 
 let connecting: Promise<void> | null = null
 let lifecycleSubscribed = false
@@ -112,7 +112,7 @@ async function connect(): Promise<void> {
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e)
     const health = classifyBridgeFailure(message)
-    logError(`Codex connect failed: ${message}`)
+    logError(`Codex connect failed: ${safeErrorDetail(e)}`)
     // Leave the port clean for the next attempt.
     try {
       bridge.disconnect()
@@ -166,7 +166,7 @@ async function reconnect(generation: number): Promise<void> {
     if (generation !== activeReconnectGeneration) return
     const message = e instanceof Error ? e.message : String(e)
     const health = classifyBridgeFailure(message)
-    logError(`Codex reconnect failed: ${message}`)
+    logError(`Codex reconnect failed: ${safeErrorDetail(e)}`)
     try {
       bridge.disconnect()
     } catch {

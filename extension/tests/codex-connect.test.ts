@@ -48,7 +48,7 @@ vi.mock('../src/sidepanel/store', () => ({
 }))
 vi.mock('../src/lib/codex/panel', () => ({ connectCodex: state.connect, bridge: state.bridge }))
 vi.mock('../src/lib/codex/health', () => ({ classifyBridgeFailure: () => 'unknown', healthHint: () => '' }))
-vi.mock('../src/lib/log', () => ({ logError: vi.fn(), logInfo: vi.fn() }))
+vi.mock('../src/lib/log', () => ({ logError: vi.fn(), logInfo: vi.fn(), safeErrorDetail: vi.fn(() => 'mock-error') }))
 vi.mock('../src/lib/settings', () => ({ loadSettings: state.loadSettings }))
 vi.mock('../src/lib/agent/panel', () => ({
   agentLoop: { setOverrides: state.setOverrides },

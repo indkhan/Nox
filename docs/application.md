@@ -436,7 +436,8 @@ its own conversation data under its normal `~/.codex` storage.
 | Token exposure | Public-client OAuth, session-only access token, rotated refresh token, no OpenAI token in Chrome. |
 | Model-output XSS | Markdown output is sanitized with DOMPurify. |
 | Runaway work | Tool, time, concurrency, retry, and request-rate limits. |
-| Malformed/large native messages | Envelope validation, a 32 MiB inbound limit, and validated chunk reassembly. |
+| Malformed/large native messages | Envelope validation, a 32 MiB inbound limit, and validated chunk reassembly. Reassembly failures log a category only, never envelope content. |
+| Support-log disclosure | Diagnostics log event categories, hop/stage, safe status codes, operation IDs, and connection stages only — no prompt bodies, page titles, tokens, provider bodies, upload URLs, or queries. Console capture converts errors to safe metadata with credential redaction; Copy is user-initiated with a review reminder and no telemetry. |
 | Two active panels | One owner selected with Web Locks; other panels are viewers. |
 
 See [THREAT-MODEL.md](THREAT-MODEL.md) and [PERMISSIONS.md](PERMISSIONS.md) for the full

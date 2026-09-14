@@ -13,7 +13,7 @@ import { removeUnlinkedAttachments } from '../lib/history/attachments'
 import { openNoxDB } from '../lib/history/schema'
 import { onDeletionNotice } from '../lib/history/deletion'
 import { HISTORY_SAVE_ERROR, startPersistedTurn, type PersistedTurn } from '../lib/history/turn'
-import { logError, logInfo } from '../lib/log'
+import { logError, logInfo, safeErrorDetail } from '../lib/log'
 import { requestRuntimeUndo } from '../lib/writes/undo'
 import { restoreTurns } from '../lib/history/restore'
 import type { MentionRef } from '../shared/notion-page'
@@ -100,7 +100,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
     // a cleanup failure is logged and never blocks startup.
     void removeUnlinkedAttachments(openNoxDB).then((removed) => {
       if (removed > 0) logInfo(`Removed ${removed} unlinked legacy attachment(s)`)
-    }).catch((error) => logError(`Legacy attachment cleanup failed: ${error instanceof Error ? error.message : String(error)}`))
+    }).catch((error) => logError(`Legacy attachment cleanup failed: ${safeErrorDetail(error)}`))
     return () => { cancelled = true }
   }, [setActiveThreadId])
 
@@ -123,7 +123,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
       setTurns(restored)
       setThreadTitle(thread.title)
       await chrome.storage.local.set({ nox_thread_id: threadId, nox_thread_title: thread.title })
-    })().catch((error) => logError(`History open failed: ${error instanceof Error ? error.message : String(error)}`))
+    })().catch((error) => logError(`History open failed: ${safeErrorDetail(error)}`))
   }, [agentBusy, openThreadRequest, setActiveThreadId, setThreadTitle])
 
   // Header "new chat" button resets the conversation view.
@@ -208,7 +208,8 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
     busyRef.current = true
     setAgentBusy(true)
     setBusy(true)
-    logInfo(`Send: ${text.slice(0, 120)}`)
+    // Epoch 14 / L2: diagnostics record the turn operation only, never prompt text.
+    logInfo(`Send: starting turn ${turnId} (mode=${mode})`)
     setTurns((t) => [...t, { id: turnId, userText: text, view: { activity: [], answer: '', error: null, pending: true, historyError: persisted ? null : HISTORY_SAVE_ERROR } }])
     const patch = (fn: (v: TurnView) => TurnView) =>
       setTurns((all) => all.map((turn) => turn.id === turnId ? { ...turn, view: fn(turn.view) } : turn))
@@ -328,7 +329,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
       const message = e instanceof Error ? e.message : String(e)
       patch((v) => ({ ...v, error: message, outcome: 'failed', pending: false }))
       await persisted?.persistAssistant(streamedAnswer, lastUsageRef.current ?? undefined, currentActivity, 'failed', message).catch(() => undefined)
-      logError(`Turn failed: ${message}`)
+      logError(`Turn failed: ${safeErrorDetail(e)}`)
     } finally {
       clearTimeout(deadline)
       sendAbortRef.current = null

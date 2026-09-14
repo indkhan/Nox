@@ -82,7 +82,7 @@ vi.mock('../src/sidepanel/Icons', () => ({
 }))
 vi.mock('../src/lib/agent/panel', () => ({ agentLoop: { setOverrides: state.setOverrides } }))
 vi.mock('../src/lib/history/panel', () => ({ claimWindowRole: vi.fn(async () => 'owner') }))
-vi.mock('../src/lib/log', () => ({ installLogCapture: vi.fn(), logError: vi.fn(), logInfo: vi.fn() }))
+vi.mock('../src/lib/log', () => ({ installLogCapture: vi.fn(), logError: vi.fn(), logInfo: vi.fn(), safeErrorDetail: vi.fn(() => 'mock-error') }))
 vi.mock('../src/sidepanel/codex-connect', () => ({
   connectCodexAction: vi.fn(async () => undefined),
   reconnectCodexAction: vi.fn(async () => undefined),
