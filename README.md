@@ -171,7 +171,9 @@ Two halves, both yours:
 | Native-tool isolation per Codex version and model | Fail-closed feature/MCP inspection tests | Per-model matrix in [answer-quality-verification.md](docs/answer-quality-verification.md); reference Codex 0.153.4 | Pending live runs; a newer-than-tested Codex runs with an unverified warning |
 
 Skipped opt-in cases are pending, never passed. No release is certified
-vulnerability-free; see the [smoke checklist](docs/smoke.md) for the per-release gate.
+vulnerability-free; see the [smoke checklist](docs/smoke.md) for the per-release gate
+and the [remediation evidence log](docs/adversarial-remediation-evidence.md) for the
+per-finding test evidence and pending live acceptance.
 
 ## Documentation
 

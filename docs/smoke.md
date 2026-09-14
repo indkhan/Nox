@@ -7,7 +7,10 @@ real Chrome, Codex quota, OAuth, and a scratch Notion workspace.
 
 Record the release tag, tester, OS/Chrome version, Notion plan, and date in the
 GitHub release notes. Never mark an account-dependent item complete from unit
-test results alone.
+test results alone. Record per-scenario outcomes in
+[adversarial-remediation-evidence.md](adversarial-remediation-evidence.md);
+`node scripts/release-smoke.mjs --publish-gate` refuses to publish while any
+required C01–C17 row is not PASS.
 
 ## Adaptive workspace architecture
 
