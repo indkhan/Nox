@@ -72,8 +72,8 @@ The extension is MV3 and has three runtime pieces.
 
 | Part | Location | Responsibility |
 |---|---|---|
-| Service worker | `extension/src/background/` | Tracks the active Notion page from tab URLs, keeps recent-page metadata, opens the side panel, and installs/verifies the Notion Origin-strip rule. |
-| Content script | `extension/src/content/` | Reads only the visible page title and icon. Page identity comes from the tab URL, not the DOM. |
+| Service worker | `extension/src/background/` | Tracks the active Notion page from tab URLs, keeps recent-page metadata, opens the side panel, installs the narrow Notion Origin-strip rule (installed/unverified pre-OAuth), and restricts credential storage to trusted contexts. |
+| Content script | `extension/src/content/` | Reads only the visible page title and icon within bounded sizes. Page identity comes from the tab URL, not the DOM; title/icon are untrusted labels and the script needs no storage access. |
 | Side panel | `extension/src/sidepanel/` | Owns the UI and long-running runtime: connections, agent loop, approvals, streaming, history, and settings. |
 
 The panel is the only product surface. Until both Codex and Notion are connected, the
@@ -117,13 +117,19 @@ capability gate.
 1. Nox discovers Notion's OAuth endpoints.
 2. It registers itself as a public client and uses Authorization Code + PKCE.
 3. The access token stays in session storage; the refresh token is durable in local
-   extension storage and is rotated safely. Every authorization mints a persisted
+   extension storage and is rotated safely. Both areas are restricted to trusted
+   extension contexts at background startup (content scripts cannot read refresh
+   credentials; page metadata still flows via runtime messages). Every authorization mints a persisted
    credential generation; sign-out, wipe, delete-all, and replacement logins invalidate
    it first. Refreshes serialize across panels under a shared refresh lock, re-check the
    persisted generation inside a short credential-write lock (never held across network),
    and use the validated discovered token endpoint. A stale response can never overwrite
    a newer login, and an old `invalid_grant` can never wipe one.
 4. Nox initializes MCP, fetches the user's identity, and asks for the current tool list.
+   The authorized initialize is the endpoint compatibility acceptance probe: only an
+   affirmative accepted response verifies the scoped connection, while 401, 403,
+   429, 5xx, redirects, malformed envelopes, and lookup failures leave it
+   unverified and clear the rule for a narrow reinstall on retry.
 5. Tools unavailable on the user's Notion plan are not offered to Codex.
 
 Sign-out captures the revocation token, cancels turns/grants, clears local/session tokens
@@ -150,8 +156,14 @@ as a minimum, and any wait that would run past the turn deadline stops instead.
 
 Chrome adds an extension `Origin` header that Notion MCP rejects. The background worker
 therefore installs one narrow declarativeNetRequest rule that removes that header only
-for the Notion MCP endpoint. It probes the rule before connection; a failed probe stops
-the connection instead of silently producing authorization errors.
+for the owning extension's requests to the exact `https://mcp.notion.com/mcp` endpoint
+(initiator plus exact-URL plus `xmlhttprequest`; no broader fallback). Before OAuth it
+verifies narrow-rule installation only and reports installed/unverified; normal workspace
+operation waits for the owner's authenticated acceptance afterwards. Failed installation
+or acceptance removes the rule and leaves an actionable retry that reinstalls narrowly.
+Extension messages use exact discriminants with bounded UUID/URL/title/icon validation;
+the panel accepts current-page updates only from the background context, and the
+background accepts page metadata only from the owning tab context with stale-URL checks.
 
 ### Codex connection
 
