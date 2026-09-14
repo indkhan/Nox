@@ -134,7 +134,12 @@ one panel propagates to all panels via storage events; delete-all clears credent
 through the same serialized generation path before touching the database.
 
 All workspace calls go to `https://mcp.notion.com/mcp` using MCP protocol `2025-06-18`.
-Responses may be JSON or server-sent events. The scheduler allows at most three calls at
+Responses may be JSON or server-sent events. Response bodies stream through an 8 MiB
+byte budget (declared `Content-Length` is only an early hint): oversize bodies fail
+honestly without a mutation retry, SSE is parsed by content type with CRLF/LF/CR,
+comments, and newline-joined `data:` semantics, and only the matching request id
+completes a call — another id's error never does. Malformed responses after dispatch
+surface as uncertain outcomes. The scheduler allows at most three calls at
 once, limits general traffic to 3 requests/second and search to 0.5 requests/second, and
 retries temporary failures with `Retry-After` support for trusted known reads only.
 Mutations, upload tickets, and unknown tools run exactly once: an ambiguous failure
@@ -159,8 +164,16 @@ side panel ⇄ com.nox.bridge ⇄ codex app-server
 
 `bridge/nox-bridge.mjs` is a dependency-free Node host. It finds the newest usable Codex
 binary, starts `codex app-server` in a temporary working directory, relays requests and
-notifications, and reports health. It retries crashes up to five times. Large messages
+notifications, and reports health. It retries crashes up to five times. Codex stdout is
+decoded as a UTF-8 stream (split multibyte sequences survive) with one line capped at
+8 MiB characters; truncated or malformed lines are discarded with a bounded diagnostic
+and never carried across a restart. Large messages
 are split into 256 KiB chunks because Chrome caps native-host output messages at 1 MiB.
+The extension reassembles at most eight chunked envelopes (256 chunks each, 32 MiB
+aggregate, 30-second lifetime), validates every envelope discriminant and id without
+coercion, answers malformed Codex requests with a bounded correlated error only when
+the request id is valid, and drops stale or mismatched traffic without settling
+unrelated work.
 
 The Codex client initializes the app server, lists the models available to the user's
 account, and starts or resumes a persistent thread with:
