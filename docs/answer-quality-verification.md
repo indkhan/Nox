@@ -55,6 +55,40 @@ history visual acceptance therefore remain pending in a connected scratch profil
 
 Local diagnostic reports are under ignored `.release/`; they are not release approval.
 
+### Native-tool isolation evidence (Epoch 14)
+
+`node scripts/live/codex-smoke.mjs [--search] [--toggle-search]` is opt-in, uses
+synthetic prompts only (`Reply with exactly: OK`, follow-up recall, and public
+Node.js/Chrome release questions), offers no dynamic tools, and rejects every
+tool call. It now records versioned isolation evidence in ignored
+`.release/codex-smoke*.json` under `isolation`:
+
+- exact resolved Codex executable and version (`bridge/resolve-codex.mjs`),
+  OS platform/arch/release, model ID, effort, and requested web-search setting;
+- `userAgent`, thread ID, whether a turn was actually submitted, and the
+  `turn/start` count (no automatic replay — the harness never resubmits a
+  failed turn);
+- thread-scoped `experimentalFeature/list` (every `RESTRICTED_FEATURES` entry
+  must be `false`, with `shell_tool` as the shell availability gate) and
+  `mcpServerStatus/list` (zero inherited tools) results for the thread that
+  actually ran;
+- whether research events were observed while disabled.
+
+An unexpected powerful native surface fails closed for that model/version
+combination (the run throws and the advertised support matrix narrows); config
+allowlists are never weakened and no provider secrets enter Chrome for
+inspection.
+
+Non-provable limits: observed native search may exceed the 12-item boundary in
+flight; no model can promise semantic instruction obedience. Isolation is
+verified through feature/MCP inspection, never inferred from a writable temp
+cwd or a read-only sandbox label. This stays a small per-model/version matrix,
+not a statistical benchmark suite.
+
+| Codex executable / version | OS | Model / effort | Settings (search) | Features / MCP result | Turn submitted | Research disabled observed | Replay | Disposition |
+|---|---|---|---|---|---|---|---|---|
+| pending live run | pending | pending | pending | pending | pending | pending | none (harness never resubmits) | BLOCKED — no supported Codex session in this environment; deterministic `tests/codex/research.test.ts` fail-closed cover only |
+
 
 ## Stage 6 evidence (2026-09-06)
 
