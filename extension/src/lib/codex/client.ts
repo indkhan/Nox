@@ -336,21 +336,40 @@ export class CodexClient {
         return
       }
       const done = this.turnDone
-      const p = req.params as { tool?: string; namespace?: string; arguments?: Record<string, unknown>; callId?: string }
-      const tool = p.tool ?? p.namespace ?? 'unknown'
-      const args = p.arguments ?? {}
+      const p = req.params as { tool?: unknown; namespace?: unknown; arguments?: unknown; callId?: unknown }
+      const rawTool = p.tool ?? p.namespace
+      if (typeof rawTool !== 'string' || rawTool.length === 0) {
+        this.bridge.respondTool(req.rid, { success: false, contentItems: [{ type: 'inputText', text: 'MALFORMED_REQUEST: invalid tool name. No changes were made.' }] })
+        return
+      }
+      if (p.arguments !== undefined && (typeof p.arguments !== 'object' || p.arguments === null || Array.isArray(p.arguments))) {
+        this.bridge.respondTool(req.rid, { success: false, contentItems: [{ type: 'inputText', text: 'MALFORMED_REQUEST: invalid tool arguments. No changes were made.' }] })
+        return
+      }
+      if (p.callId !== undefined && typeof p.callId !== 'string') {
+        this.bridge.respondTool(req.rid, { success: false, contentItems: [{ type: 'inputText', text: 'MALFORMED_REQUEST: invalid call id. No changes were made.' }] })
+        return
+      }
+      if (p.namespace !== undefined && p.namespace !== null && typeof p.namespace !== 'string') {
+        this.bridge.respondTool(req.rid, { success: false, contentItems: [{ type: 'inputText', text: 'MALFORMED_REQUEST: invalid tool namespace. No changes were made.' }] })
+        return
+      }
+      const tool = rawTool
+      const args = (p.arguments ?? {}) as Record<string, unknown>
+      const callId = p.callId as string | undefined
+      const namespace = (p.namespace ?? null) as string | null
       const startedAt = Date.now()
-      this.emit({ kind: 'tool-call', tool, args, callId: p.callId })
+      this.emit({ kind: 'tool-call', tool, args, callId })
       try {
         const result = this.onToolCall
-          ? await this.onToolCall({ tool, namespace: p.namespace ?? null, args, rid: req.rid, callId: p.callId })
+          ? await this.onToolCall({ tool, namespace, args, rid: req.rid, callId })
           : { decision: 'decline' }
         if (this.turnDone !== done || this.cancelled) return
         this.bridge.respondTool(req.rid, result)
         const outcome = toolOutcomeMeta(result)
         const resultText = toolResultText(result)
         this.emit({
-          kind: 'tool-completed', tool, callId: p.callId, success: outcome.success,
+          kind: 'tool-completed', tool, callId, success: outcome.success,
           durationMs: Date.now() - startedAt, resultText, error: outcome.success ? undefined : resultText,
         })
       } catch (e) {
@@ -363,7 +382,7 @@ export class CodexClient {
         this.emit({
           kind: 'tool-completed',
           tool,
-          callId: p.callId,
+          callId,
           success: false,
           error: e instanceof Error ? e.message : String(e),
           durationMs: Date.now() - startedAt,
@@ -395,11 +414,13 @@ export class CodexClient {
       return
     }
     if ((p.turn?.id ?? p.turnId) !== this.activeTurn) return
-    if (method === 'item/reasoning/summaryTextDelta' && p.delta) {
+    if (method === 'item/reasoning/summaryTextDelta') {
+      if (typeof p.delta !== 'string' || !p.delta) return
       this.emit({ kind: 'reasoning-delta', text: p.delta })
       return
     }
-    if (method === 'item/agentMessage/delta' && p.itemId && p.delta) {
+    if (method === 'item/agentMessage/delta') {
+      if (typeof p.itemId !== 'string' || !p.itemId || typeof p.delta !== 'string' || !p.delta) return
       const message = this.messages.get(p.itemId) ?? { text: '', completed: false }
       if (message.completed) return
       message.text += p.delta
@@ -411,17 +432,21 @@ export class CodexClient {
     switch (method) {
       case 'item/started':
         if (p.item?.type === 'reasoning') this.emit({ kind: 'reasoning-started' })
-        if (p.item?.type === 'agentMessage' && p.item.id) {
-          this.messages.set(p.item.id, { text: p.item.text ?? '', phase: p.item.phase, completed: false })
+        if (p.item?.type === 'agentMessage' && typeof p.item.id === 'string' && p.item.id) {
+          const text = typeof p.item.text === 'string' ? p.item.text : ''
+          const phase = typeof p.item.phase === 'string' || p.item.phase == null ? p.item.phase : undefined
+          this.messages.set(p.item.id, { text, phase, completed: false })
           if (p.item.phase === 'final_answer') this.emit({ kind: 'text-started' })
         }
         if (p.item?.type === 'webSearch') this.searchEvent(p.item, false)
         return
       case 'item/completed':
-        if (p.item?.type === 'agentMessage' && p.item.id) {
-          this.messages.set(p.item.id, { text: p.item.text ?? '', phase: p.item.phase, completed: true })
-          if (p.item.phase === 'commentary') this.emit({ kind: 'commentary', id: p.item.id, text: p.item.text ?? '' })
-          if (p.item.phase === 'final_answer') this.emit({ kind: 'text-replaced', text: p.item.text ?? '' })
+        if (p.item?.type === 'agentMessage' && typeof p.item.id === 'string' && p.item.id) {
+          const text = typeof p.item.text === 'string' ? p.item.text : ''
+          const phase = typeof p.item.phase === 'string' || p.item.phase == null ? p.item.phase : undefined
+          this.messages.set(p.item.id, { text, phase, completed: true })
+          if (p.item.phase === 'commentary') this.emit({ kind: 'commentary', id: p.item.id, text })
+          if (p.item.phase === 'final_answer') this.emit({ kind: 'text-replaced', text })
         }
         if (p.item?.type === 'webSearch') this.searchEvent(p.item, true)
         return
