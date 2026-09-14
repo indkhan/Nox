@@ -174,8 +174,11 @@ side panel ⇄ com.nox.bridge ⇄ codex app-server
   JSON          framed JSON       newline JSON-RPC
 ```
 
-`bridge/nox-bridge.mjs` is a dependency-free Node host. It finds the newest usable Codex
-binary, starts `codex app-server` in a temporary working directory, relays requests and
+`bridge/nox-bridge.mjs` is a dependency-free Node host. It resolves the newest usable Codex
+binary to an absolute existing path (PATH names never stay bare), caches successful
+discovery for the host lifetime, honors an explicit `CODEX_BIN` absolute-path override
+that fails closed when invalid, and records the selected path/version (newest-selected
+is not equated with tested-compatible). It starts `codex app-server` in a temporary working directory, relays requests and
 notifications, and reports health. It retries crashes up to five times. Codex stdout is
 decoded as a UTF-8 stream (split multibyte sequences survive) with one line capped at
 8 MiB characters; truncated or malformed lines are discarded with a bounded diagnostic

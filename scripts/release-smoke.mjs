@@ -19,10 +19,16 @@ for (const [label, command, args] of checks) {
 }
 console.log('\nAutomated release smoke passed. Complete docs/smoke.md with a real scratch Notion workspace before publishing.')
 
+export function quoteCmdArg(value) {
+  const s = String(value)
+  if (!/[\s"%&()<>|^!]/.test(s)) return s
+  return `"${s.replaceAll('%', '%%').replaceAll('"', '""')}"`
+}
+
 function run(command, args) {
   if (process.platform !== 'win32' || command !== 'pnpm') {
     return spawnSync(command, args, { cwd: root, stdio: 'inherit' })
   }
-  const line = [command, ...args].map((value) => /\s/.test(value) ? `"${value.replaceAll('"', '""')}"` : value).join(' ')
+  const line = [command, ...args].map((value) => quoteCmdArg(value)).join(' ')
   return spawnSync(process.env.ComSpec ?? 'cmd.exe', ['/d', '/s', '/c', line], { cwd: root, stdio: 'inherit' })
 }
