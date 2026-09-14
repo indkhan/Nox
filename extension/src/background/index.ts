@@ -26,7 +26,7 @@ async function ensureStorageAccess(): Promise<void> {
   }
 }
 
-// ── DNR Origin strip (load-bearing, RESEARCH §2.1) ──────────────────────────
+// ── DNR Origin strip (load-bearing; see docs/application.md) ────────────────
 // Installs the single narrow rule (own extension initiator, exact MCP
 // endpoint, xmlhttprequest) and verifies installation equality. This is
 // endpoint compatibility acceptance preparation, not direct observation of a

@@ -16,7 +16,7 @@ const DNR_ENDPOINT_PATTERN = new RegExp(DNR_ENDPOINT_REGEX)
 type DnrRule = chrome.declarativeNetRequest.Rule
 
 /**
- * The load-bearing rule (RESEARCH §2.1): mcp.notion.com rejects authenticated
+ * The load-bearing rule (see docs/application.md — Notion connection): mcp.notion.com rejects authenticated
  * requests carrying a chrome-extension:// Origin with `403 Invalid Origin`,
  * and fetch() cannot remove forbidden headers — only declarativeNetRequest
  * can. Dynamic (not static) because the condition needs chrome.runtime.id.

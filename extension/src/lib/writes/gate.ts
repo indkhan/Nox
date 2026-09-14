@@ -97,7 +97,7 @@ export interface WriteGateDeps {
 const CONTENT_WRITE_KINDS = new Set(['content-replace', 'content-update'])
 
 /**
- * The full mutation chain (docs/plans/E6.md): classify → approve → guard →
+ * The full mutation chain (docs/application.md — change safety): classify → approve → guard →
  * execute → journal. Reads pass straight through.
  */
 export class WriteGate {
