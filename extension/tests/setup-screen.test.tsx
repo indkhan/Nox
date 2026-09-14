@@ -301,6 +301,28 @@ describe('first-run setup', () => {
     expect(state.connectionStatus).toBe('connected')
     await act(async () => root.unmount())
   })
+
+  it('blocks restoration when storage restriction is unavailable (Epoch 13 / L3)', async () => {
+    state.codexStatus = 'connected'
+    state.getDnrStatus.mockResolvedValueOnce({
+      installed: true,
+      verified: false,
+      active: true,
+      storageError: 'restriction unavailable',
+    } as { installed: boolean; verified: boolean; active: boolean; storageError: string })
+    const container = document.createElement('div')
+    const root = createRoot(container)
+
+    await act(async () => {
+      root.render(<App />)
+      await Promise.resolve()
+    })
+
+    expect(state.refreshIdentity).not.toHaveBeenCalled()
+    expect(state.connectionStatus).toBe('error')
+    expect(state.connectionError).toMatch(/storage restriction unavailable/i)
+    await act(async () => root.unmount())
+  })
 })
 
 describe('reconnect banner (Epoch 11 / L6)', () => {

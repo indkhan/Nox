@@ -28,8 +28,14 @@ export function ConnectionCard() {
       // after credential acquisition. Lookup failure blocks (M13).
       try {
         const status = (await chrome.runtime.sendMessage({ type: 'nox/get-dnr-status' })) as
-          | { installed?: boolean; verified?: boolean; reason?: string }
+          | { installed?: boolean; verified?: boolean; reason?: string; storageError?: string }
           | undefined
+        if (status?.storageError) {
+          throw new Error(
+            `Chrome storage restriction unavailable (${status.storageError}). ` +
+              'Update Chrome to a supported version to keep refresh credentials out of content-script reach.',
+          )
+        }
         if (status?.installed !== true) {
           throw new Error(
             `Notion endpoint compatibility not established (installed=${String(status?.installed ?? 'unknown')}, reason=${status?.reason ?? 'none'}). ` +
@@ -37,7 +43,7 @@ export function ConnectionCard() {
           )
         }
       } catch (e) {
-        if (e instanceof Error && e.message.includes('endpoint compatibility')) throw e
+        if (e instanceof Error && (e.message.includes('endpoint compatibility') || e.message.includes('storage restriction'))) throw e
         throw new Error(
           `Endpoint compatibility check unavailable (${e instanceof Error ? e.message : String(e)}). ` +
             'Reload the extension at chrome://extensions and retry.',

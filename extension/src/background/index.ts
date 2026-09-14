@@ -1,6 +1,30 @@
 import { parseNotionUrl } from '../shared/notion-page'
 import type { CurrentPage } from '../shared/notion-page'
+import {
+  MAX_ICON_EMOJI_CHARS,
+  MAX_ICON_URL_CHARS,
+  MAX_TITLE_CHARS,
+  isExpectedContentSender,
+  isPageMetaMessage,
+  isValidCurrentPage,
+} from '../shared/messages'
+import { ensureTrustedStorageAccess } from '../lib/chrome-storage'
 import { ensureOriginStripRule, removeOriginStripRule, type OriginStripStatus } from './dnr'
+
+// Credential-bearing storage is restricted to trusted extension contexts at
+// startup, before any credential use (Epoch 13 / L3). Content scripts keep
+// working because page metadata travels via runtime messages, never storage.
+let storageAccessError: string | null = null
+
+async function ensureStorageAccess(): Promise<void> {
+  try {
+    await ensureTrustedStorageAccess()
+    storageAccessError = null
+  } catch (error) {
+    storageAccessError = error instanceof Error ? error.message : String(error)
+    console.error('[nox] storage access restriction failed', storageAccessError)
+  }
+}
 
 // ── DNR Origin strip (load-bearing, RESEARCH §2.1) ──────────────────────────
 // Installs the single narrow rule (own extension initiator, exact MCP
@@ -48,17 +72,36 @@ async function loadTabMeta(): Promise<Record<string, TabPageMeta>> {
   return (result[META_KEY] as Record<string, TabPageMeta> | undefined) ?? {}
 }
 
-/** Attaches DOM-derived icon/title when the content script has seen this page in this tab. */
+/**
+ * Attaches DOM-derived icon/title when the content script has seen this page
+ * in this tab. Page identity comes from the tab URL (navigation state), never
+ * the DOM: title/icon are untrusted display labels and never authorize writes
+ * (L3). Stale metadata for another page id is ignored.
+ */
 async function enrich(page: CurrentPage | null, tabId: number | undefined): Promise<CurrentPage | null> {
   if (!page || tabId === undefined) return page
   const meta = (await loadTabMeta())[String(tabId)]
   if (!meta || parseNotionUrl(meta.url)?.pageId !== page.pageId) return page
-  return {
-    ...page,
-    ...(meta.iconEmoji ? { iconEmoji: meta.iconEmoji } : {}),
-    ...(meta.iconUrl ? { iconUrl: meta.iconUrl } : {}),
-    ...(meta.title ? { title: meta.title } : {}),
+  // Re-validate stored labels at the receiving boundary (bounded sizes).
+  const title = typeof meta.title === 'string' && meta.title.length <= MAX_TITLE_CHARS ? meta.title : undefined
+  const iconEmoji =
+    typeof meta.iconEmoji === 'string' && meta.iconEmoji.length <= MAX_ICON_EMOJI_CHARS ? meta.iconEmoji : undefined
+  let iconUrl: string | undefined
+  if (typeof meta.iconUrl === 'string' && meta.iconUrl.length <= MAX_ICON_URL_CHARS) {
+    try {
+      void new URL(meta.iconUrl)
+      iconUrl = meta.iconUrl
+    } catch {
+      iconUrl = undefined
+    }
   }
+  const validated: CurrentPage = { pageId: page.pageId, url: page.url }
+  if (page.viewId) validated.viewId = page.viewId
+  if (page.title ?? title) validated.title = (title ?? page.title) as string
+  if (iconEmoji) validated.iconEmoji = iconEmoji
+  if (iconUrl) validated.iconUrl = iconUrl
+  if (!isValidCurrentPage(validated)) return page
+  return validated
 }
 
 async function setActiveTab(tabId: number | undefined): Promise<void> {
@@ -147,13 +190,27 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
   if (
     typeof message === 'object' &&
     message !== null &&
-    (message as { type?: string }).type === 'nox/page-meta' &&
-    sender.tab?.id !== undefined
+    (message as { type?: string }).type === 'nox/page-meta'
   ) {
-    const tabId = sender.tab.id
+    // Sender-gated, payload-validated, stale-checked (L3): only the owning
+    // extension's tab context, exact discriminant, bounded fields, and a
+    // message URL whose page matches the sender tab's current navigation.
+    // Unknown message types are rejected; title/icon stay untrusted labels.
+    const extensionId = chrome.runtime.id
+    if (!isExpectedContentSender(sender, extensionId)) return false
+    if (!isPageMetaMessage(message)) return false
+    const tabId = sender.tab!.id!
+    const senderUrl = sender.tab!.url
+    const raw = message as { url: string; title?: string; iconEmoji?: string; iconUrl?: string }
+    // Stale navigation check: the reported URL must resolve to the same page
+    // the tab currently shows; a mismatch means a stale report from a
+    // previous navigation and is dropped.
+    if (typeof senderUrl === 'string') {
+      const reported = parseNotionUrl(raw.url)?.pageId
+      const current = parseNotionUrl(senderUrl)?.pageId
+      if (reported && current && reported !== current) return false
+    }
     void (async () => {
-      const raw = message as { url?: string; title?: string; iconEmoji?: string; iconUrl?: string }
-      if (typeof raw.url !== 'string') return
       const meta: TabPageMeta = { url: raw.url }
       if (raw.title) meta.title = raw.title
       if (raw.iconEmoji) meta.iconEmoji = raw.iconEmoji
@@ -196,8 +253,10 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
     void (async () => {
       // Always re-verify installation: cheap when healthy, self-healing when
       // not. Reports installed/unverified pre-OAuth; carries no tokens.
+      // Storage restriction failures surface here as a compatibility error
+      // instead of silently relaxing (L3).
       const status = await ensureOriginStrip()
-      sendResponse(status)
+      sendResponse(storageAccessError ? { ...status, storageError: storageAccessError } : status)
     })()
     return true
   }
@@ -224,7 +283,9 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
 })
 
 void (async () => {
-  // The origin-strip rule must exist before the panel can talk to Notion.
+  // Restrict credential-bearing storage before any credential use (L3),
+  // then ensure the narrow origin-strip rule exists before Notion traffic.
+  await ensureStorageAccess()
   await ensureOriginStrip()
   // Warm the session storage on startup.
   await setActiveTab(await getActiveTabId())

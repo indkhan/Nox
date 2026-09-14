@@ -16,13 +16,19 @@ export async function restoreNotionAction(): Promise<void> {
     // the owner's later authenticated initialize establishes acceptance; an
     // ordinary 401 proves nothing about stripping. A failed lookup blocks
     // instead of continuing into workspace operation (M13).
-    let status: { installed?: boolean; verified?: boolean; reason?: string } | undefined
+    let status: { installed?: boolean; verified?: boolean; reason?: string; storageError?: string } | undefined
     try {
       status = (await chrome.runtime.sendMessage({ type: 'nox/get-dnr-status' })) as typeof status
     } catch (error) {
       throw new Error(
         `Endpoint compatibility check unavailable (${error instanceof Error ? error.message : String(error)}). ` +
           'Reload the extension at chrome://extensions and retry.',
+      )
+    }
+    if (status?.storageError) {
+      throw new Error(
+        `Chrome storage restriction unavailable (${status.storageError}). ` +
+          'Update Chrome to a supported version to keep refresh credentials out of content-script reach.',
       )
     }
     if (status?.installed !== true) {

@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { CurrentPage } from '../shared/notion-page'
-import { isNoxMessage } from '../shared/messages'
+import { isCurrentPageChangedMessage, isExpectedBackgroundSender, isValidCurrentPage } from '../shared/messages'
 import type { Mode } from './Composer'
 import type { ApprovalDisplay } from '../lib/writes/approvals'
 import type { PendingWorkspacePlan } from '../lib/architect/plan-engine'
@@ -106,8 +106,12 @@ export const useNoxStore = create<NoxState>((set) => ({
   setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
 }))
 
-chrome.runtime.onMessage.addListener((message) => {
-  if (isNoxMessage(message) && message.type === 'nox/current-page-changed') {
+// Panel accepts current-page updates only from the expected extension
+// background context and re-validates the full payload (Epoch 13 / L3).
+// Unknown discriminants are rejected; title/icon remain untrusted labels.
+chrome.runtime.onMessage.addListener((message, sender) => {
+  if (!isExpectedBackgroundSender(sender, chrome.runtime.id)) return
+  if (isCurrentPageChangedMessage(message)) {
     useNoxStore.getState().setCurrentPage(message.page)
   }
 })
@@ -115,8 +119,9 @@ chrome.runtime.onMessage.addListener((message) => {
 export async function hydrateCurrentPage(): Promise<void> {
   const response = await chrome.runtime.sendMessage({ type: 'nox/get-current-page' })
   if (response && typeof response === 'object' && 'page' in response) {
-    useNoxStore.getState().setCurrentPage(
-      (response as { page: CurrentPage | null }).page,
-    )
+    const page = (response as { page: unknown }).page
+    if (isValidCurrentPage(page)) {
+      useNoxStore.getState().setCurrentPage(page)
+    }
   }
 }
