@@ -49,18 +49,18 @@ every write test — creations cannot be undone.
 
 ## 4. Writes & safety (M2) — scratch page only
 
-- [ ] Ask-mode: "Add a Risks section to this page" → approval card shows exact payload → Approve → change lands in the open tab
+- [ ] Ask-mode: "Add a Risks section to this page" → approval card shows the complete bounded payload → Approve → change lands in the open tab
 - [ ] Reject leaves the page untouched and tells the model
 - [ ] Edit the page in Notion mid-turn → write guard stops the write ("PAGE_CHANGED_SINCE_READ")
-- [ ] Undo latest restores prior content (simple page)
-- [ ] Rich page edit is marked not-undoable with the structural-block reason
-- [ ] Move pages requires approval even in Auto mode
+- [ ] Undo latest restores prior content on a simple page with a verified baseline; editing the page again first blocks undo with a clear reason
+- [ ] Rich page edit is marked not-undoable with the structural-block reason; property/schema/view/move edits are marked not-undoable, never silently restored
+- [ ] Single-page move requires one ordinary approval even in Auto mode; a multi-page move needs an approved workspace plan
 
 ## 5. Databases
 
 - [ ] Query an existing database → results table renders with row count
 - [ ] Create database + board view grouped by Status from one chat message
-- [ ] Bulk autofill preview shows quota estimate; >25 rows asks to confirm
+- [ ] Bulk work runs as ordinary inspected tool calls with streaming progress, bounded by the plan threshold (more than five affected objects needs an approved plan) and the 12-call turn ceiling. There is no quota-estimate feature and no row-count confirmation in production — do not mark one complete.
 - [ ] Cancel mid-run stops cleanly; journal intact for undo
 
 ## 6. History & multi-window

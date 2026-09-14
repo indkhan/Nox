@@ -275,15 +275,18 @@ Every tool request passes through `ToolExecutor`, which:
 
 - enforces the per-turn step limit;
 - handles Nox-only tools locally;
-- rejects tool requests smuggled inside untrusted workspace content;
+- strips model-supplied control fields (never authority) and marks turns exposed to
+  real workspace content as untrusted-context, which always needs confirmation —
+  markers are advisory to the model; the gates below enforce;
 - routes Notion calls through the write gate and scheduler;
 - wraps tool results as untrusted text before returning them to Codex;
 - truncates oversized results and records activity timing.
 
 Structural work—database/schema/view changes, moves, and large page creation—first needs
-a validated workspace plan. Ask mode displays that plan for approval; Auto mode approves
-the validated plan internally and executes its matching structural operations without a
-second approval card. The plan still limits execution to its listed operations. Operation
+a validated workspace plan with explicit approval in both Ask and Auto modes; no model
+plan grants its own consent. After exact plan approval, covered actions run once each
+without a redundant ordinary card, while capabilities, ownership, scope, guard,
+scheduler, ledger, and cancellation checks still run. Operation
 names must use the exact `notion-*` tool name, and target matching accepts any relevant ID
 carried by the call (for example, either the database or data-source ID of a view).
 

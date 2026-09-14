@@ -2,8 +2,12 @@
 
 ## Versioning
 
-`extension/manifest.config.ts` `version` is the single source of truth. Bump it
-in the release commit; the zip artifact and release tag follow it.
+`extension/package.json` `version` is the single source of truth
+(`extension/manifest.config.ts` reads it; `extension/src/lib/codex/client.ts`
+imports it). Display and tag label mapping: `v<version>-alpha`
+(e.g. `v0.1.0-alpha`); release ZIPs keep the existing `nox-v<version>.zip` names
+and are not renamed retroactively. Bump the package version in the release
+commit; the manifest, ZIP artifact, and release tag follow it.
 
 ## GitHub-first distribution
 

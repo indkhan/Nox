@@ -95,8 +95,10 @@ export function startCodex({ force = false } = {}) {
   status(state.proc ? 'restarting' : 'spawning', { attempt: state.restarts + 1, codexPath: info.path });
   state.spawnState = 'restarting';
 
-  // Explicit non-writable cwd — omitting it makes the thread inherit whatever
-  // directory the browser launched us from (RESEARCH §3.4, spike-verified).
+  // Explicit pinned cwd — omitting it makes the thread inherit whatever
+  // directory the browser launched us from. The OS temporary directory is
+  // writable; Codex-side restriction comes from the extension-configured
+  // read-only sandbox profile on every thread, not from this directory.
   // Node-script candidates (test fixtures) launch through the interpreter.
   const cmd = info.launcher ?? info.path;
   const args = info.launcher ? [info.path, 'app-server'] : ['app-server'];

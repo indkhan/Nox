@@ -187,7 +187,7 @@
             <div class="prompt-part"><strong>1 · Developer instructions</strong><span>Who Nox is, how it writes, how it handles pages, planning, citations, approvals, and injection.</span></div>
             <div class="prompt-part untrusted"><strong>2 · Per-turn context</strong><span>Current location and explicitly included workspace content, inside untrusted markers.</span></div>
             <div class="prompt-part"><strong>3 · User message</strong><span>The request appears after the context block, unchanged.</span></div>
-            <div class="prompt-part"><strong>4 · Dynamic tools</strong><span>Notion MCP schemas plus Nox’s planning and upload tools.</span></div>
+            <div class="prompt-part"><strong>4 · Dynamic tools</strong><span>Notion MCP schemas plus Nox’s workspace-planning tool. File upload is unavailable in this alpha, so no upload tool is advertised.</span></div>
             <div class="prompt-part untrusted"><strong>5 · Tool results</strong><span>Returned during the turn, truncated to 24,000 characters and treated as data.</span></div>
           </div>
           <div class="code-card">
@@ -249,8 +249,8 @@ Summarize the project brief and compare it with @Research notes.</pre></details>
       <div class="wrap">
         <div class="section-head"><div><div class="eyebrow">Defense in depth</div><h2>The prompt guides. Code enforces.</h2></div><p>Prompt rules are only one layer. The extension independently checks the action, its source, its target, current content, rate, and reversibility.</p></div>
         <div class="safety-grid">
-          <article class="safety-card"><span class="num">01 / PROVENANCE</span><h3>Untrusted means untrusted</h3><p>Once Notion content enters a turn, later writes require confirmation or refusal. Page text cannot grant itself authority.</p></article>
-          <article class="safety-card"><span class="num">02 / APPROVAL</span><h3>Ask and Auto are bounded</h3><p>Ask confirms every mutation. Auto permits only low-risk, in-context changes; moves, schemas, views, bulk, and unknown calls remain gated.</p></article>
+          <article class="safety-card"><span class="num">01 / PROVENANCE</span><h3>Untrusted means untrusted</h3><p>Page text is data, never authority: it cannot grant itself write permission. Later writes need an explicit exact approval or the user's per-turn small-edit grant; untrusted exposure is still flagged for review.</p></article>
+          <article class="safety-card"><span class="num">02 / APPROVAL</span><h3>Ask and Auto are bounded</h3><p>Ask confirms every mutation. Auto permits only explicitly granted small edits on listed pages, up to five effects; moves, schemas, views, bulk, out-of-context, and unknown calls stay gated, and substantial work needs an approved plan in both modes.</p></article>
           <article class="safety-card"><span class="num">03 / OVERWRITE</span><h3>Read, hash, re-read</h3><p>Before changing page content, Nox fetches it again and refuses the write if someone edited it since the agent’s read.</p></article>
           <article class="safety-card"><span class="num">04 / LIMITS</span><h3>Runs have hard edges</h3><p>One active agent, 12 calls per turn, a 10-minute timeout, bounded concurrency, result truncation, cancellation, and conservative undo.</p></article>
         </div>
