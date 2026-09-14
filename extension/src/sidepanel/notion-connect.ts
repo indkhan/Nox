@@ -12,20 +12,40 @@ export async function restoreNotionAction(): Promise<void> {
     setConnection({ connectionStatus: 'connecting', connectionError: null })
     logInfo('Notion restore: starting')
 
-    let status: { active?: boolean; variant?: string; probe?: string } | undefined
+    // Pre-OAuth: narrow-rule installation only (installed/unverified). Only
+    // the owner's later authenticated initialize establishes acceptance; an
+    // ordinary 401 proves nothing about stripping. A failed lookup blocks
+    // instead of continuing into workspace operation (M13).
+    let status: { installed?: boolean; verified?: boolean; reason?: string } | undefined
     try {
       status = (await chrome.runtime.sendMessage({ type: 'nox/get-dnr-status' })) as typeof status
-    } catch {
-      logInfo('Notion restore: DNR status check unavailable; continuing')
-    }
-    if (status?.active === false) {
+    } catch (error) {
       throw new Error(
-        `Origin-strip rule could not be verified (probe=${status.probe ?? 'none'}, variant=${status.variant ?? 'none'}). ` +
+        `Endpoint compatibility check unavailable (${error instanceof Error ? error.message : String(error)}). ` +
           'Reload the extension at chrome://extensions and retry.',
       )
     }
+    if (status?.installed !== true) {
+      throw new Error(
+        `Notion endpoint compatibility not established (installed=${String(status?.installed ?? 'unknown')}, reason=${status?.reason ?? 'none'}). ` +
+          'Reload the extension at chrome://extensions and retry; the narrow rule will be reinstalled.',
+      )
+    }
 
-    const info = await notion.refreshIdentity()
+    let info: Awaited<ReturnType<typeof notion.refreshIdentity>>
+    try {
+      info = await notion.refreshIdentity()
+    } catch (error) {
+      // Authenticated acceptance failed (401/403/429/5xx/redirect/malformed/
+      // missing/lookup): remove the rule so the next attempt reinstalls
+      // narrowly, then surface an actionable retry. Sends no tokens.
+      try {
+        await chrome.runtime.sendMessage({ type: 'nox/clear-dnr' })
+      } catch {
+        // Best effort; the error below already blocks workspace operation.
+      }
+      throw error
+    }
     logInfo(`Notion restored: ${info.identity.workspaceName ?? info.identity.userName ?? 'workspace'}`)
     setConnection({
       connectionStatus: 'connected',

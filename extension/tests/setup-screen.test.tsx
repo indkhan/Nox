@@ -28,14 +28,26 @@ const state = vi.hoisted(() => ({
     access: {},
     upgradeUrls: {},
   })),
-  getDnrStatus: vi.fn(async () => ({ active: true })),
+  getDnrStatus: vi.fn(
+    async (): Promise<{ installed: boolean; verified: boolean; active: boolean; reason?: string }> => ({
+      installed: true,
+      verified: false,
+      active: true,
+    }),
+  ),
+  clearDnr: vi.fn(async () => ({ cleared: true })),
 }))
 
 vi.hoisted(() => {
   ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
   vi.stubGlobal('chrome', {
     storage: { local: { get: vi.fn(async () => ({})) } },
-    runtime: { sendMessage: state.getDnrStatus },
+    runtime: {
+      sendMessage: (message: unknown) => {
+        if ((message as { type?: string })?.type === 'nox/clear-dnr') return state.clearDnr()
+        return state.getDnrStatus()
+      },
+    },
   })
 })
 
@@ -105,7 +117,8 @@ describe('first-run setup', () => {
       access: {},
       upgradeUrls: {},
     })
-    state.getDnrStatus.mockReset().mockResolvedValue({ active: true })
+    state.getDnrStatus.mockReset().mockResolvedValue({ installed: true, verified: false, active: true })
+    state.clearDnr.mockReset().mockResolvedValue({ cleared: true })
   })
 
   it('keeps chat behind the connection setup until both services are ready', async () => {
@@ -234,7 +247,10 @@ describe('first-run setup', () => {
     await act(async () => root.unmount())
   })
 
-  it('continues restoration while the background status check is waking up', async () => {
+  it('blocks restoration when the endpoint compatibility check is unavailable (Epoch 13 / M13)', async () => {
+    // Changed contract: a failed DNR lookup no longer continues into
+    // workspace operation. The reviewed behavior (continue on lookup failure)
+    // is replaced by an actionable compatibility error with no identity load.
     state.codexStatus = 'connected'
     state.getDnrStatus.mockRejectedValueOnce(new Error('message port unavailable'))
     const container = document.createElement('div')
@@ -245,6 +261,42 @@ describe('first-run setup', () => {
       await Promise.resolve()
     })
 
+    expect(state.refreshIdentity).not.toHaveBeenCalled()
+    expect(state.connectionStatus).toBe('error')
+    expect(state.connectionError).toMatch(/compatibility check unavailable/i)
+    await act(async () => root.unmount())
+  })
+
+  it('blocks restoration when the narrow rule is not installed (Epoch 13 / M13)', async () => {
+    state.codexStatus = 'connected'
+    state.getDnrStatus.mockResolvedValueOnce({ installed: false, verified: false, active: false, reason: 'mismatch' })
+    const container = document.createElement('div')
+    const root = createRoot(container)
+
+    await act(async () => {
+      root.render(<App />)
+      await Promise.resolve()
+    })
+
+    expect(state.refreshIdentity).not.toHaveBeenCalled()
+    expect(state.connectionStatus).toBe('error')
+    expect(state.connectionError).toMatch(/compatibility not established/i)
+    await act(async () => root.unmount())
+  })
+
+  it('restores through installed/unverified pre-OAuth status (Epoch 13 / M13)', async () => {
+    state.codexStatus = 'connected'
+    state.getDnrStatus.mockResolvedValueOnce({ installed: true, verified: false, active: true })
+    const container = document.createElement('div')
+    const root = createRoot(container)
+
+    await act(async () => {
+      root.render(<App />)
+      await Promise.resolve()
+    })
+
+    // Installed/unverified permits credential acquisition; the authorized
+    // initialize inside refreshIdentity establishes acceptance.
     expect(state.refreshIdentity).toHaveBeenCalledOnce()
     expect(state.connectionStatus).toBe('connected')
     await act(async () => root.unmount())

@@ -1,23 +1,32 @@
 import { parseNotionUrl } from '../shared/notion-page'
 import type { CurrentPage } from '../shared/notion-page'
-import { ensureOriginStripRule } from './dnr'
+import { ensureOriginStripRule, removeOriginStripRule, type OriginStripStatus } from './dnr'
 
 // ── DNR Origin strip (load-bearing, RESEARCH §2.1) ──────────────────────────
-// Installs the first rule variant that verifiably strips our own Origin
-// (self-probing canary — see dnr.ts). Re-runs on demand via nox/get-dnr-status.
-let originStripStatus: { active: boolean; variant?: string; probe?: string } = {
+// Installs the single narrow rule (own extension initiator, exact MCP
+// endpoint, xmlhttprequest) and verifies installation equality. This is
+// endpoint compatibility acceptance preparation, not direct observation of a
+// removed header: pre-OAuth callers see installed/unverified, and only the
+// owner's later authenticated MCP initialize establishes acceptance (M13).
+// Re-runs narrowly on demand via nox/get-dnr-status. Sends no tokens.
+let originStripStatus: OriginStripStatus = {
+  installed: false,
+  verified: false,
   active: false,
 }
 
-async function ensureOriginStrip(): Promise<typeof originStripStatus> {
+async function ensureOriginStrip(): Promise<OriginStripStatus> {
   try {
     originStripStatus = await ensureOriginStripRule()
-    if (!originStripStatus.active) {
-      console.error('[nox] DNR origin-strip could not be verified — Notion MCP calls will 403', originStripStatus)
+    if (!originStripStatus.installed) {
+      console.error(
+        '[nox] DNR narrow rule not installed — Notion MCP calls will 403; reload the extension and retry',
+        originStripStatus.reason ?? 'not-installed',
+      )
     }
   } catch (error) {
     console.error('[nox] DNR rule installation threw', error)
-    originStripStatus = { active: false }
+    originStripStatus = { installed: false, verified: false, active: false, reason: 'install-threw' }
   }
   return originStripStatus
 }
@@ -185,9 +194,29 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
     (message as { type?: string }).type === 'nox/get-dnr-status'
   ) {
     void (async () => {
-      // Always re-verify live: cheap when healthy, self-healing when not.
+      // Always re-verify installation: cheap when healthy, self-healing when
+      // not. Reports installed/unverified pre-OAuth; carries no tokens.
       const status = await ensureOriginStrip()
       sendResponse(status)
+    })()
+    return true
+  }
+  if (
+    typeof message === 'object' &&
+    message !== null &&
+    (message as { type?: string }).type === 'nox/clear-dnr'
+  ) {
+    // Authenticated acceptance failed (401/403/429/5xx/redirect/malformed/
+    // missing/lookup): remove the rule so the next attempt reinstalls
+    // narrowly instead of reusing a suspect installation. No tokens carried.
+    void (async () => {
+      try {
+        await removeOriginStripRule()
+      } catch (error) {
+        console.error('[nox] DNR rule removal failed', error)
+      }
+      originStripStatus = { installed: false, verified: false, active: false, reason: 'acceptance-failed' }
+      sendResponse({ cleared: true })
     })()
     return true
   }

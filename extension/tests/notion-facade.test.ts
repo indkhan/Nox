@@ -283,4 +283,54 @@ describe('Notion facade', () => {
       notion.scheduleCallTool('notion-fetch', { id: 'c' }, undefined, { deadline: Date.now() - 1 }),
     ).rejects.toThrow(/DEADLINE_EXCEEDED/)
   })
+
+  describe('authenticated endpoint acceptance (Epoch 13 / M13)', () => {
+    function acceptanceServer(status: number, body?: unknown) {
+      scripted((url, payload) => {
+        if (url.includes('protected-resource')) return jsonRes(PRM)
+        if (url.includes('oauth-authorization-server')) return jsonRes(AS)
+        if (url.endsWith('/register')) return jsonRes({ client_id: 'cid-1' }, 201)
+        if (url.endsWith('/token')) return jsonRes({ access_token: 'at-1', refresh_token: 'rt-1', expires_in: 3600 })
+        if (typeof payload.method === 'string') {
+          if (payload.method === 'initialize') {
+            if (body !== undefined) return new Response(JSON.stringify(body), { status })
+            return new Response('acceptance probe failure', { status })
+          }
+          if (payload.method === 'tools/call') {
+            return rpcResult(payload.id as number, { content: [{ type: 'text', text: SELF_TEXT }] })
+          }
+          if (payload.method?.startsWith('notifications/')) return new Response(null, { status: 202 })
+        }
+        throw new Error(`unexpected ${url}`)
+      })
+    }
+
+    it('verifyEndpointAcceptance succeeds on an affirmative accepted response', async () => {
+      standardServer()
+      await notion.importToken({ access_token: 'at', refresh_token: 'rt', expires_in: 3600 })
+      await expect(notion.verifyEndpointAcceptance()).resolves.toBeUndefined()
+    })
+
+    it.each([401, 403, 429, 500, 503])(
+      'rejects HTTP %i as verification success (no silent pass)',
+      async (status) => {
+        acceptanceServer(status)
+        await notion.tokens.saveFromTokenResponse({ access_token: 'at', refresh_token: 'rt', expires_in: 3600 })
+        await expect(notion.verifyEndpointAcceptance()).rejects.toThrow()
+        await expect(notion.refreshIdentity()).rejects.toThrow()
+      },
+    )
+
+    it('rejects redirects as verification success', async () => {
+      acceptanceServer(302)
+      await notion.tokens.saveFromTokenResponse({ access_token: 'at', refresh_token: 'rt', expires_in: 3600 })
+      await expect(notion.verifyEndpointAcceptance()).rejects.toThrow()
+    })
+
+    it('rejects malformed protocol envelopes as verification success', async () => {
+      acceptanceServer(200, { jsonrpc: '2.0', id: 1, error: { code: -32600, message: 'bad' } })
+      await notion.tokens.saveFromTokenResponse({ access_token: 'at', refresh_token: 'rt', expires_in: 3600 })
+      await expect(notion.verifyEndpointAcceptance()).rejects.toThrow()
+    })
+  })
 })

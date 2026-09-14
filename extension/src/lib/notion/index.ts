@@ -144,12 +144,28 @@ export class Notion {
   }
 
   /**
+   * Bounded authenticated read-only endpoint compatibility acceptance probe
+   * (Epoch 13 / M13): an authorized MCP initialize. Only an affirmative
+   * accepted protocol response verifies the scoped connection — 401, 403,
+   * 429, 5xx, redirects, malformed protocol, missing status, and lookup
+   * exceptions all throw and are not verification success. Read-only, bounded
+   * by the existing 8 MiB streaming budget, owner-called, and carrying no
+   * tokens in diagnostics. An ordinary 401 proves nothing about stripping
+   * (authentication runs before the Origin check).
+   */
+  async verifyEndpointAcceptance(): Promise<void> {
+    await this.client.initialize()
+  }
+
+  /**
    * MCP handshake + identity/capability load. Safe to call repeatedly; also
    * recovers a session after the browser restarted (access token was lost but
-   * the refresh token survived).
+   * the refresh token survived). The initialize step doubles as the
+   * authenticated acceptance probe above: success establishes acceptance,
+   * any failure leaves the connection unverified.
    */
   async refreshIdentity(): Promise<SelfInfo> {
-    await this.client.initialize()
+    await this.verifyEndpointAcceptance()
     const self = await this.scheduleCallTool('notion-fetch', { id: 'self' })
     const text = McpClient.resultText(self)
     this.selfInfo = parseSelfResult(text)

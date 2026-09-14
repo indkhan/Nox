@@ -21,24 +21,42 @@ export function ConnectionCard() {
     setBusy(true)
     logInfo('Notion connect: starting')
     try {
-      // Load-bearing precondition (RESEARCH §2.1): a working origin-strip rule.
-      // The SW self-probes rule variants; failure detail flows into the error.
+      // Load-bearing precondition (RESEARCH §2.1): the narrow origin-strip
+      // rule must be installed. This is endpoint compatibility preparation,
+      // not header observation: installed/unverified pre-OAuth, with
+      // authenticated acceptance established by the authorized initialize
+      // after credential acquisition. Lookup failure blocks (M13).
       try {
         const status = (await chrome.runtime.sendMessage({ type: 'nox/get-dnr-status' })) as
-          | { active?: boolean; variant?: string; probe?: string }
+          | { installed?: boolean; verified?: boolean; reason?: string }
           | undefined
-        if (status?.active === false) {
+        if (status?.installed !== true) {
           throw new Error(
-            `Origin-strip rule could not be verified (probe=${status.probe ?? 'none'}, variant=${status.variant ?? 'none'}). ` +
-              'Reload the extension at chrome://extensions and retry.',
+            `Notion endpoint compatibility not established (installed=${String(status?.installed ?? 'unknown')}, reason=${status?.reason ?? 'none'}). ` +
+              'Reload the extension at chrome://extensions and retry; the narrow rule will be reinstalled.',
           )
         }
       } catch (e) {
-        if (e instanceof Error && e.message.includes('Origin-strip')) throw e
-        console.warn('[nox] DNR status check failed; continuing anyway', e)
+        if (e instanceof Error && e.message.includes('endpoint compatibility')) throw e
+        throw new Error(
+          `Endpoint compatibility check unavailable (${e instanceof Error ? e.message : String(e)}). ` +
+            'Reload the extension at chrome://extensions and retry.',
+        )
       }
 
-      const info = await notion.connect(launchConsentFlow)
+      let info: Awaited<ReturnType<typeof notion.connect>>
+      try {
+        info = await notion.connect(launchConsentFlow)
+      } catch (e) {
+        // Failed acceptance (including 401/403/429/5xx/redirect/malformed/
+        // missing): clear the rule so retry reinstalls narrowly. No tokens sent.
+        try {
+          await chrome.runtime.sendMessage({ type: 'nox/clear-dnr' })
+        } catch {
+          // Best effort; the error below already blocks workspace operation.
+        }
+        throw e
+      }
       logInfo(`Notion connected: ${info.identity.workspaceName ?? info.identity.userName ?? 'workspace'}`)
       setConnection({
         connectionStatus: 'connected',
