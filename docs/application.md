@@ -277,10 +277,14 @@ Every tool request passes through `ToolExecutor`, which:
 - handles Nox-only tools locally;
 - strips model-supplied control fields (never authority) and marks turns exposed to
   real workspace content as untrusted-context, which always needs confirmation —
-  markers are advisory to the model; the gates below enforce;
+  markers are advisory to the model; the gates below enforce. Exposure is retained
+  for the Codex conversation lifetime and restored conservatively after reload, so a
+  turn-two small-edit grant still needs confirmation; only a fresh thread resets it;
 - routes Notion calls through the write gate and scheduler;
 - wraps tool results as untrusted text before returning them to Codex;
-- truncates oversized results and records activity timing.
+- truncates oversized results, reports model-delivered sizes to the gate, and records
+  activity timing. Truncated dynamic results and mention excerpts downgrade the
+  baseline to model-partial; only fully delivered continuation reads restore it.
 
 Structural work—database/schema/view changes, moves, and large page creation—first needs
 a validated workspace plan with explicit approval in both Ask and Auto modes; no model
@@ -313,12 +317,18 @@ request object, and there is no approve-all. Workspace plans validate every
 field with 1–10 operations, and evidence must be pages Nox actually retrieved
 in the conversation — unknown ids are rejected, never shown as inspected.
 Content replacement additionally requires a successful, complete read baseline
-the model observed in the current thread, workspace, and connection: failed,
-partial (truncated/omitted blocks), unavailable, and unrecognized fetch
-payloads never authorize replacement, and a missing baseline forces a
-re-fetch instead of reusing guard reads the model never saw. The baseline hash
-binds approval; the gate re-checks it at guard time and again immediately
-before dispatch, retiring it after a write or unknown outcome. An external
+the model actually observed in the current thread, workspace, and connection:
+provider completeness and model-delivered completeness are tracked separately.
+Failed, partial (truncated/omitted blocks), unavailable, and unrecognized fetch
+payloads never authorize replacement, and locally truncated dynamic results or
+mention excerpts (8,000 per page, 24,000 combined) downgrade the baseline to
+model-partial before any approval card — possession of a continuation handle
+alone never completes it. Fully delivered continuation reads (accounting for
+expiration and the 1 MiB turn budget) restore completeness; otherwise a targeted
+re-fetch is required. A missing baseline forces a re-fetch instead of reusing
+guard reads the model never saw. The baseline hash binds approval; the gate
+re-checks it at guard time and again immediately before dispatch, retiring it
+after a write or unknown outcome. An external
 edit between the final read and the provider write remains a documented race
 without provider conditional-write support.
 
