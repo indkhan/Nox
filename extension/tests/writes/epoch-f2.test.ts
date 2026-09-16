@@ -191,3 +191,192 @@ describe('Epoch F2.2 — R2 mention truncation must not authorize replacement', 
     expect(dispatches).toHaveLength(0)
   })
 })
+
+describe('Epoch F2.3 — R2 continuation delivery and provider completeness', () => {
+  function continuationHarness(providerText: string) {
+    const dispatches: Array<{ name: string; args: Record<string, unknown> }> = []
+    const journal = new MutationJournal()
+    journal.setThread('thread-f2')
+    const access = createTurnAccessState()
+    access.begin('ask', [PAGE], [], { allowed: false, pages: [] })
+    const gate = new WriteGate({
+      callTool: async (name, args) => {
+        if (name === 'notion-fetch') return { content: [{ type: 'text', text: providerText }] }
+        dispatches.push({ name, args })
+        return { content: [{ type: 'text', text: 'ok' }] }
+      },
+      fetchPageMarkdown: async () => providerText,
+      getMode: () => access.mode(),
+      getContextSet: () => access.contextPages(),
+      journal,
+      getSmallEditGrant: () => access.smallEditGrant(),
+      recordUnplannedEffects: (c) => access.recordUnplannedEffects(c),
+      ownership: {
+        isOwner: () => true,
+        getOwnerGeneration: () => 'owner-f2',
+        getConnectionGeneration: () => 'conn-f2',
+      },
+      getWorkspaceId: () => 'workspace-f2',
+    })
+    const executor = new ToolExecutor({
+      callTool: async (name, args, signal, provenance) => {
+        const result = (await gate.handle({ rid: 0, tool: name, args, namespace: null, signal, provenance })) as {
+          content?: Array<{ type: string; text?: string }>
+          isError?: boolean
+        }
+        if (result?.isError) throw new Error(result.content?.map((c) => c.text).join('\n'))
+        return { content: result.content ?? [] }
+      },
+      assertToolAllowed: () => undefined,
+      onModelTruncation: (pageId, delivered, total) => gate.noteModelTruncation(pageId, delivered, total),
+      onModelDelivery: (pageId, offset, end, total) => gate.noteModelDelivery(pageId, offset, end, total),
+    })
+    executor.beginTurn()
+    gate.beginTurn()
+    return { gate, journal, dispatches, executor, providerText }
+  }
+
+  function extractHandle(modelText: string): string {
+    const m = /handle="([^"]+)"/.exec(modelText)
+    if (!m) throw new Error('expected a continuation handle in model text')
+    return m[1]
+  }
+
+  it('possession of a handle alone never completes the baseline', async () => {
+    const { gate, dispatches, executor } = continuationHarness(largePageText())
+    const fetched = await executor.execute({ rid: 1, tool: 'notion-fetch', args: { id: PAGE }, namespace: null })
+    expect(extractHandle(fetched.contentItems[0].text)).toBeTruthy()
+    // No continuation read yet: still partial before any card.
+    const pending = gate.handle({
+      rid: 2,
+      tool: 'notion-update-page',
+      args: { data: { page_id: PAGE }, command: { type: 'replace_content', content: '# Short' } },
+      namespace: null,
+    })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(gate.approvals.pendingCount).toBe(0)
+    const out = (await pending) as { isError?: boolean; content: Array<{ text?: string }> }
+    expect(out.isError).toBe(true)
+    expect(out.content[0].text).toMatch(/PARTIAL_BASELINE/)
+    expect(dispatches).toHaveLength(0)
+  })
+
+  it('fully delivered continuation restores a complete baseline and dispatches once after approval', async () => {
+    const { gate, journal, dispatches, executor } = continuationHarness(largePageText())
+    const fetched = await executor.execute({ rid: 1, tool: 'notion-fetch', args: { id: PAGE }, namespace: null })
+    const handle = extractHandle(fetched.contentItems[0].text)
+    const continued = await executor.execute({ rid: 2, tool: 'nox-read-continuation', args: { handle, offset: 24_000 }, namespace: null })
+    expect(continued.success).toBe(true)
+    expect(continued.contentItems[0].text).toContain('UNSEEN TAIL')
+    expect(continued.contentItems[0].text).toContain('END_OF_RESULT')
+
+    const pending = gate.handle({
+      rid: 3,
+      tool: 'notion-update-page',
+      args: { data: { page_id: PAGE }, command: { type: 'replace_content', content: '# Short' } },
+      namespace: null,
+    })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(gate.approvals.pendingCount).toBe(1)
+    gate.approvals.answer(gate.approvals.pendingIds[0], 'approve')
+    const out = (await pending) as { content: Array<{ text?: string }> }
+    expect(out.content[0].text).toContain('ok')
+    expect(dispatches).toHaveLength(1)
+    expect((await journal.newestFirst())[0].status).toBe('applied')
+  })
+
+  it('expired handles leave the baseline partial with zero transport', async () => {
+    const { gate, dispatches, executor } = continuationHarness(largePageText())
+    const fetched = await executor.execute({ rid: 1, tool: 'notion-fetch', args: { id: PAGE }, namespace: null })
+    const handle = extractHandle(fetched.contentItems[0].text)
+    // Handles are turn-scoped: a new turn expires them.
+    executor.beginTurn()
+    const expired = await executor.execute({ rid: 2, tool: 'nox-read-continuation', args: { handle, offset: 24_000 }, namespace: null })
+    expect(expired.success).toBe(false)
+    expect(expired.contentItems[0].text).toMatch(/CONTINUATION_UNAVAILABLE/)
+
+    const pending = gate.handle({
+      rid: 3,
+      tool: 'notion-update-page',
+      args: { data: { page_id: PAGE }, command: { type: 'replace_content', content: '# Short' } },
+      namespace: null,
+    })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(gate.approvals.pendingCount).toBe(0)
+    const out = (await pending) as { isError?: boolean; content: Array<{ text?: string }> }
+    expect(out.isError).toBe(true)
+    expect(out.content[0].text).toMatch(/PARTIAL_BASELINE/)
+    expect(dispatches).toHaveLength(0)
+  })
+
+  it('exhausted turn memory offers no handle and refuses replacement', async () => {
+    const { gate, dispatches, executor } = continuationHarness('y'.repeat(30_000))
+    // Fill the 1M ephemeral budget so the next excerpt cannot store a handle.
+    for (let i = 0; i < 34; i++) {
+      executor.excerpt('z'.repeat(30_000), 24_000, 'notion-fetch', `filler-${i}`)
+    }
+    const out = executor.excerpt('w'.repeat(30_000), 24_000, 'notion-fetch', PAGE)
+    expect(out).toMatch(/CONTINUATION_UNAVAILABLE/)
+    expect(out).not.toMatch(/handle="/)
+    await gate.rememberNormalizedRead(PAGE, { content: [{ type: 'text', text: 'w'.repeat(30_000) }] })
+    gate.noteModelTruncation(PAGE, 24_000, 30_000)
+
+    const pending = gate.handle({
+      rid: 4,
+      tool: 'notion-update-page',
+      args: { data: { page_id: PAGE }, command: { type: 'replace_content', content: '# Short' } },
+      namespace: null,
+    })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(gate.approvals.pendingCount).toBe(0)
+    const refused = (await pending) as { isError?: boolean; content: Array<{ text?: string }> }
+    expect(refused.isError).toBe(true)
+    expect(refused.content[0].text).toMatch(/PARTIAL_BASELINE/)
+    expect(dispatches).toHaveLength(0)
+  })
+
+  it('failed and partial provider fetches establish no complete baseline', async () => {
+    const freshDispatches: Array<{ name: string; args: Record<string, unknown> }> = []
+    const freshJournal = new MutationJournal()
+    freshJournal.setThread('thread-f2')
+    const freshAccess = createTurnAccessState()
+    freshAccess.begin('ask', [PAGE], [], { allowed: false, pages: [] })
+    const fresh = new WriteGate({
+      callTool: async (name) => {
+        if (name === 'notion-fetch') return { content: [{ type: 'text', text: 'boom' }], isError: true }
+        freshDispatches.push({ name, args: {} })
+        return { content: [{ type: 'text', text: 'ok' }] }
+      },
+      fetchPageMarkdown: async () => 'boom',
+      getMode: () => freshAccess.mode(),
+      getContextSet: () => freshAccess.contextPages(),
+      journal: freshJournal,
+      ownership: { isOwner: () => true, getOwnerGeneration: () => 'o', getConnectionGeneration: () => 'c' },
+      getWorkspaceId: () => 'w',
+    })
+    await fresh.handle({ rid: 1, tool: 'notion-fetch', args: { id: PAGE }, namespace: null })
+    const outFailed = (await fresh.handle({
+      rid: 2,
+      tool: 'notion-update-page',
+      args: { data: { page_id: PAGE }, command: { type: 'replace_content', content: '# Short' } },
+      namespace: null,
+    })) as { isError?: boolean; content: Array<{ text?: string }> }
+    expect(outFailed.isError).toBe(true)
+    expect(outFailed.content[0].text).toMatch(/BASELINE_REQUIRED/)
+    expect(freshDispatches).toHaveLength(0)
+
+    // Partial provider read: remembered as partial, refuses as partial.
+    const partialText = JSON.stringify({ content: 'alpha\nbeta', truncated: true, unknown_block_ids: ['22222222-2222-4222-8222-222222222222'] })
+    const partialHarness = continuationHarness(partialText)
+    await partialHarness.gate.handle({ rid: 1, tool: 'notion-fetch', args: { id: PAGE }, namespace: null })
+    const outPartial = (await partialHarness.gate.handle({
+      rid: 2,
+      tool: 'notion-update-page',
+      args: { data: { page_id: PAGE }, command: { type: 'replace_content', content: '# Short' } },
+      namespace: null,
+    })) as { isError?: boolean; content: Array<{ text?: string }> }
+    expect(outPartial.isError).toBe(true)
+    expect(outPartial.content[0].text).toMatch(/PARTIAL_BASELINE/)
+    expect(partialHarness.dispatches).toHaveLength(0)
+  })
+})
