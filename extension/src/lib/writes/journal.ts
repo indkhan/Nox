@@ -192,6 +192,18 @@ export class MutationJournal {
     return { threadId: this.threadId, turnId: this.turnId }
   }
 
+  /**
+   * Undo operation scope after restore (Epoch F1 / R6): a fresh panel only
+   * calls scopeThread(), leaving turnId null. Undo must not require an
+   * unrelated new model turn, so mint one operation turn bound to the
+   * restored persisted thread. Returns null when no thread is restored.
+   */
+  ensureUndoTurn(): string | null {
+    if (this.threadId == null) return null
+    if (this.turnId == null) this.turnId = crypto.randomUUID()
+    return this.turnId
+  }
+
   record(input: Omit<JournalEntry, 'id' | 'ts' | 'threadId' | 'turnId' | 'status'>): Promise<JournalEntry> {
     const task = this.recordQueue.then(async () => {
       // No full-store scan: timestamps are local high-water marks and IDs

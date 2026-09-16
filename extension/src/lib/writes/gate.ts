@@ -237,6 +237,9 @@ export class WriteGate {
     if (this.turnActive) {
       throw new MutationRejectedError('TURN_ACTIVE', 'Nox is working — wait for the turn to finish before undoing. No changes were made.')
     }
+    // R6: restored panels have a persisted thread but no model turn yet.
+    // Give the undo its own operation scope instead of demanding a new chat.
+    this.journal.ensureUndoTurn()
     const scope = this.captureIntentScope(snapshot)
     await this.requireNoConflict(scope.threadId)
     return this.runExclusive(async () => {

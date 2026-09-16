@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { WriteGate } from '../../src/lib/writes/gate'
-import { MutationJournal, type JournalEntry, type JournalStore } from '../../src/lib/writes/journal'
+import { MutationJournal, memoryJournalStore, type JournalEntry, type JournalStore } from '../../src/lib/writes/journal'
 import { requestRuntimeUndo } from '../../src/lib/writes/undo'
 import { createTurnAccessState } from '../../src/lib/agent/turn-access'
 
@@ -541,5 +541,89 @@ describe('Epoch F1.3 — R4 queued work stops behind unknown outcomes', () => {
     expect(ran).toBe(0)
     expect(re.status).toBe('rejected')
     expect(String((re as PromiseRejectedResult).reason?.message ?? re)).toMatch(/CONFLICT_UNRESOLVED/)
+  })
+})
+
+describe('Epoch F1.4 — R6 restored undo without a new turn', () => {
+  function restoredGate(store: JournalStore, opts: { owner?: boolean } = {}) {
+    const journal = new MutationJournal(store)
+    // Fresh panel reopen: scopeThread only, no model turn yet.
+    journal.scopeThread('persisted-thread')
+    const calls: Array<{ name: string; args: Record<string, unknown> }> = []
+    const access = createTurnAccessState()
+    access.begin('auto', [PAGE], [], { allowed: true, pages: [PAGE] })
+    const gate = new WriteGate({
+      callTool: async (name, args) => {
+        calls.push({ name, args })
+        return { content: [{ type: 'text', text: 'ok' }] }
+      },
+      fetchPageMarkdown: async () => '# Simple\noriginal text',
+      getMode: () => access.mode(),
+      getContextSet: () => access.contextPages(),
+      journal,
+      getSmallEditGrant: () => access.smallEditGrant(),
+      recordUnplannedEffects: (c) => access.recordUnplannedEffects(c),
+      ownership: {
+        isOwner: () => opts.owner ?? true,
+        getOwnerGeneration: () => 'owner-gen-1',
+        getConnectionGeneration: () => 'conn-1',
+      },
+      getWorkspaceId: () => 'workspace-1',
+    })
+    return { gate, journal, calls }
+  }
+
+  it('undoes a restored applied entry through the runtime path before any new chat turn', async () => {
+    const store = memoryJournalStore()
+    const seeder = new MutationJournal(store)
+    seeder.setThread('persisted-thread')
+    const args = { data: { page_id: PAGE }, command: { type: 'update_properties', properties: {} } }
+    const entry = await seeder.record({
+      tool: 'notion-update-page',
+      args,
+      kind: 'properties',
+      inverse: { tool: 'notion-update-page', args },
+    })
+    const { gate, journal, calls } = restoredGate(store)
+    expect(gate.journal.captureScope()).toMatchObject({ threadId: 'persisted-thread', turnId: null })
+    const ok = await requestRuntimeUndo(gate, entry.id)
+    expect(ok).toBe(true)
+    expect(calls).toHaveLength(1)
+    expect((await journal.getEntry(entry.id))?.status).toBe('undone')
+    const undos = (await journal.newestFirst()).filter((e) => e.kind === 'undo')
+    expect(undos).toHaveLength(1)
+    expect(undos[0].status).toBe('applied')
+    expect(undos[0].threadId).toBe('persisted-thread')
+  })
+
+  it('viewer undo after restore still makes zero transport calls', async () => {
+    const store = memoryJournalStore()
+    const seeder = new MutationJournal(store)
+    seeder.setThread('persisted-thread')
+    const args = { data: { page_id: PAGE }, command: { type: 'update_properties', properties: {} } }
+    const entry = await seeder.record({
+      tool: 'notion-update-page',
+      args,
+      kind: 'properties',
+      inverse: { tool: 'notion-update-page', args },
+    })
+    const { gate, calls } = restoredGate(store, { owner: false })
+    await expect(requestRuntimeUndo(gate, entry.id)).rejects.toThrow(/NOT_OWNER/)
+    expect(calls).toHaveLength(0)
+  })
+
+  it('stale restored inverses stay blocked without transport', async () => {
+    const store = memoryJournalStore()
+    const seeder = new MutationJournal(store)
+    seeder.setThread('persisted-thread')
+    const args = { data: { page_id: PAGE }, command: { type: 'update_properties', properties: {} } }
+    const noInverse = await seeder.record({
+      tool: 'notion-update-page',
+      args,
+      kind: 'properties',
+    })
+    const { gate, calls } = restoredGate(store)
+    expect(await requestRuntimeUndo(gate, noInverse.id)).toBe(false)
+    expect(calls).toHaveLength(0)
   })
 })
