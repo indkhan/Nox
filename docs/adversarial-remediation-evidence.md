@@ -1,3 +1,12 @@
+> **Superseded assessment — 2026-09-16:** This file preserves historical Epoch 17
+> evidence. The new [adversarial review](ADVERSARIAL-REVIEW.md) confirms seven
+> remaining defects (R1–R7); its findings override the older “no new release
+> blocker” and complete-closure statements below. The current work plan is
+> [follow-up epochs F1–F5](ADVERSARIAL-REMEDIATION-EPOCHS.md). Original epoch
+> execution records are in Git at `0eb4234`. C01–C17 remain BLOCKED; their full
+> steps are preserved in [smoke.md](smoke.md#live-acceptance-scenarios-c01c17).
+> Do not reuse the historical closure claims as current acceptance evidence.
+
 # Nox adversarial remediation: evidence log (Epoch 17)
 
 This is the sanitized results record required by Epoch 17. It maps every
