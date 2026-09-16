@@ -32,6 +32,14 @@ export class AgentLoop {
   private listeners = new Set<TurnListener>()
   private cancelled = false
   private untrustedContextThisTurn = false
+  /**
+   * Conversation-lifetime untrusted exposure (Epoch F2 / R3). The same Codex
+   * conversation is resumed with its previous workspace content, so once a
+   * turn observes untrusted Notion text, every later turn in that
+   * conversation stays untrusted until a genuinely fresh thread starts.
+   * Restored non-null threads default to untrusted (conservative reload).
+   */
+  private untrustedConversation = false
   private turnAbort: AbortController | null = null
   private turnRunning = false
   /** User-selected model/effort applied on the next thread start or resume. */
@@ -40,13 +48,17 @@ export class AgentLoop {
   constructor(private readonly deps: AgentLoopDeps) {
     this.deps.codex.onToolCall = async (req) => {
       if (!this.turnRunning || this.cancelled) throw new Error('TURN_CANCELLED')
+      const untrusted = this.untrustedContextThisTurn || this.untrustedConversation
       const outcome = await this.deps.executor.execute({
         ...req,
-        provenance: this.untrustedContextThisTurn ? 'untrusted-context' : 'user-only',
+        provenance: untrusted ? 'untrusted-context' : 'user-only',
       })
       // Local plan receipts are Nox-internal status, not workspace content:
-      // only real tool exposure taints the turn.
-      if (req.tool !== WORKSPACE_PLAN_TOOL_NAME) this.untrustedContextThisTurn = true
+      // only real tool exposure taints the turn and the conversation.
+      if (req.tool !== WORKSPACE_PLAN_TOOL_NAME) {
+        this.untrustedContextThisTurn = true
+        this.untrustedConversation = true
+      }
       return {
         success: outcome.success,
         contentItems: outcome.contentItems,
@@ -57,16 +69,36 @@ export class AgentLoop {
 
   }
 
+  /** Conversation-lifetime exposure, for tests and conservative restore. */
+  hasUntrustedConversation(): boolean {
+    return this.untrustedConversation
+  }
+
   get currentThreadId(): string | null {
     return this.threadId
   }
 
   newThread(): void {
     this.threadId = null
+    // A genuinely fresh model context is the only reset: no prior workspace
+    // content survives, so ordinary Auto behavior is preserved for new chats.
+    this.untrustedConversation = false
+    this.untrustedContextThisTurn = false
   }
 
   restoreThread(threadId: string | null): void {
+    const changed = threadId !== this.threadId
     this.threadId = threadId
+    if (threadId == null) {
+      this.untrustedConversation = false
+      this.untrustedContextThisTurn = false
+    } else if (changed) {
+      // Conservative reload: a resumed conversation may still carry prior
+      // workspace content in Codex history. Assume exposure until a fresh
+      // thread proves otherwise; clean restores may ask once more rather
+      // than silently authorize.
+      this.untrustedConversation = true
+    }
   }
 
   /** Model/effort changes land on the next turn via thread resume. */
@@ -142,8 +174,12 @@ export class AgentLoop {
   ): Promise<{ text: string; interrupted: boolean }> {
     this.cancelled = false
     // Provenance is actual exposure, not callback presence: an empty
-    // preparation callback taints nothing by itself.
-    this.untrustedContextThisTurn = opts.mentions?.some((mention) => mention.markdown != null) ?? false
+    // preparation callback taints nothing by itself. Retained conversation
+    // exposure carries over: turn two with no new mentions is still
+    // untrusted when turn one saw workspace content (R3).
+    const initialMentionsTainted = opts.mentions?.some((mention) => mention.markdown != null) ?? false
+    this.untrustedContextThisTurn = this.untrustedConversation || initialMentionsTainted
+    if (initialMentionsTainted) this.untrustedConversation = true
     const abort = new AbortController()
     this.turnAbort = abort
     const cancel = () => this.cancel()
@@ -156,7 +192,10 @@ export class AgentLoop {
       if (opts.signal?.aborted) this.cancel()
       abort.signal.throwIfAborted()
       const mentions = opts.prepareContext ? await abortable(opts.prepareContext(abort.signal), abort.signal) : opts.mentions
-      if (mentions?.some((mention) => mention.markdown != null)) this.untrustedContextThisTurn = true
+      if (mentions?.some((mention) => mention.markdown != null)) {
+        this.untrustedContextThisTurn = true
+        this.untrustedConversation = true
+      }
       await abortable(this.ensureThread(undefined, abort.signal), abort.signal)
       abort.signal.throwIfAborted()
       if (this.deps.codex.researchLimitation) this.listeners.forEach(l => l({ kind: 'commentary', id: 'research-limitation', text: this.deps.codex.researchLimitation! }))

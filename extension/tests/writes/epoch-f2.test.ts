@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { WriteGate } from '../../src/lib/writes/gate'
 import { MutationJournal } from '../../src/lib/writes/journal'
 import { ToolExecutor } from '../../src/lib/agent/executor'
+import { AgentLoop } from '../../src/lib/agent/loop'
 import { buildContextPreamble } from '../../src/lib/agent/context'
 import { createTurnAccessState } from '../../src/lib/agent/turn-access'
 
@@ -378,5 +379,132 @@ describe('Epoch F2.3 — R2 continuation delivery and provider completeness', ()
     expect(outPartial.isError).toBe(true)
     expect(outPartial.content[0].text).toMatch(/PARTIAL_BASELINE/)
     expect(partialHarness.dispatches).toHaveLength(0)
+  })
+})
+
+describe('Epoch F2.4 — R3 retained untrusted exposure across turns', () => {
+  interface RecordedCall { tool: string; provenance?: string }
+  function fakeCodex(script: (tool: (name: string, args?: Record<string, unknown>) => Promise<unknown>) => Promise<void>) {
+    let onTool: ((req: { tool: string; args: Record<string, unknown>; rid: number; namespace: null }) => Promise<unknown>) | null = null
+    const client = {
+      onToolCall: null as unknown,
+      emit: () => undefined,
+      researchLimitation: null,
+      async startThread() { return 'codex-f2' },
+      async resumeThread(id: string) { return id },
+      async initialize() { return undefined },
+      async interrupt() { return undefined },
+      async runTurn() {
+        const tool = async (name: string, args: Record<string, unknown> = {}) => onTool!({ tool: name, args, rid: 1, namespace: null })
+        await script(tool)
+        return { interrupted: false, finalText: 'done' }
+      },
+    }
+    Object.defineProperty(client, 'onToolCall', {
+      get: () => onTool,
+      set: (v) => { onTool = v },
+      configurable: true,
+    })
+    return client
+  }
+
+  function loopWithRecorder(script: (tool: (name: string, args?: Record<string, unknown>) => Promise<unknown>) => Promise<void>) {
+    const calls: RecordedCall[] = []
+    const executor = new ToolExecutor({
+      callTool: async (name, _args, _signal, provenance) => {
+        calls.push({ tool: name, provenance })
+        return { content: [{ type: 'text', text: 'synthetic workspace text' }] }
+      },
+      assertToolAllowed: () => undefined,
+    })
+    const codex = fakeCodex(script)
+    const loop = new AgentLoop({
+      bridge: { disconnect: () => undefined } as unknown as never,
+      codex: codex as unknown as never,
+      executor,
+      getDynamicTools: async () => [],
+      developerInstructions: 'Nox',
+    })
+    return { loop, calls, codex }
+  }
+
+  it('turn-two mutation keeps untrusted provenance after a turn-one workspace read', async () => {
+    let script: (tool: (name: string) => Promise<unknown>) => Promise<void> = async (tool) => {
+      await tool('notion-fetch')
+    }
+    const { loop, calls } = loopWithRecorder((tool) => script(tool))
+    await loop.sendUserMessage('read it', { mentions: [{ pageId: PAGE, title: 'P', markdown: '# hello' }] })
+    expect(calls).toHaveLength(1)
+    expect(calls[0].provenance).toBe('untrusted-context')
+    expect(loop.hasUntrustedConversation()).toBe(true)
+
+    // Turn two has no new mentions but the same Codex conversation resumes:
+    // the same loop instance must still forward untrusted-context.
+    script = async (tool) => {
+      await tool('notion-update-page')
+    }
+    await loop.sendUserMessage('edit it')
+    expect(calls).toHaveLength(2)
+    expect(calls[1]).toMatchObject({ tool: 'notion-update-page', provenance: 'untrusted-context' })
+  })
+
+  it('a granted in-context Auto edit on turn two still requires confirmation after exposure', async () => {
+    const journal = new MutationJournal()
+    journal.setThread('thread-f2')
+    const access = createTurnAccessState()
+    access.begin('auto', [PAGE], [], { allowed: true, pages: [PAGE] })
+    const dispatches: Array<{ name: string }> = []
+    const gate = new WriteGate({
+      callTool: async (name) => {
+        dispatches.push({ name })
+        return { content: [{ type: 'text', text: 'ok' }] }
+      },
+      fetchPageMarkdown: async () => '# Simple',
+      getMode: () => access.mode(),
+      getContextSet: () => access.contextPages(),
+      journal,
+      getSmallEditGrant: () => access.smallEditGrant(),
+      recordUnplannedEffects: (c) => access.recordUnplannedEffects(c),
+      ownership: { isOwner: () => true, getOwnerGeneration: () => 'o', getConnectionGeneration: () => 'c' },
+      getWorkspaceId: () => 'w',
+    })
+    // Turn-one exposure is real workspace content in the same conversation.
+    // Turn two reuses the grant but forwards retained untrusted provenance.
+    const out = gate.handle({
+      rid: 2,
+      tool: 'notion-update-page',
+      args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: {} } },
+      namespace: null,
+      provenance: 'untrusted-context',
+    })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(gate.approvals.pendingCount).toBe(1)
+    gate.approvals.answer(gate.approvals.pendingIds[0], 'approve')
+    await out
+    expect(dispatches).toHaveLength(1)
+  })
+
+  it('restore of an exposed conversation stays untrusted; fresh chats stay clean', async () => {
+    const { loop } = loopWithRecorder(async (tool) => { await tool('notion-fetch') })
+    await loop.sendUserMessage('read', { mentions: [{ pageId: PAGE, title: 'P', markdown: '# hi' }] })
+    expect(loop.hasUntrustedConversation()).toBe(true)
+    const threadId = loop.currentThreadId ?? 'codex-f2'
+
+    // Simulated reload: a new AgentLoop restores the same Codex thread.
+    const { loop: reloaded, calls: reloadedCalls } = loopWithRecorder(async (tool) => { await tool('notion-update-page') })
+    reloaded.restoreThread(threadId)
+    expect(reloaded.hasUntrustedConversation()).toBe(true)
+    await reloaded.sendUserMessage('edit after reload')
+    expect(reloadedCalls[0].provenance).toBe('untrusted-context')
+
+    // Fresh chats reset: ordinary Auto use is preserved.
+    const { loop: fresh, calls: freshCalls } = loopWithRecorder(async (tool) => { await tool('notion-search') })
+    fresh.newThread()
+    await fresh.sendUserMessage('clean question')
+    expect(freshCalls[0].provenance).toBe('user-only')
+    expect(fresh.hasUntrustedConversation()).toBe(true) // the search itself taints afterwards
+    const { loop: clean } = loopWithRecorder(async () => undefined)
+    clean.newThread()
+    expect(clean.hasUntrustedConversation()).toBe(false)
   })
 })
