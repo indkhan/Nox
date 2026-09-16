@@ -519,6 +519,31 @@ export class WriteGate {
     signal?.throwIfAborted()
   }
 
+  /**
+   * Dispatch-time authority revalidation (Epoch F1 / R1): ownership, connection
+   * generation, workspace scope, tool capability and cancellation are all
+   * rechecked after every asynchronous boundary (guard reads, durable intent
+   * persistence, final re-read) and immediately before transport. A stale
+   * snapshot refuses without dispatch; callers settle any persisted intent as
+   * known failure.
+   */
+  private assertDispatchAuthority(
+    snapshot: OwnershipSnapshot,
+    scope: IntentScope,
+    signal?: AbortSignal,
+    tool?: string,
+  ): void {
+    this.reassertMutation(snapshot, signal)
+    const workspaceId = this.deps.getWorkspaceId?.() ?? null
+    if (workspaceId !== scope.workspaceId) {
+      if (!workspaceId) {
+        throw new MutationRejectedError('NO_WORKSPACE_SCOPE', 'the connected Notion workspace is not established — reconnect Notion. No changes were made.')
+      }
+      throw new MutationRejectedError('CONNECTION_CHANGED', 'the Notion workspace changed while this operation was queued. No changes were made.')
+    }
+    if (tool) this.deps.assertToolAllowed?.(tool)
+  }
+
   /** Fresh storage read so a restored activity row cannot replay a stale undo. */
   private async revalidateUndoEntry(journalId: string, tool: string, args: Record<string, unknown>): Promise<JournalEntry> {
     const entries = await this.journal.newestFirst()
@@ -732,7 +757,7 @@ export class WriteGate {
           return textResult('PLAN_REQUIRED: this turn already used its five unplanned small edits — propose a workspace plan for the remaining work. No changes were made.')
         }
       }
-      return this.executeMutation(req, classification, scope, effect, frozenArgs, reservationId, baselineHash)
+      return this.executeMutation(req, classification, scope, snapshot, effect, frozenArgs, reservationId, baselineHash)
     })
   }
 
@@ -745,10 +770,19 @@ export class WriteGate {
    * before dispatch, so admission delay cannot silently stale the write.
    * Guard reads share the scheduler with dispatch but never hold its slot
    * across each other: every read completes before dispatch is invoked.
+   * Authority (owner/connection/workspace/capability/cancellation) is
+   * revalidated after every async boundary and immediately before transport;
+   * a stale snapshot settles known failure with zero dispatch.
    */
-  private async executeMutation(req: ToolCallRequest, classification: CallClassification, scope: IntentScope, effect: ValidatedEffect, frozenArgs: Record<string, unknown>, reservationId: string | undefined, baselineHash: string | null): Promise<unknown> {
+  private async executeMutation(req: ToolCallRequest, classification: CallClassification, scope: IntentScope, snapshot: OwnershipSnapshot, effect: ValidatedEffect, frozenArgs: Record<string, unknown>, reservationId: string | undefined, baselineHash: string | null): Promise<unknown> {
     const guard = await this.runGuardPhase(req, classification, contentTarget(effect), baselineHash)
     if (!guard.ok) return guard.result
+    try {
+      this.assertDispatchAuthority(snapshot, scope, req.signal, req.tool)
+    } catch (e) {
+      if (isAbortError(e)) return textResult('TURN_CANCELLED: the turn was cancelled before dispatch. No changes were made.')
+      return textResult(e instanceof Error ? e.message : String(e))
+    }
 
     let intent: JournalEntry
     try {
@@ -767,10 +801,15 @@ export class WriteGate {
     this.activeIntentIds.add(intent.id)
     try {
       try {
-        req.signal?.throwIfAborted()
-      } catch {
-        await this.settleProtected(intent.id, { status: 'failed', outcomeDetail: 'cancelled before dispatch' })
-        return textResult('TURN_CANCELLED: the turn was cancelled before dispatch. No changes were made.')
+        this.assertDispatchAuthority(snapshot, scope, req.signal, req.tool)
+      } catch (e) {
+        if (isAbortError(e)) {
+          await this.settleProtected(intent.id, { status: 'failed', outcomeDetail: 'cancelled before dispatch' })
+          return textResult('TURN_CANCELLED: the turn was cancelled before dispatch. No changes were made.')
+        }
+        const detail = e instanceof Error ? e.message : String(e)
+        await this.settleProtected(intent.id, { status: 'failed', outcomeDetail: detail })
+        return textResult(detail)
       }
 
       // Final recheck immediately before dispatch: the intent is durable,
@@ -797,6 +836,17 @@ export class WriteGate {
               'the approved change was based on an older state. Re-read the page and request a fresh review. No changes were made.',
           )
         }
+      }
+      try {
+        this.assertDispatchAuthority(snapshot, scope, req.signal, req.tool)
+      } catch (e) {
+        if (isAbortError(e)) {
+          await this.settleProtected(intent.id, { status: 'failed', outcomeDetail: 'cancelled before dispatch' })
+          return textResult('TURN_CANCELLED: the turn was cancelled before dispatch. No changes were made.')
+        }
+        const detail = e instanceof Error ? e.message : String(e)
+        await this.settleProtected(intent.id, { status: 'failed', outcomeDetail: detail })
+        return textResult(detail)
       }
 
       let result: unknown
