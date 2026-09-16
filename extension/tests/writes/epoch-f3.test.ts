@@ -75,3 +75,111 @@ describe('Epoch F3.1 — R5 login-attempt generation (single instance)', () => {
     expect(deps.local.data['notion.refresh']).toBe('rt-B')
   })
 })
+
+describe('Epoch F3.2 — R5 cross-instance invalidation and preservation', () => {
+  function serialLock() {
+    const tails = new Map<string, Promise<void>>()
+    return {
+      runExclusive<T>(name: string, fn: () => Promise<T>): Promise<T> {
+        const tail = tails.get(name) ?? Promise.resolve()
+        const run = tail.then(fn, fn)
+        tails.set(
+          name,
+          run.then(
+            () => undefined,
+            () => undefined,
+          ),
+        )
+        return run
+      },
+    }
+  }
+
+  function sharedDeps(lock: ReturnType<typeof serialLock>) {
+    const session = memoryStore()
+    const local = memoryStore()
+    const base = {
+      session,
+      local,
+      fetchImpl: (async () =>
+        new Response(JSON.stringify(tokenResponse({ access_token: 'at-2', refresh_token: 'rt-2' })), {
+          status: 200,
+        })) as typeof fetch,
+      getClientId: async () => 'client-1',
+      now: () => 1_000_000,
+      lock,
+    }
+    return { session, local, base }
+  }
+
+  it('stale attempt is rejected across instances sharing storage and locks', async () => {
+    const lock = serialLock()
+    const { session, local, base } = sharedDeps(lock)
+    const a = new TokenStore(base)
+    const b = new TokenStore({ ...base })
+    const attemptA = await a.beginLogin()
+    // Second panel wipes while A's consent/token exchange is still pending.
+    await b.wipe()
+    await expect(a.saveFromTokenResponse(tokenResponse({ access_token: 'at-A' }), attemptA)).rejects.toThrow(
+      /STALE_LOGIN_ATTEMPT/,
+    )
+    expect(await a.getAccessToken()).toBeNull()
+    expect(await b.getAccessToken()).toBeNull()
+    expect((await session.get())['notion.access']).toBeUndefined()
+    expect((await local.get('notion.refresh'))['notion.refresh']).toBeUndefined()
+  })
+
+  it('A then B across instances: only B survives with exact credentials', async () => {
+    const lock = serialLock()
+    const { base, local } = sharedDeps(lock)
+    const a = new TokenStore(base)
+    const b = new TokenStore({ ...base })
+    const attemptA = await a.beginLogin()
+    const attemptB = await b.beginLogin()
+    await b.saveFromTokenResponse(tokenResponse({ access_token: 'at-B', refresh_token: 'rt-B' }), attemptB)
+    await expect(a.saveFromTokenResponse(tokenResponse({ access_token: 'at-A', refresh_token: 'rt-A' }), attemptA)).rejects.toThrow(
+      /STALE_LOGIN_ATTEMPT/,
+    )
+    expect(await a.getAccessToken()).toBe('at-B')
+    expect(await b.getAccessToken()).toBe('at-B')
+    expect((await local.get('notion.refresh'))['notion.refresh']).toBe('rt-B')
+  })
+
+  it('isLoginAttemptCurrent tracks wipe and replacement login', async () => {
+    const lock = serialLock()
+    const { base } = sharedDeps(lock)
+    const s = new TokenStore(base)
+    const attempt = await s.beginLogin()
+    expect(await s.isLoginAttemptCurrent(attempt)).toBe(true)
+    await s.wipe()
+    expect(await s.isLoginAttemptCurrent(attempt)).toBe(false)
+    const fresh = await s.beginLogin()
+    expect(await s.isLoginAttemptCurrent(fresh)).toBe(true)
+    expect(await s.isLoginAttemptCurrent(attempt)).toBe(false)
+  })
+
+  it('successful fresh attempt login still rotates via refresh', async () => {
+    const lock = serialLock()
+    const { base, local } = sharedDeps(lock)
+    const s = new TokenStore(base)
+    const attempt = await s.beginLogin()
+    await s.saveFromTokenResponse(tokenResponse(), attempt)
+    expect(await s.refresh()).toBe('refreshed')
+    expect((await local.get('notion.refresh'))['notion.refresh']).toBe('rt-2')
+  })
+
+  it('storage failure during attempt save fails closed without false success', async () => {
+    const lock = serialLock()
+    const { base, local } = sharedDeps(lock)
+    const s = new TokenStore(base)
+    const attempt = await s.beginLogin()
+    const innerSet = base.local.set.bind(base.local)
+    base.local.set = async (items: Record<string, unknown>) => {
+      if ('notion.access' in items || 'notion.refresh' in items) throw new Error('disk full')
+      return innerSet(items)
+    }
+    await expect(s.saveFromTokenResponse(tokenResponse(), attempt)).rejects.toThrow(/disk full/)
+    expect(await s.isLoginAttemptCurrent(attempt)).toBe(true)
+    expect((await local.get('notion.refresh'))['notion.refresh']).toBeUndefined()
+  })
+})
