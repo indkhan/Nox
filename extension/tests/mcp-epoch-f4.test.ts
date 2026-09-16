@@ -166,3 +166,118 @@ describe('Epoch F4.1 — R7 streaming exact byte accounting (ASCII JSON/SSE)', (
     expect(McpClient.resultText(res)).toBe('hello')
   })
 })
+
+describe('Epoch F4.2 — R7 fallback exact UTF-8 and multibyte boundaries', () => {
+  function fallbackResponse(text: string, contentType = 'application/json'): Response {
+    return {
+      status: 200,
+      ok: true,
+      headers: new Headers({ 'content-type': contentType }),
+      body: null,
+      text: async () => text,
+    } as unknown as Response
+  }
+  function textWithByteLength(char: string, targetBytes: number): string {
+    const charBytes = utf8Len(char)
+    const count = Math.floor(targetBytes / charBytes)
+    const base = char.repeat(count)
+    const rest = targetBytes - utf8Len(base)
+    return base + 'a'.repeat(rest)
+  }
+
+  it('fallback resolves below/exact-cap ASCII JSON and rejects above-cap', async () => {
+    for (const delta of [-1, 0] as const) {
+      const maker = makeClient((_url, body) => {
+        const b = body as { id: number }
+        const need = BUDGET - utf8Len(jsonTextBody(b.id, '')) + delta
+        const full = jsonTextBody(b.id, 'a'.repeat(need))
+        expect(utf8Len(full)).toBe(BUDGET + delta)
+        return fallbackResponse(full)
+      })
+      await expect(maker.client.callTool('notion-fetch', {})).resolves.toBeDefined()
+    }
+    let calls = 0
+    const fetchImpl = (async (_url: string, init?: RequestInit) => {
+      calls++
+      const b = JSON.parse(String(init?.body)) as { id: number }
+      const need = BUDGET - utf8Len(jsonTextBody(b.id, '')) + 1
+      return fallbackResponse(jsonTextBody(b.id, 'a'.repeat(need)))
+    }) as typeof fetch
+    const over = new McpClient({ fetchImpl, getAccessToken: async () => 'tok-1' })
+    await expect(over.callTool('notion-fetch', {})).rejects.toThrow(/MCP_OVERSIZE/)
+    expect(calls).toBe(1)
+  })
+
+  it('fallback resolves exact-cap multibyte JSON (2-byte and 4-byte chars)', async () => {
+    for (const char of ['é', '😀', '中'] as const) {
+      const maker = makeClient((_url, body) => {
+        const b = body as { id: number }
+        const overhead = utf8Len(jsonTextBody(b.id, ''))
+        const full = jsonTextBody(b.id, textWithByteLength(char, BUDGET - overhead))
+        expect(utf8Len(full)).toBe(BUDGET)
+        return fallbackResponse(full)
+      })
+      const res = await maker.client.callTool('notion-fetch', {})
+      expect(utf8Len(JSON.stringify(res))).toBeLessThanOrEqual(BUDGET + 1024)
+    }
+  })
+
+  it('fallback rejects above-cap multibyte JSON', async () => {
+    let calls = 0
+    const fetchImpl = (async (_url: string, init?: RequestInit) => {
+      calls++
+      const b = JSON.parse(String(init?.body)) as { id: number }
+      const overhead = utf8Len(jsonTextBody(b.id, ''))
+      // One byte over: exact multibyte payload plus one ASCII byte.
+      const exact = textWithByteLength('é', BUDGET - overhead)
+      return fallbackResponse(jsonTextBody(b.id, `${exact}a`))
+    }) as typeof fetch
+    const client = new McpClient({ fetchImpl, getAccessToken: async () => 'tok-1' })
+    await expect(client.callTool('notion-fetch', {})).rejects.toThrow(/MCP_OVERSIZE/)
+    expect(calls).toBe(1)
+  })
+
+  it('streaming resolves exact-cap multibyte JSON split across chunks', async () => {
+    const { client } = makeClient((_url, body) => {
+      const b = body as { id: number }
+      const overhead = utf8Len(jsonTextBody(b.id, ''))
+      const text = textWithByteLength('😀', BUDGET - overhead)
+      const full = jsonTextBody(b.id, text)
+      expect(utf8Len(full)).toBe(BUDGET)
+      const bytes = new TextEncoder().encode(full)
+      // Split inside a 4-byte emoji sequence, then stream the rest in large
+      // chunks: exercises the incremental UTF-8 decoder without 8M pulls.
+      const emojiByte = bytes.indexOf(0xf0)
+      const splitAt = emojiByte > 0 ? emojiByte + 1 : Math.floor(bytes.length / 2)
+      const first = bytes.subarray(0, splitAt)
+      const rest = bytes.subarray(splitAt)
+      const stream = new ReadableStream<Uint8Array>({
+        start(c) {
+          c.enqueue(first)
+          c.enqueue(rest)
+          c.close()
+        },
+      })
+      return new Response(stream, { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+    const res = await client.callTool('notion-fetch', {})
+    expect(utf8Len(jsonTextBody(1, McpClient.resultText(res)))).toBeLessThanOrEqual(BUDGET + 16)
+  })
+
+  it('streaming rejects above-cap multibyte SSE', async () => {
+    let calls = 0
+    const fetchImpl = (async (_url: string, init?: RequestInit) => {
+      calls++
+      const b = JSON.parse(String(init?.body)) as { id: number }
+      const overhead = utf8Len(sseTextBody(b.id, ''))
+      const text = `${textWithByteLength('é', BUDGET - overhead)}a`
+      return new Response(sseTextBody(b.id, text), {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      })
+    }) as typeof fetch
+    const client = new McpClient({ fetchImpl, getAccessToken: async () => 'tok-1' })
+    await expect(client.callTool('notion-fetch', {})).rejects.toThrow(/MCP_OVERSIZE/)
+    expect(calls).toBe(1)
+  })
+})

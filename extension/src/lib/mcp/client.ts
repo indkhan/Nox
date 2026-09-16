@@ -313,8 +313,11 @@ async function readBoundedMcpBody(
   }
   const body = res.body as ReadableStream<Uint8Array> | null
   if (!body || typeof body.getReader !== 'function') {
+    // Epoch F4.2 / R7: supported non-stream fallback uses exact UTF-8
+    // accounting, not the old text.length * 3 upper bound that rejected
+    // valid ASCII/multibyte bodies below the advertised limit.
     const text = await res.text().catch(() => '')
-    if (byteLengthOf(text) > budgetBytes) throw new McpBodyTooLargeError(budgetBytes)
+    if (utf8ByteLengthOf(text) > budgetBytes) throw new McpBodyTooLargeError(budgetBytes)
     return text
   }
   const reader = body.getReader()
@@ -369,9 +372,11 @@ async function readBoundedMcpBody(
   }
 }
 
-function byteLengthOf(text: string): number {
-  // Conservative upper bound without allocating: 3 bytes per UTF-16 unit.
-  return text.length * 3
+function utf8ByteLengthOf(text: string): number {
+  // Exact UTF-8 accounting for the supported non-stream fallback path.
+  // Streams enforce actual received wire bytes directly; only this fallback
+  // (no ReadableStream reader) needs to measure decoded text.
+  return new TextEncoder().encode(text).byteLength
 }
 
 /**
