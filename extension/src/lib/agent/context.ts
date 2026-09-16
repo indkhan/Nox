@@ -26,8 +26,11 @@ export interface ContextInput {
 /**
  * The per-turn context preamble. Only pages the user explicitly @-mentioned
  * enter context. Pure so it is trivially testable; fetching lives in the loop.
+ * Epoch F2 / R2: `excerpt` receives the normalized page id so truncation
+ * before Codex can be reported to the write gate (model-partial baselines).
+ * Existing two-arg excerpts keep working; the id is simply ignored.
  */
-export function buildContextPreamble(input: ContextInput, excerpt: (text: string, budget: number) => string = truncateResult): string {
+export function buildContextPreamble(input: ContextInput, excerpt: (text: string, budget: number, pageId?: string) => string = truncateResult): string {
   const blocks: string[] = []
   const { currentPage, mentions = [], attachments = [] } = input
 
@@ -60,7 +63,7 @@ export function buildContextPreamble(input: ContextInput, excerpt: (text: string
     content.push(`${location}<${tag} id="${escapeXml(id)}"${view}>\n` +
       `title: ${escapeXml(page.title ?? 'Untitled')}\n` +
       `<retrieval status="${status}" total_chars="${text?.length ?? 0}" supplied_chars="${Math.min(text?.length ?? 0, budget)}"/>\n` +
-      (page.error ? `Fetch unavailable: ${escapeXml(page.error)}` : text === undefined ? 'Reference only: fetch this page before making claims about its contents.' : `content:\n${excerpt(text, budget)}`) +
+      (page.error ? `Fetch unavailable: ${escapeXml(page.error)}` : text === undefined ? 'Reference only: fetch this page before making claims about its contents.' : `content:\n${excerpt(text, budget, id)}`) +
       `\n</${tag}>${active ? '\n</current_notion_location>' : ''}`)
     remaining -= Math.min(text?.length ?? 0, budget)
   }

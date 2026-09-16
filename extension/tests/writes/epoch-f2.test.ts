@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { WriteGate } from '../../src/lib/writes/gate'
 import { MutationJournal } from '../../src/lib/writes/journal'
 import { ToolExecutor } from '../../src/lib/agent/executor'
+import { buildContextPreamble } from '../../src/lib/agent/context'
 import { createTurnAccessState } from '../../src/lib/agent/turn-access'
 
 const PAGE = 'b'.repeat(32)
@@ -60,15 +61,47 @@ function makeExecutorForGate(gate: WriteGate) {
       return { content: result.content ?? [] }
     },
     assertToolAllowed: () => undefined,
-    // Wired below once the gate exposes model-delivery reporting (F2.1).
-    onModelTruncation: (pageId, delivered, total) => {
-      ;(gate as unknown as { noteModelTruncation?: (p: string, d: number, t: number) => void })
-        .noteModelTruncation?.(pageId, delivered, total)
-    },
+    onModelTruncation: (pageId, delivered, total) => gate.noteModelTruncation(pageId, delivered, total),
+    onModelDelivery: (pageId, offset, end, total) => gate.noteModelDelivery(pageId, offset, end, total),
   })
   executor.beginTurn()
   gate.beginTurn()
   return executor
+}
+
+function mentionHarness(pageIds: string[], texts: Map<string, string>) {
+  const dispatches: Array<{ name: string; args: Record<string, unknown> }> = []
+  const journal = new MutationJournal()
+  journal.setThread('thread-f2')
+  const access = createTurnAccessState()
+  access.begin('ask', pageIds, [], { allowed: false, pages: [] })
+  const gate = new WriteGate({
+    callTool: async (name, args) => {
+      dispatches.push({ name, args })
+      return { content: [{ type: 'text', text: 'ok' }] }
+    },
+    fetchPageMarkdown: async (pageId) => texts.get(pageId) ?? '',
+    getMode: () => access.mode(),
+    getContextSet: () => access.contextPages(),
+    journal,
+    getSmallEditGrant: () => access.smallEditGrant(),
+    recordUnplannedEffects: (c) => access.recordUnplannedEffects(c),
+    ownership: {
+      isOwner: () => true,
+      getOwnerGeneration: () => 'owner-f2',
+      getConnectionGeneration: () => 'conn-f2',
+    },
+    getWorkspaceId: () => 'workspace-f2',
+  })
+  const executor = new ToolExecutor({
+    callTool: async () => ({ content: [{ type: 'text', text: 'unused' }] }),
+    assertToolAllowed: () => undefined,
+    onModelTruncation: (pageId, delivered, total) => gate.noteModelTruncation(pageId, delivered, total),
+    onModelDelivery: (pageId, offset, end, total) => gate.noteModelDelivery(pageId, offset, end, total),
+  })
+  executor.beginTurn()
+  gate.beginTurn()
+  return { gate, journal, dispatches, executor }
 }
 
 describe('Epoch F2.1 — R2 truncated dynamic fetch must not authorize replacement', () => {
@@ -97,6 +130,64 @@ describe('Epoch F2.1 — R2 truncated dynamic fetch must not authorize replaceme
     const out = (await pending) as { isError?: boolean; content: Array<{ text?: string }> }
     expect(out.isError).toBe(true)
     expect(out.content[0].text).toMatch(/PARTIAL_BASELINE/)
+    expect(dispatches).toHaveLength(0)
+  })
+})
+
+describe('Epoch F2.2 — R2 mention truncation must not authorize replacement', () => {
+  it('an 8,000-char mention truncation refuses replacement before approval', async () => {
+    const big = `${'m'.repeat(8990)}TAIL`
+    expect(big.length).toBeGreaterThan(8000)
+    const { gate, dispatches, executor } = mentionHarness([PAGE], new Map([[PAGE, big]]))
+    await gate.rememberNormalizedRead(PAGE, { content: [{ type: 'text', text: big }] })
+    const preamble = buildContextPreamble(
+      { mentions: [{ pageId: PAGE, title: 'Big', markdown: big }] },
+      (text, budget, pageId) => executor.excerpt(text, budget, 'notion-fetch', pageId),
+    )
+    expect(preamble).toMatch(/status="partial"/)
+    expect(preamble).not.toContain('TAIL')
+
+    const pending = gate.handle({
+      rid: 2,
+      tool: 'notion-update-page',
+      args: { data: { page_id: PAGE }, command: { type: 'replace_content', content: '# Short' } },
+      namespace: null,
+    })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(gate.approvals.pendingCount).toBe(0)
+    const out = (await pending) as { isError?: boolean; content: Array<{ text?: string }> }
+    expect(out.isError).toBe(true)
+    expect(out.content[0].text).toMatch(/PARTIAL_BASELINE/)
+    expect(dispatches).toHaveLength(0)
+  })
+
+  it('combined mention budget exhaustion refuses the truncated tail page only', async () => {
+    const ids = [0, 1, 2, 3].map((i) => `${i.toString().repeat(8)}-${'a'.repeat(24)}`.slice(0, 32))
+    const texts = new Map<string, string>()
+    for (const id of ids) texts.set(id, 'x'.repeat(7000))
+    const { gate, dispatches, executor } = mentionHarness(ids, texts)
+    for (const id of ids) {
+      await gate.rememberNormalizedRead(id, { content: [{ type: 'text', text: texts.get(id)! }] })
+    }
+    const preamble = buildContextPreamble(
+      { mentions: ids.map((id) => ({ pageId: id, title: `P${id.slice(0, 4)}`, markdown: texts.get(id)! })) },
+      (text, budget, pageId) => executor.excerpt(text, budget, 'notion-fetch', pageId),
+    )
+    // First pages fit; the tail page is cut by the 24k combined budget.
+    expect(preamble.match(/status="partial"/g)?.length).toBeGreaterThanOrEqual(1)
+
+    const tail = ids[3]
+    const pendingTail = gate.handle({
+      rid: 3,
+      tool: 'notion-update-page',
+      args: { data: { page_id: tail }, command: { type: 'replace_content', content: '# Short' } },
+      namespace: null,
+    })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(gate.approvals.pendingCount).toBe(0)
+    const outTail = (await pendingTail) as { isError?: boolean; content: Array<{ text?: string }> }
+    expect(outTail.isError).toBe(true)
+    expect(outTail.content[0].text).toMatch(/PARTIAL_BASELINE/)
     expect(dispatches).toHaveLength(0)
   })
 })

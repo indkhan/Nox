@@ -160,7 +160,7 @@ export class AgentLoop {
       await abortable(this.ensureThread(undefined, abort.signal), abort.signal)
       abort.signal.throwIfAborted()
       if (this.deps.codex.researchLimitation) this.listeners.forEach(l => l({ kind: 'commentary', id: 'research-limitation', text: this.deps.codex.researchLimitation! }))
-      const preamble = buildContextPreamble({ currentPage: opts.currentPage, mentions, attachments: opts.attachments }, (text, budget) => this.deps.executor.excerpt(text, budget))
+      const preamble = buildContextPreamble({ currentPage: opts.currentPage, mentions, attachments: opts.attachments }, (text, budget, pageId) => this.deps.executor.excerpt(text, budget, 'notion-fetch', pageId))
       const researchState = this.deps.codex.researchLimitation ?? (this.overrides.webSearchEnabled === false ? 'Web research is disabled. Do not claim fresh verification.' : 'Live web search is requested. Claim fresh verification only after reading sources this turn.')
       const message = preamble ? `${researchState}\n${preamble}\n\n${text}` : text
       started = true
