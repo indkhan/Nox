@@ -71,6 +71,7 @@ interface BaselineRecord {
   totalChars: number
   /** Contiguous model-delivered prefix length from offset 0. */
   deliveredChars: number
+  readId: string
   workspaceId: string | null
   connectionGeneration: string | null
   threadId: string | null
@@ -85,7 +86,7 @@ export interface ReadbackEvidence {
 }
 
 export interface WriteGateDeps {
-  callTool: (name: string, args: Record<string, unknown>, signal?: AbortSignal) => Promise<{ content: Array<{ type: string; text?: string }>; isError?: boolean }>
+  callTool: (name: string, args: Record<string, unknown>, signal?: AbortSignal, beforeDispatch?: () => void) => Promise<{ content: Array<{ type: string; text?: string }>; isError?: boolean }>
   fetchPageMarkdown: (pageId: string, signal?: AbortSignal) => Promise<string>
   getMode: () => Mode
   getContextSet: () => Set<string>
@@ -178,6 +179,7 @@ export class WriteGate {
       modelStatus: record.status,
       totalChars: record.markdown.length,
       deliveredChars: record.markdown.length,
+      readId: crypto.randomUUID(),
       workspaceId: this.deps.getWorkspaceId?.() ?? null,
       connectionGeneration: this.deps.ownership?.getConnectionGeneration?.() ?? null,
       threadId: this.journal.captureScope().threadId,
@@ -206,6 +208,7 @@ export class WriteGate {
       modelStatus: record.status,
       totalChars: record.markdown.length,
       deliveredChars: record.markdown.length,
+      readId: crypto.randomUUID(),
       workspaceId: this.deps.getWorkspaceId?.() ?? null,
       connectionGeneration: this.deps.ownership?.getConnectionGeneration?.() ?? null,
       threadId: this.journal.captureScope().threadId,
@@ -240,18 +243,22 @@ export class WriteGate {
    * becomes model-complete again. Expired/unknown handles never call here,
    * so they leave the baseline partial.
    */
-  noteModelDelivery(pageId: string, offset: number, end: number, totalChars: number): void {
+  noteModelDelivery(pageId: string, offset: number, end: number, totalChars: number, readId?: string): void {
     const key = normalizeId(pageId) ?? pageId
     const record = this.baselines.get(key)
     if (!record) return
     if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(end) || !Number.isSafeInteger(totalChars)) return
     if (offset < 0 || end < 0 || totalChars <= 0 || end < offset) return
-    if (totalChars !== record.totalChars) return
+    if (totalChars !== record.totalChars || (readId !== undefined && readId !== record.readId)) return
     if (offset > record.deliveredChars) return
     if (end > record.deliveredChars) record.deliveredChars = Math.min(end, totalChars)
     if (record.status === 'complete' && record.deliveredChars >= record.totalChars) {
       record.modelStatus = 'complete'
     }
+  }
+
+  modelReadId(pageId: string): string | null {
+    return this.baselines.get(normalizeId(pageId) ?? pageId)?.readId ?? null
   }
 
   /** In-scope baseline for a page, or null when no valid baseline exists. */
@@ -384,7 +391,7 @@ export class WriteGate {
         try {
           // Trusted internal fields (undo hashes) travel in the journal but
           // never reach the provider.
-          result = await this.deps.callTool(tool, stripReservedArgs(frozenArgs), opts.signal)
+          result = await this.deps.callTool(tool, stripReservedArgs(frozenArgs), opts.signal, () => this.assertDispatchAuthority(snapshot, scope, opts.signal, tool))
         } catch (e) {
           const [status, detail] = classifyDispatchOutcome(e)
           await this.settleUndo(undoOpId, opts.journalId, status, detail)
@@ -948,7 +955,7 @@ export class WriteGate {
 
       let result: unknown
       try {
-        result = await this.deps.callTool(req.tool, frozenArgs, req.signal)
+        result = await this.deps.callTool(req.tool, frozenArgs, req.signal, () => this.assertDispatchAuthority(snapshot, scope, req.signal, req.tool))
       } catch (e) {
         const [status, detail] = classifyDispatchOutcome(e)
         await this.settleProtected(intent.id, { status, outcomeDetail: detail })

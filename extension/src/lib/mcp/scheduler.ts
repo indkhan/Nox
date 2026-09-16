@@ -52,6 +52,8 @@ export interface ScheduleOptions {
    * instead of sleeping through the turn deadline.
    */
   deadline?: number
+  /** Called after capacity/rate admission, immediately before fn. */
+  beforeInvoke?: () => void
 }
 
 /**
@@ -200,6 +202,12 @@ export class Scheduler {
       // Abort between admission and invocation: the function never ran, so
       // no dispatch can be blamed on this call.
       signal?.throwIfAborted()
+      try {
+        opts.beforeInvoke?.()
+      } catch (error) {
+        this.release()
+        throw error
+      }
       let delay: number | null = null
       try {
         return await fn()

@@ -161,6 +161,12 @@ Search spends both the global and search budgets; admission reserves concurrency
 and every applicable budget together. An explicit server `Retry-After` is honored
 as a minimum, and any wait that would run past the turn deadline stops instead.
 
+Mutation authority is checked again by the scheduler after rate/concurrency admission,
+immediately before the provider call; a lease or connection change during queueing
+therefore dispatches nothing. Continuation handles carry the exact model-visible read
+identity, so a handle from an older page version cannot complete a newer replacement
+baseline even when lengths match.
+
 Chrome adds an extension `Origin` header that Notion MCP rejects. The background worker
 therefore installs one narrow declarativeNetRequest rule that removes that header only
 for the owning extension's requests to the exact `https://mcp.notion.com/mcp` endpoint

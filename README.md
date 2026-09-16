@@ -164,16 +164,14 @@ Two halves, both yours:
 
 | Capability | Automated cover | Live evidence | Status |
 |---|---|---|---|
-| Reads, small edits, scoped plans, owner-only execution, durable unknown outcomes | Full extension suite plus the bridge harness (latest counts live in the [remediation log](docs/ADVERSARIAL-REMEDIATION-EPOCHS.md)) | Scratch-workspace runs C01–C17 | Implemented; live acceptance pending |
+| Reads, small edits, scoped plans, owner-only execution, durable unknown outcomes | Full extension suite plus the bridge harness | Scratch-workspace runs in [smoke.md](docs/smoke.md) | Implemented; live acceptance pending |
 | Plain-page undo with a verified baseline | Deterministic gate/history suites | C10 | Supported within the stated limits; rich, property, schema, view, move, and creation undo unavailable |
 | File upload into Notion | Fail-closed refusal/validation matrix | No live ticket fixture | Explicitly unsupported — files stay local-only |
 | PDF/image analysis, bulk autofill, quota estimates | — | — | Not implemented and not claimed |
 | Native-tool isolation per Codex version and model | Fail-closed feature/MCP inspection tests | Per-model matrix in [answer-quality-verification.md](docs/answer-quality-verification.md); reference Codex 0.153.4 | Pending live runs; a newer-than-tested Codex runs with an unverified warning |
 
 Skipped opt-in cases are pending, never passed. No release is certified
-vulnerability-free; see the [smoke checklist](docs/smoke.md) for the per-release gate
-and the [remediation evidence log](docs/adversarial-remediation-evidence.md) for the
-per-finding test evidence and pending live acceptance.
+vulnerability-free; use the [smoke checklist](docs/smoke.md) for final live testing.
 
 ## Documentation
 

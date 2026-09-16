@@ -21,7 +21,8 @@ export interface ExecutorDeps {
    * Reports continuation delivery (Epoch F2 / R2). Only actual reads count:
    * possession of a handle never completes a baseline by itself.
    */
-  onModelDelivery?: (pageId: string, offset: number, end: number, totalChars: number) => void
+  onModelDelivery?: (pageId: string, offset: number, end: number, totalChars: number, readId?: string) => void
+  getModelReadId?: (pageId: string) => string | null
 }
 
 export interface ToolOutcome {
@@ -36,7 +37,7 @@ export interface ToolOutcome {
  * Errors become model-readable results — a failing tool never crashes the turn.
  */
 export class ToolExecutor {
-  private continuations = new Map<string, { text: string; source: string; pageId?: string }>()
+  private continuations = new Map<string, { text: string; source: string; pageId?: string; readId?: string | null }>()
   private storedChars = 0
   private stepsUsed = 0
   private signal: AbortSignal | undefined
@@ -68,7 +69,7 @@ export class ToolExecutor {
       return truncateResult(text, budget) + '\nCONTINUATION_UNAVAILABLE: turn memory limit. Retrieve a targeted subtree or state the missing scope.'
     }
     const handle = crypto.randomUUID()
-    this.continuations.set(handle, { text, source, pageId })
+    this.continuations.set(handle, { text, source, pageId, readId: pageId ? this.deps.getModelReadId?.(pageId) : undefined })
     this.storedChars += text.length
     if (pageId) this.deps.onModelTruncation?.(pageId, delivered, text.length)
     return text.slice(0, budget) + `\n<continuation handle="${handle}" offset="${budget}" total_chars="${text.length}" tool="nox-read-continuation"/>`
@@ -81,7 +82,7 @@ export class ToolExecutor {
     const offset = args.offset
     if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0 || offset > value.text.length) throw new Error('INVALID_OFFSET')
     const end = Math.min(offset + (this.opts.resultBudgetChars ?? DEFAULT_RESULT_BUDGET_CHARS), value.text.length)
-    if (value.pageId) this.deps.onModelDelivery?.(value.pageId, offset, end, value.text.length)
+    if (value.pageId) this.deps.onModelDelivery?.(value.pageId, offset, end, value.text.length, value.readId ?? undefined)
     return value.text.slice(offset, end) + `\n<continuation offset="${end}" total_chars="${value.text.length}"/>\n` + (end === value.text.length ? 'END_OF_RESULT' : 'MORE_AVAILABLE')
   }
 

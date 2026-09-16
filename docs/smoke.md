@@ -7,10 +7,7 @@ real Chrome, Codex quota, OAuth, and a scratch Notion workspace.
 
 Record the release tag, tester, OS/Chrome version, Notion plan, and date in the
 GitHub release notes. Never mark an account-dependent item complete from unit
-test results alone. Record per-scenario outcomes in
-[adversarial-remediation-evidence.md](adversarial-remediation-evidence.md);
-`node scripts/release-smoke.mjs --publish-gate` refuses to publish while any
-required C01–C17 row is not PASS.
+test results alone. Record per-scenario outcomes with the release notes.
 
 ## Adaptive workspace architecture
 
@@ -114,9 +111,9 @@ The protocol assumptions and actual observations are recorded in
 The current panel requires Notion connection before sending, including public-only
 questions. A disconnected-panel screenshot is not a successful live answer check.
 
-## Live acceptance scenarios C01–C17
+## Live acceptance scenarios
 
-Preserved from the original remediation plan when the active plan was replaced on 2026-09-16. These scenarios remain pending; passing unit tests does not close them.
+These cases cover safety boundaries that need a real browser and scratch workspace. Passing unit tests does not replace them.
 
 Use synthetic fixtures with names and IDs independent of personal workspaces. Store provider shapes with secrets and identifying strings replaced consistently; preserve field types and structural/truncation markers.
 

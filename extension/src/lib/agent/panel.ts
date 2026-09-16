@@ -46,7 +46,7 @@ export function expireAgentGrants(): void {
 }
 
 export const writeGate = new WriteGate({
-  callTool: (name, args, signal) => notion.scheduleCallTool(name, args, signal),
+  callTool: (name, args, signal, beforeDispatch) => notion.scheduleCallTool(name, args, signal, { beforeInvoke: beforeDispatch }),
   fetchPageMarkdown: async (pageId, signal) => {
     const result = await notion.scheduleCallTool('notion-fetch', { id: pageId }, signal)
     // A tool-declared failure is never page content: surface it so the guard
@@ -133,7 +133,8 @@ export const agentLoop = new AgentLoop({
       if (!verdict.allowed) throw new Error(`"${name}" ${verdict.reason ?? 'is unavailable'}`)
     },
     onModelTruncation: (pageId, delivered, total) => writeGate.noteModelTruncation(pageId, delivered, total),
-    onModelDelivery: (pageId, offset, end, total) => writeGate.noteModelDelivery(pageId, offset, end, total),
+    onModelDelivery: (pageId, offset, end, total, readId) => writeGate.noteModelDelivery(pageId, offset, end, total, readId),
+    getModelReadId: (pageId) => writeGate.modelReadId(pageId),
   }),
   beginTurn: () => {
     // A null thread leaves the journal unscopable: mutations are refused

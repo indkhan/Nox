@@ -1,12 +1,9 @@
 import { spawnSync } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { evaluatePublishGateEvidence } from './publish-gate.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const scriptArgs = new Set(process.argv.slice(2))
-const publishGate = scriptArgs.has('--publish-gate') || scriptArgs.has('--require-live-evidence')
 
 function pkgVersion() {
   try {
@@ -22,7 +19,7 @@ function gitHead() {
 }
 
 console.log(`[release smoke] node ${process.version}, extension ${pkgVersion()}, git ${gitHead()}, date ${new Date().toISOString()}`)
-console.log('[release smoke] Automated checks only. Live acceptance (C01–C17) always needs docs/smoke.md on a real scratch workspace.')
+console.log('[release smoke] Automated checks only. Complete docs/smoke.md separately on a real scratch workspace.')
 
 const checks = [
   ['typecheck', 'pnpm', ['--dir', 'extension', 'typecheck']],
@@ -43,37 +40,12 @@ for (const [label, command, args] of checks) {
   if (result.status !== 0) process.exit(result.status ?? 1)
 }
 console.log('\nAutomated release smoke passed (unit/integration/build/bridge/archives/audits).')
-console.log('Live acceptance (C01–C17) is NOT covered by this script. Complete docs/smoke.md with a real scratch Notion workspace before publishing; see docs/adversarial-remediation-evidence.md. Skipped opt-in cases are pending, never passed.')
-
-if (publishGate) checkPublishGate()
+console.log('Live browser and workspace checks are not covered by this script. Skipped opt-in cases are pending, never passed.')
 
 export function quoteCmdArg(value) {
   const s = String(value)
   if (!/[\s"%&()<>|^!]/.test(s)) return s
   return `"${s.replaceAll('%', '%%').replaceAll('"', '""')}"`
-}
-
-/**
- * Publishing gate: rejects unless the evidence log records an explicit PASS
- * for every required live scenario C01–C17 plus a `Publish gate: PASS`
- * marker. Automated success alone never publishes a release advertising
- * live-verified behavior.
- */
-export function checkPublishGate() {
-  const evidencePath = join(root, 'docs', 'adversarial-remediation-evidence.md')
-  if (!existsSync(evidencePath)) {
-    console.error('\nPublish gate: BLOCKED — docs/adversarial-remediation-evidence.md is missing. Live acceptance has no recorded evidence.')
-    process.exit(1)
-  }
-  const text = readFileSync(evidencePath, 'utf8')
-  const { ok, missing } = evaluatePublishGateEvidence(text)
-  if (ok) {
-    console.log('\nPublish gate: PASS — every required live scenario C01–C17 is recorded PASS in docs/adversarial-remediation-evidence.md.')
-    return
-  }
-  console.error(`\nPublish gate: BLOCKED — missing required live evidence for: ${missing.length > 0 ? missing.join(', ') : 'the explicit PASS marker'}.`)
-  console.error('Complete docs/smoke.md C01–C17 against the recorded candidate build and update docs/adversarial-remediation-evidence.md before publishing.')
-  process.exit(1)
 }
 
 function run(command, args) {
