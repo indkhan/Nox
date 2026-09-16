@@ -164,3 +164,96 @@ model-semantic limits) rather than being relabeled to close live items.
 - macOS, non-Chrome Chromium, and Codex versions newer than 0.153.4 are unverified.
 - Local Delete all data removes local Nox data only, not remote Notion effects or Codex history.
 - **No release is certified vulnerability-free and no live check is counted as passed.** Publishing a release advertising live-verified behavior is blocked until C01–C17 pass against a recorded candidate build: `node scripts/release-smoke.mjs --publish-gate` enforces this.
+
+## 10. Follow-up epochs F1–F5 fresh evidence (2026-09-17)
+
+This section is the F5 deterministic closure for R1–R7. It does not replace
+the historical Epoch 17 record above and does not claim live acceptance.
+Live C01–C17 below are BLOCKED in this environment: no disposable
+Chrome/Codex/Notion session or authorized scratch scope exists here.
+BLOCKED is honesty, never PASS. Upload stays disabled by design.
+
+### 10.1 Candidate identity
+
+- Source: `develop` at `e9dda40` (F5.1 integrated suite + F5.2 publish-gate
+  lock on top of F1–F4) plus this documentation commit.
+- Extension version: `0.1.0` (single source `extension/package.json`,
+  display `v0.1.0-alpha`).
+- Toolchain: Node `v22.23.2`, pnpm `11.10.0`, vitest `4.1.11`, vite `6.4.3`.
+- Reference Codex: `0.153.4`.
+- F5 code commits: `a7c4f19` (F5.1 integrated R1–R7 suite),
+  `e9dda40` (F5.2 publish-gate fail-closed lock).
+
+### 10.2 Automated results (this candidate, observed)
+
+- `pnpm typecheck` (extension): PASS.
+- `pnpm test` (extension): **785 passed, 7 opt-in live skipped**
+  (50 files passed, 2 skipped). Baseline at F4 was 774 passed; the +11 are
+  the F5 integrated suite.
+- `pnpm build` (extension): PASS (via `node scripts/release-smoke.mjs`).
+- `node bridge/test-bridge.mjs`: all bridge checks passed.
+- `node --test scripts/install.test.mjs scripts/live/answer-quality-eval.test.mjs scripts/package-release.test.mjs scripts/publish-gate.test.mjs`: **23 passed**
+  (prior baseline 17; the +6 are the F5 publish-gate lock).
+- `pnpm audit --json` (full) and `pnpm audit --prod --json`: **0 advisories** in both.
+- `node scripts/release-smoke.mjs`: automated checks PASS
+  (typecheck, tests, build, ledger, installer, archive-content, bridge,
+  archives, both audits).
+- `node scripts/release-smoke.mjs --publish-gate`: automated PASS, then
+  **Publish gate: BLOCKED** — missing required live evidence for
+  C01–C17. The gate refuses as designed; automated success alone never
+  publishes live-verified behavior.
+- `git diff --check`: PASS.
+
+### 10.3 R1–R7 deterministic closures (production assembly)
+
+Each row passes now in `extension/tests/writes/epoch-f5.test.ts` (11 tests)
+over real `WriteGate`, `MutationJournal`, `ToolExecutor`, `AgentLoop`,
+`TokenStore`, and `McpClient` with transports faked only at the boundary.
+Exact transport counts, journal states, and approval behavior are asserted.
+Focused F1–F4 suites remain green alongside.
+
+| Finding | F5 integrated cover | Original F-epoch cover |
+|---|---|---|
+| R1 — authority revalidation at dispatch | revoked owner during intent persistence settles `failed` with zero transport and one journal row | F1.1–F1.2 in `epoch-f1.test.ts` |
+| R4 — queued work stops behind ambiguity | second mutation stops with exactly one transport, `CONFLICT_UNRESOLVED`, one `unknown` row until review | F1.3 in `epoch-f1.test.ts` |
+| R6 — restored undo without a new turn | restored `scopeThread` panel undoes one verified inverse via `requestRuntimeUndo` before any new chat turn; entry becomes `undone` | F1.4 in `epoch-f1.test.ts` |
+| R2 — truncated model reads refuse replacement | 30k-char fetch truncated before Codex refuses `replace_content` with `PARTIAL_BASELINE` pre-card and zero dispatch; fully delivered continuation restores completeness and reaches approval | F2.1–F2.3 in `epoch-f2.test.ts` |
+| R3 — retained untrusted exposure | turn-two keeps `untrusted-context` provenance, reload restores conservatively, fresh chats stay clean; granted turn-two small edit still requires one confirmation | F2.4 in `epoch-f2.test.ts` |
+| R5 — stale login never resurrects | late save after wipe throws `STALE_LOGIN_ATTEMPT` with zero credentials; older login cannot replace newer login | F1–F3 in `epoch-f3.test.ts` |
+| R7 — MCP byte budget | 3 MiB ASCII JSON resolves; truly oversized body fails `MCP_OVERSIZE` bounded | F4.1–F4.3 in `mcp-epoch-f4.test.ts` |
+| Upload-disabled + clean Auto | raw `notion-create-file-upload` / `nox-upload-local-file` refuse with zero transport; fresh granted in-context Auto small edit still runs silently | F5 integrated + `scripts/publish-gate.test.mjs` honesty lock |
+
+### 10.4 Live acceptance C01–C17 (scratch workspace, loaded candidate)
+
+Status: **all BLOCKED** — same reason as the historical table above. No
+scratch parent, disposable profile, or user-managed auth exists in this
+environment. Nothing below is counted as passed. The F5 additions
+(cross-turn injection on a subsequent turn plus reload, late-login
+original-authorization as well as refresh, queued-outcome stop, restored
+undo) are covered deterministically above and remain to be witnessed live
+under `docs/smoke.md` when a scratch scope is authorized.
+
+| ID | Live result | Note |
+|---|---|---|
+| C01 | BLOCKED | Needs loaded extension + controlled receiver/network instrumentation |
+| C02 | BLOCKED | Needs supported Codex/Notion session; deterministic config cover only |
+| C03 | BLOCKED | Needs two-window live Chrome; deterministic ownership cover only |
+| C04 | BLOCKED | Needs controlled transport fixture in live Chrome; deterministic fault-injection cover only |
+| C05 | BLOCKED | Needs loaded extension + scratch scope; deterministic frozen-payload cover only |
+| C06 | BLOCKED | Needs scratch workspace + supported model; deterministic consent-matrix cover only |
+| C07 | BLOCKED | Needs scratch workspace; deterministic plan-scope cover only |
+| C08 | BLOCKED | Needs supported model + malicious synthetic page; deterministic grant/injection cover only, including subsequent-turn and reload cases |
+| C09 | BLOCKED | Needs live turn + fixtures; deterministic cancel/outcome cover only |
+| C10 | BLOCKED | Needs scratch pages + independent edits; deterministic baseline/undo cover only, including restored-undo case |
+| C11 | BLOCKED | Upload is explicitly unsupported; consent-matrix refusal is deterministic only |
+| C12 | BLOCKED | Needs live panels; deterministic history/attachment cover only |
+| C13 | BLOCKED | Needs two live panels; deterministic sign-out/deletion cover only, including original-authorization late-login case |
+| C14 | BLOCKED | Needs real bridge disconnect; deterministic reconnect cover only |
+| C15 | BLOCKED | Needs supported-Chrome instrumentation; deterministic DNR/message cover only |
+| C16 | BLOCKED | Needs loaded extension layout/keyboard review; deterministic log-export cover only |
+| C17 | BLOCKED | Needs disposable install/profile with user-managed auth; deterministic archive cover only |
+
+Publish gate: BLOCKED — live C01–C17 have no PASS rows in this environment.
+Do not mark `Publish gate: PASS` until every required C row really passes
+against a recorded candidate build. No release is claimed
+vulnerability-free.
