@@ -3,7 +3,7 @@ import {
   fetchAuthorizationServerMetadata,
   type AuthorizationServerMetadata,
 } from '../oauth/discovery'
-import { TokenStore } from '../oauth/tokens'
+import { TokenStore, type CredentialLock } from '../oauth/tokens'
 import type { KeyValueStore } from '../storage'
 import { McpClient, type McpCallResult, type McpTool } from '../mcp/client'
 import { Scheduler } from '../mcp/scheduler'
@@ -38,6 +38,12 @@ export class Notion {
       session: KeyValueStore
       local: KeyValueStore
       redirectUri: () => string
+      /**
+       * Shared credential lock for cross-panel serialization (Epoch F3 / R5).
+       * Production defaults to the shared Web Lock inside TokenStore; tests
+       * inject one serial lock shared across facade instances.
+       */
+      lock?: CredentialLock
     },
   ) {
     const { fetchImpl, session, local } = deps
@@ -46,6 +52,7 @@ export class Notion {
       session,
       local,
       fetchImpl,
+      lock: deps.lock,
       getClientId: async () => {
         if (!this.metadata) await this.loadMetadata()
         return this.registrar.getClientId(this.metadata!, this.deps.redirectUri())
@@ -92,10 +99,13 @@ export class Notion {
 
   /** Full browser flow: discovery → DCR → consent → token exchange. */
   async connect(launchConsent: (authorizeUrl: string) => Promise<string>): Promise<SelfInfo> {
-    // Start of a replacement login (Epoch 11 / M8): abort any in-flight
-    // refresh and invalidate the credential generation up front, so a stale
-    // response landing after the new exchange cannot resurrect old tokens.
-    await this.tokenStore.beginLogin()
+    // Start of a replacement login (Epoch 11 / M8, bound in F3 / R5): abort
+    // any in-flight refresh and capture one login-attempt generation before
+    // async discovery/consent. The eventual save and identity completion
+    // commit only while this attempt is still current — wipe, sign-out,
+    // delete-all, or a newer login invalidates it under the credential
+    // write lock, so a stale response can never resurrect credentials.
+    const attempt = await this.tokenStore.beginLogin()
     // Every hop is named on failure — without this, a connect failure is a
     // guessing game across four network hops (spike 0.1 lesson).
     const metadata = await stage('discovery', () => this.loadMetadata())
@@ -132,15 +142,56 @@ export class Notion {
         codeVerifier: verifier,
       }),
     )
-    await this.tokenStore.saveFromTokenResponse(tokenResponse)
-    this.connectionGenerationValue = crypto.randomUUID()
-    return stage('initialize+identity', () => this.refreshIdentity())
+    // Attempt-bound save (F3/R5): a superseded attempt throws
+    // STALE_LOGIN_ATTEMPT here with zero credential writes.
+    await this.tokenStore.saveFromTokenResponse(tokenResponse, attempt)
+    // A wipe/sign-out/newer login could land between the save and identity.
+    if (!(await this.tokenStore.isLoginAttemptCurrent(attempt))) {
+      throw new Error('[connect] STALE_LOGIN_ATTEMPT: superseded before identity — refusing to report connected')
+    }
+    const info = await stage('initialize+identity', () => this.loadIdentityForAttempt(attempt))
+    // A newer login/wipe completing during identity must not surface as this
+    // attempt's Connected result.
+    if (!(await this.tokenStore.isLoginAttemptCurrent(attempt))) {
+      throw new Error('[connect] STALE_LOGIN_ATTEMPT: superseded during identity — refusing to report connected')
+    }
+    return info
   }
 
   /** Dev escape hatch: import a token JSON without the consent flow. */
   async importToken(token: Parameters<TokenStore['saveFromTokenResponse']>[0]): Promise<SelfInfo> {
-    await this.tokenStore.saveFromTokenResponse(token)
-    return this.refreshIdentity()
+    // Bound like connect (F3/R5): this fresh login invalidates pending
+    // attempts, and a wipe/newer login before identity aborts it.
+    const attempt = await this.tokenStore.beginLogin()
+    await this.tokenStore.saveFromTokenResponse(token, attempt)
+    if (!(await this.tokenStore.isLoginAttemptCurrent(attempt))) {
+      throw new Error('[connect] STALE_LOGIN_ATTEMPT: superseded before identity — refusing to report connected')
+    }
+    const info = await this.loadIdentityForAttempt(attempt)
+    if (!(await this.tokenStore.isLoginAttemptCurrent(attempt))) {
+      throw new Error('[connect] STALE_LOGIN_ATTEMPT: superseded during identity — refusing to report connected')
+    }
+    return info
+  }
+
+  /**
+   * Identity load for one login attempt (F3/R5). Reads and parses identity
+   * but mutates facade state (selfInfo, capabilities, connection generation)
+   * only while the attempt is still current, so a stale completion never
+   * overwrites a newer login's state nor reports Connected.
+   */
+  private async loadIdentityForAttempt(attempt: string): Promise<SelfInfo> {
+    await this.verifyEndpointAcceptance()
+    const self = await this.scheduleCallTool('notion-fetch', { id: 'self' })
+    const text = McpClient.resultText(self)
+    const parsed = parseSelfResult(text)
+    if (!(await this.tokenStore.isLoginAttemptCurrent(attempt))) {
+      throw new Error('[connect] STALE_LOGIN_ATTEMPT: superseded during identity — refusing to report connected')
+    }
+    this.selfInfo = parsed
+    this.gate = new CapabilityGate(parsed.access)
+    this.connectionGenerationValue = crypto.randomUUID()
+    return parsed
   }
 
   /**

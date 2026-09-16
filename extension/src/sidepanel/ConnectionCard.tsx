@@ -53,6 +53,11 @@ export function ConnectionCard() {
       let info: Awaited<ReturnType<typeof notion.connect>>
       try {
         info = await notion.connect(launchConsentFlow)
+        // UI completion guard (F3/R5): a sign-out/wipe/delete-all landing
+        // after the facade returned must not restore a Connected label.
+        if (!(await notion.tokens.hasRefreshToken())) {
+          throw new Error('[connect] STALE_LOGIN_ATTEMPT: authorization was cleared before completion')
+        }
       } catch (e) {
         // Failed acceptance (including 401/403/429/5xx/redirect/malformed/
         // missing): clear the rule so retry reinstalls narrowly. No tokens sent.

@@ -52,6 +52,11 @@ export async function restoreNotionAction(): Promise<void> {
       }
       throw error
     }
+    // UI completion guard (F3/R5): a sign-out/wipe landing after identity
+    // must not restore a Connected label.
+    if (!(await notion.tokens.hasRefreshToken())) {
+      throw new Error('[connect] STALE_LOGIN_ATTEMPT: authorization was cleared before completion')
+    }
     // Epoch 14 / L2: connection stage only — workspace/user names stay out of diagnostics.
     logInfo('Notion restored: connected')
     setConnection({
