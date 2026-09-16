@@ -207,7 +207,9 @@ describe('first-run setup', () => {
       await Promise.resolve()
     })
 
-    expect(state.hasRefreshToken).toHaveBeenCalledOnce()
+    // F3/R5 UI completion guard: pre-restore check plus post-identity
+    // re-check before showing Connected.
+    expect(state.hasRefreshToken).toHaveBeenCalledTimes(2)
     expect(state.refreshIdentity).toHaveBeenCalledOnce()
     expect(state.connectionStatus).toBe('connected')
     expect(state.identity).toEqual({ workspaceName: 'Acme', userName: 'Dana' })

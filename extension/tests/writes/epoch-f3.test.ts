@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it } from 'vitest'
 import { TokenStore } from '../../src/lib/oauth/tokens'
 import type { TokenResponse } from '../../src/lib/oauth/discovery'
 import { memoryStore } from '../../src/lib/storage'
@@ -73,7 +73,7 @@ describe('Epoch F3.1 — R5 login-attempt generation (single instance)', () => {
       s.saveFromTokenResponse(tokenResponse({ access_token: 'at-A', refresh_token: 'rt-A' }), attemptA),
     ).rejects.toThrow(/STALE_LOGIN_ATTEMPT/)
     expect(await s.getAccessToken()).toBe('at-B')
-    expect(deps.local.data['notion.refresh']).toBe('rt-B')
+    expect((await deps.local.get('notion.refresh'))['notion.refresh']).toBe('rt-B')
   })
 })
 
@@ -284,7 +284,7 @@ describe('Epoch F3.3 — R5 facade and completion binding', () => {
       local,
       redirectUri: () => 'https://ext.chromiumapp.org/',
       lock: opts.lock,
-    } as Parameters<typeof Notion>[0])
+    } as ConstructorParameters<typeof Notion>[0])
     return { notion, session, local, tokenHits, get identityCalls() { return identityCalls } }
   }
 
@@ -420,7 +420,7 @@ describe('Epoch F3.3 — R5 facade and completion binding', () => {
         local,
         redirectUri: () => 'https://ext.chromiumapp.org/',
         lock,
-      } as Parameters<typeof Notion>[0])
+      } as ConstructorParameters<typeof Notion>[0])
     const fa = mk()
     const fb = mk()
     const gateA = deferred<string>()
