@@ -115,23 +115,65 @@ export class TokenStore {
    * Starts a replacement authorization: aborts an in-flight refresh and
    * invalidates the current generation up front, so stale responses landing
    * after the new exchange cannot resurrect older credentials.
+   *
+   * Returns the login-attempt generation (Epoch F3 / R5). The eventual
+   * `saveFromTokenResponse` for this attempt must pass it back as
+   * `expectedGeneration`; saves from superseded attempts (wipe, sign-out,
+   * or a newer login bumped the persisted generation meanwhile) are
+   * rejected under the credential write lock with zero credential writes.
    */
-  async beginLogin(): Promise<void> {
+  async beginLogin(): Promise<string> {
     this.refreshAbort?.abort()
+    const attempt = crypto.randomUUID()
     await this.lock.runExclusive(WRITE_LOCK, async () => {
-      await this.deps.local.set({ [K_GEN]: crypto.randomUUID() })
+      await this.deps.local.set({ [K_GEN]: attempt })
     })
+    return attempt
   }
 
-  /** Persist the result of an initial authorization-code exchange. */
-  async saveFromTokenResponse(token: TokenResponse): Promise<void> {
+  /**
+   * Persist the result of an initial authorization-code exchange.
+   *
+   * When `expectedGeneration` (the attempt captured from `beginLogin`
+   * before async discovery/consent) is supplied, the write commits only if
+   * the persisted generation still matches it. A mismatch means sign-out,
+   * wipe/delete-all, or a newer login invalidated this attempt while it
+   * was in flight — the save throws STALE_LOGIN_ATTEMPT without touching
+   * credentials. Without an attempt (fresh dev/import paths with no async
+   * gap) the previous mint-a-new-generation behavior is preserved.
+   */
+  async saveFromTokenResponse(token: TokenResponse, expectedGeneration?: string): Promise<void> {
     validateTokenResponse(token)
+    if (expectedGeneration !== undefined) {
+      await this.lock.runExclusive(WRITE_LOCK, async () => {
+        const current = (await this.deps.local.get(K_GEN))[K_GEN]
+        if (current !== expectedGeneration) {
+          throw new Error(
+            '[login] STALE_LOGIN_ATTEMPT: superseded by sign-out, wipe, or a newer login — refusing to restore credentials',
+          )
+        }
+        await this.writeTokens(token)
+      })
+      return
+    }
     const generation = crypto.randomUUID()
     await this.lock.runExclusive(WRITE_LOCK, async () => {
       // New generation first: a concurrent stale refresh re-checks inside
       // the same lock and loses instead of overwriting the new login.
       await this.deps.local.set({ [K_GEN]: generation })
       await this.writeTokens(token)
+    })
+  }
+
+  /**
+   * True when `attempt` (captured from `beginLogin`) is still the persisted
+   * credential generation. Facade/identity/UI completion checks this after
+   * async work so a late result cannot restore a Connected label (F3/R5).
+   */
+  async isLoginAttemptCurrent(attempt: string): Promise<boolean> {
+    return this.lock.runExclusive(WRITE_LOCK, async () => {
+      const current = (await this.deps.local.get(K_GEN))[K_GEN]
+      return current === attempt
     })
   }
 
