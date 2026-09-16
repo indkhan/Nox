@@ -56,10 +56,21 @@ interface OwnershipSnapshot {
  * A model-visible read baseline: the normalized content hash plus the scope
  * it was established in. Guard-only reads never populate this map, so a
  * guard snapshot the model never saw cannot become an edit baseline.
+ * Epoch F2 / R2: provider completeness (`status`) is tracked separately
+ * from what the model actually observed (`modelStatus`). Local truncation
+ * before Codex (dynamic-result budgets, mention budgets) downgrades
+ * `modelStatus` to partial with the delivered/total sizes, so a complete
+ * provider fetch the model only partly saw never authorizes replacement.
  */
 interface BaselineRecord {
   hash: string
   status: PageFetchStatus
+  /** Completeness of the content actually delivered to model context. */
+  modelStatus: PageFetchStatus
+  /** Full provider content length behind `hash`. */
+  totalChars: number
+  /** Contiguous model-delivered prefix length from offset 0. */
+  deliveredChars: number
   workspaceId: string | null
   connectionGeneration: string | null
   threadId: string | null
@@ -164,6 +175,9 @@ export class WriteGate {
     this.baselines.set(record.pageId, {
       hash: await hashMarkdown(record.markdown),
       status: record.status,
+      modelStatus: record.status,
+      totalChars: record.markdown.length,
+      deliveredChars: record.markdown.length,
       workspaceId: this.deps.getWorkspaceId?.() ?? null,
       connectionGeneration: this.deps.ownership?.getConnectionGeneration?.() ?? null,
       threadId: this.journal.captureScope().threadId,
@@ -189,11 +203,55 @@ export class WriteGate {
     this.baselines.set(record.pageId, {
       hash: await hashMarkdown(record.markdown),
       status: record.status,
+      modelStatus: record.status,
+      totalChars: record.markdown.length,
+      deliveredChars: record.markdown.length,
       workspaceId: this.deps.getWorkspaceId?.() ?? null,
       connectionGeneration: this.deps.ownership?.getConnectionGeneration?.() ?? null,
       threadId: this.journal.captureScope().threadId,
       capturedAt: Date.now(),
     })
+  }
+
+  /**
+   * Downgrade a baseline to model-partial after local truncation (Epoch F2 /
+   * R2). The provider fetch may be complete, but the model only observed
+   * `deliveredChars` of `totalChars`. A missing entry stays missing
+   * (BASELINE_REQUIRED); an existing complete entry becomes partial, which
+   * refuses replacement before any approval card. Never upgrades.
+   */
+  noteModelTruncation(pageId: string, deliveredChars: number, totalChars: number): void {
+    const key = normalizeId(pageId) ?? pageId
+    const record = this.baselines.get(key)
+    if (!record) return
+    if (!Number.isSafeInteger(deliveredChars) || !Number.isSafeInteger(totalChars)) return
+    if (deliveredChars < 0 || totalChars <= 0) return
+    if (deliveredChars >= totalChars && deliveredChars >= record.totalChars) return
+    record.modelStatus = 'partial'
+    record.deliveredChars = Math.min(record.deliveredChars, Math.max(0, deliveredChars))
+    record.totalChars = Math.max(record.totalChars, totalChars)
+  }
+
+  /**
+   * Extend model delivery after a continuation read (Epoch F2 / R2).
+   * Only contiguous delivery from offset 0 counts: `offset` at or behind
+   * the current frontier extends it to `end`. When the frontier reaches
+   * the full length and the provider fetch was complete, the baseline
+   * becomes model-complete again. Expired/unknown handles never call here,
+   * so they leave the baseline partial.
+   */
+  noteModelDelivery(pageId: string, offset: number, end: number, totalChars: number): void {
+    const key = normalizeId(pageId) ?? pageId
+    const record = this.baselines.get(key)
+    if (!record) return
+    if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(end) || !Number.isSafeInteger(totalChars)) return
+    if (offset < 0 || end < 0 || totalChars <= 0 || end < offset) return
+    if (totalChars !== record.totalChars) return
+    if (offset > record.deliveredChars) return
+    if (end > record.deliveredChars) record.deliveredChars = Math.min(end, totalChars)
+    if (record.status === 'complete' && record.deliveredChars >= record.totalChars) {
+      record.modelStatus = 'complete'
+    }
   }
 
   /** In-scope baseline for a page, or null when no valid baseline exists. */
@@ -699,6 +757,14 @@ export class WriteGate {
           'PARTIAL_BASELINE: the available read of this page is incomplete (truncated content) — ' +
             'fetch the returned omitted block ids or a targeted subtree before replacing its content. ' +
             'A partial read cannot support whole-page replacement. No changes were made.',
+        )
+      }
+      if (baseline.modelStatus !== 'complete') {
+        return textResult(
+          'PARTIAL_BASELINE: the model-visible read of this page is incomplete (truncated before Codex) — ' +
+            `only ${baseline.deliveredChars} of ${baseline.totalChars} characters reached model context. ` +
+            'Read the returned continuation to completion or fetch a targeted subtree before replacing its content. ' +
+            'A truncated model view cannot support whole-page replacement. No changes were made.',
         )
       }
       baselineHash = baseline.hash

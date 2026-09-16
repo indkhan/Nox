@@ -132,6 +132,8 @@ export const agentLoop = new AgentLoop({
       const verdict = notion.capabilities.can(name)
       if (!verdict.allowed) throw new Error(`"${name}" ${verdict.reason ?? 'is unavailable'}`)
     },
+    onModelTruncation: (pageId, delivered, total) => writeGate.noteModelTruncation(pageId, delivered, total),
+    onModelDelivery: (pageId, offset, end, total) => writeGate.noteModelDelivery(pageId, offset, end, total),
   }),
   beginTurn: () => {
     // A null thread leaves the journal unscopable: mutations are refused
