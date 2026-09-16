@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { evaluatePublishGateEvidence } from './publish-gate.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const scriptArgs = new Set(process.argv.slice(2))
@@ -65,13 +66,8 @@ export function checkPublishGate() {
     process.exit(1)
   }
   const text = readFileSync(evidencePath, 'utf8')
-  const missing = []
-  for (let i = 1; i <= 17; i++) {
-    const id = `C${String(i).padStart(2, '0')}`
-    if (!new RegExp(`\\|\\s*${id}\\b[^\\n]*\\|\\s*PASS\\b`, 'i').test(text)) missing.push(id)
-  }
-  const marker = /^Publish gate:\s*PASS\s*$/m.test(text)
-  if (marker && missing.length === 0) {
+  const { ok, missing } = evaluatePublishGateEvidence(text)
+  if (ok) {
     console.log('\nPublish gate: PASS — every required live scenario C01–C17 is recorded PASS in docs/adversarial-remediation-evidence.md.')
     return
   }
