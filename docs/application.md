@@ -324,12 +324,18 @@ without provider conditional-write support.
 
 Forward writes, upload effects, and undo share one serial mutation runner in
 the panel holding the `nox-agent-owner` Web Lock lease. The gate refuses
-mutations from viewer windows, re-checks the owner lease, the Notion
-connection generation, and cancellation immediately before dispatch, and
-rejects undo while a turn is active (new turns likewise wait while undo
-holds the runner). Timeline and Undo-bar undo share one runtime path that
-re-reads the journal entry from storage before dispatch; viewer and busy
-panels show why undo is unavailable instead of an enabled control.
+mutations from viewer windows, revalidates owner lease, Notion connection
+generation, workspace scope, tool capability, and cancellation after every
+async boundary (guard reads, intent persistence, final re-read) and
+immediately before dispatch — a stale snapshot settles its intent as failed
+with zero transport — and rejects undo while a turn is active (new turns
+likewise wait while undo holds the runner). Queued work rechecks unresolved
+outcomes inside the serial boundary after earlier work settles, so calls
+admitted behind an ambiguous first outcome stop for review. Timeline and
+Undo-bar undo share one runtime path that re-reads the journal entry from
+storage before dispatch; viewer and busy panels show why undo is unavailable
+instead of an enabled control. A restored panel mints one undo operation
+scope for its persisted thread, so undo works before any new model turn.
 
 Every mutation persists a pending intent — operation scope, frozen arguments,
 and pre-image — before dispatch and settles it to applied, failed, or unknown
