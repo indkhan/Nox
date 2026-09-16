@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
   McpClient,
+  McpHttpError,
+  isPreDispatchFailure,
   MCP_RESPONSE_BUDGET_BYTES,
 } from '../src/lib/mcp/client'
 import { resetRequestIds } from '../src/lib/mcp/jsonrpc'
@@ -279,5 +281,107 @@ describe('Epoch F4.2 — R7 fallback exact UTF-8 and multibyte boundaries', () =
     const client = new McpClient({ fetchImpl, getAccessToken: async () => 'tok-1' })
     await expect(client.callTool('notion-fetch', {})).rejects.toThrow(/MCP_OVERSIZE/)
     expect(calls).toBe(1)
+  })
+})
+
+describe('Epoch F4.3 — R7 declared length, abort, and no-retry boundaries', () => {
+  it('rejects declared oversized Content-Length without buffering the body', async () => {
+    let calls = 0
+    const fetchImpl = (async (_url: string, init?: RequestInit) => {
+      calls++
+      const b = JSON.parse(String(init?.body)) as { id: number }
+      return new Response(jsonTextBody(b.id, 'small'), {
+        status: 200,
+        headers: { 'content-type': 'application/json', 'content-length': String(16 * 1024 * 1024) },
+      })
+    }) as typeof fetch
+    const client = new McpClient({ fetchImpl, getAccessToken: async () => 'tok-1' })
+    await expect(client.callTool('notion-fetch', {})).rejects.toThrow(/MCP_OVERSIZE|content-length|budget/i)
+    expect(calls).toBe(1)
+  })
+
+  it('declared oversized fallback never reads the body text', async () => {
+    let textCalls = 0
+    const fake = {
+      status: 200,
+      ok: true,
+      headers: new Headers({ 'content-type': 'application/json', 'content-length': String(BUDGET + 1) }),
+      body: null,
+      text: async () => {
+        textCalls++
+        return 'should-never-be-read'
+      },
+    } as unknown as Response
+    const fetchImpl = (async () => fake) as typeof fetch
+    const client = new McpClient({ fetchImpl, getAccessToken: async () => 'tok-1' })
+    await expect(client.callTool('notion-fetch', {})).rejects.toThrow(/MCP_OVERSIZE/)
+    expect(textCalls).toBe(0)
+  })
+
+  it('aborts a hanging stream with AbortError instead of success or oversize', async () => {
+    const fetchImpl = (async (_url: string, init?: RequestInit) => {
+      const b = JSON.parse(String(init?.body)) as { id: number }
+      const head = jsonTextBody(b.id, 'partial-').slice(0, 20)
+      const bytes = new TextEncoder().encode(head)
+      const stream = new ReadableStream<Uint8Array>({
+        start(c) {
+          c.enqueue(bytes)
+          // Never close: the turn AbortSignal must interrupt the pending read.
+        },
+      })
+      return new Response(stream, { status: 200, headers: { 'content-type': 'application/json' } })
+    }) as typeof fetch
+    const client = new McpClient({ fetchImpl, getAccessToken: async () => 'tok-1' })
+    const controller = new AbortController()
+    setTimeout(() => controller.abort(), 20)
+    await expect(client.callTool('notion-fetch', {}, controller.signal)).rejects.toMatchObject({ name: 'AbortError' })
+  })
+
+  it('classifies an oversize mutation response as post-dispatch with exactly one transport', async () => {
+    let calls = 0
+    const fetchImpl = (async (_url: string, init?: RequestInit) => {
+      calls++
+      const b = JSON.parse(String(init?.body)) as { id: number }
+      const need = BUDGET - utf8Len(jsonTextBody(b.id, '')) + 1024
+      const full = jsonTextBody(b.id, 'm'.repeat(need))
+      const bytes = new TextEncoder().encode(full)
+      let offset = 0
+      const stream = new ReadableStream<Uint8Array>({
+        pull(c) {
+          if (offset >= bytes.length) {
+            c.close()
+            return
+          }
+          const end = Math.min(offset + 64 * 1024, bytes.length)
+          c.enqueue(bytes.subarray(offset, end))
+          offset = end
+        },
+      })
+      return new Response(stream, { status: 200, headers: { 'content-type': 'application/json' } })
+    }) as typeof fetch
+    const client = new McpClient({ fetchImpl, getAccessToken: async () => 'tok-1' })
+    const err = await client.callTool('notion-update', { page_id: 'p-1' }).then(
+      () => null,
+      (e: unknown) => e as Error,
+    )
+    expect(String(err?.message)).toMatch(/MCP_OVERSIZE/)
+    expect(err?.name).toBe('McpBodyTooLargeError')
+    // No mutation replay: exactly one dispatch, and the failure provably
+    // happened after dispatch (not a clean pre-dispatch refusal).
+    expect(calls).toBe(1)
+    expect(isPreDispatchFailure(err)).toBe(false)
+  })
+
+  it('bounds HTTP error previews instead of throwing oversize', async () => {
+    const bigError = 'e'.repeat(1024 * 1024)
+    const fetchImpl = (async () => new Response(bigError, { status: 500 })) as typeof fetch
+    const client = new McpClient({ fetchImpl, getAccessToken: async () => 'tok-1' })
+    const err = await client.callTool('notion-fetch', {}).then(
+      () => null,
+      (e: unknown) => e as Error,
+    )
+    expect(err).toBeInstanceOf(McpHttpError)
+    expect((err as McpHttpError).status).toBe(500)
+    expect((err as McpHttpError).bodyText.length).toBeLessThanOrEqual(400)
   })
 })

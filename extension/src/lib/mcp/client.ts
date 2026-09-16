@@ -361,6 +361,10 @@ async function readBoundedMcpBody(
     // bytes. Do not re-check decoded text with an inflated character
     // estimate here: valid bodies within the advertised limit (e.g. 3 MiB
     // ASCII, where text.length * 3 exceeds 8 MiB) must resolve.
+    // Epoch F4.3: a mid-stream abort cancels the reader, which resolves the
+    // pending read as done instead of rejecting. Re-check the signal after
+    // the loop so cancellation surfaces as AbortError, never partial text.
+    signal?.throwIfAborted()
     return text
   } finally {
     signal?.removeEventListener('abort', onAbort)
