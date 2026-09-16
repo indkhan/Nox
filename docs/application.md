@@ -119,11 +119,15 @@ capability gate.
 3. The access token stays in session storage; the refresh token is durable in local
    extension storage and is rotated safely. Both areas are restricted to trusted
    extension contexts at background startup (content scripts cannot read refresh
-   credentials; page metadata still flows via runtime messages). Every authorization mints a persisted
-   credential generation; sign-out, wipe, delete-all, and replacement logins invalidate
-   it first. Refreshes serialize across panels under a shared refresh lock, re-check the
-   persisted generation inside a short credential-write lock (never held across network),
-   and use the validated discovered token endpoint. A stale response can never overwrite
+   credentials; page metadata still flows via runtime messages). Every authorization captures one login-attempt
+   generation before async discovery/consent; sign-out, wipe, delete-all, and replacement logins invalidate
+   it first. Initial saves and facade/identity/UI completion commit only while that attempt is still current:
+   under the short credential-write lock (never held across network) a superseded save throws STALE_LOGIN_ATTEMPT
+   with zero credential writes, identity mutates facade state only for the current attempt, and the UI re-checks
+   durable credentials before showing Connected — a late result can neither resurrect authorization nor replace a
+   newer login. Refreshes serialize across panels under a shared refresh lock, re-check the
+   persisted generation inside the same short lock,
+   and use the validated discovered token endpoint. A stale refresh response can never overwrite
    a newer login, and an old `invalid_grant` can never wipe one.
 4. Nox initializes MCP, fetches the user's identity, and asks for the current tool list.
    The authorized initialize is the endpoint compatibility acceptance probe: only an

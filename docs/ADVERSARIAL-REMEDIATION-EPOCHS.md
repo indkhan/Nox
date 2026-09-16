@@ -147,6 +147,6 @@ No release is claimed vulnerability-free.
 |---|---|---|---|
 | F1 | IMPLEMENTED (unit-verified; live pending) | R1, R4, R6 | 18 focused regressions in `extension/tests/writes/epoch-f1.test.ts` failed on the reviewed revision and pass now; `pnpm test` 732 passed/7 skipped, `typecheck`/`build`/bridge harness pass; live C03, C04, C09, C10, C14 still pending |
 | F2 | IMPLEMENTED (unit-verified; live pending) | R2, R3 | 11 focused regressions in `extension/tests/writes/epoch-f2.test.ts` failed on the reviewed revision and pass now; `pnpm test` 743 passed/7 skipped, `typecheck`/`build` pass; live C07, C08, C10 still pending |
-| F3 | NOT STARTED | R5 | Late authorization probe failed the safety expectation |
+| F3 | IMPLEMENTED (unit-verified; live pending) | R5 | 14 focused regressions in `extension/tests/writes/epoch-f3.test.ts` failed on the reviewed revision and pass now; `pnpm test` 757 passed/7 skipped, `typecheck`/`build` pass; live C13 still pending |
 | F4 | NOT STARTED | R7 | 3 MiB response probe failed the acceptance expectation |
 | F5 | NOT STARTED | All; C01–C17 | Standard checks pass; live acceptance still pending |
