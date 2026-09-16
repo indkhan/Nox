@@ -145,8 +145,11 @@ through the same serialized generation path before touching the database.
 
 All workspace calls go to `https://mcp.notion.com/mcp` using MCP protocol `2025-06-18`.
 Responses may be JSON or server-sent events. Response bodies stream through an 8 MiB
-byte budget (declared `Content-Length` is only an early hint): oversize bodies fail
-honestly without a mutation retry, SSE is parsed by content type with CRLF/LF/CR,
+byte budget enforced on actual received wire bytes (declared `Content-Length` is
+only an early hint; the supported non-stream fallback uses exact UTF-8 accounting):
+oversize bodies fail honestly without a mutation retry, mid-stream aborts surface
+as AbortError rather than partial text, SSE cancels early once a complete event
+carries the matching request id, SSE is parsed by content type with CRLF/LF/CR,
 comments, and newline-joined `data:` semantics, and only the matching request id
 completes a call — another id's error never does. Malformed responses after dispatch
 surface as uncertain outcomes. The scheduler allows at most three calls at
