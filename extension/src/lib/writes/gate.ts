@@ -244,6 +244,7 @@ export class WriteGate {
       if (this.turnActive) {
         throw new MutationRejectedError('TURN_ACTIVE', 'a turn started while this undo was queued — the undo was refused. No changes were made.')
       }
+      await this.requireNoConflict(scope.threadId)
       let original: JournalEntry | undefined
       if (opts.journalId) {
         original = await this.revalidateUndoEntry(opts.journalId, tool, args)
@@ -405,6 +406,7 @@ export class WriteGate {
     await this.requireNoConflict(scope.threadId)
     return this.runExclusive(async () => {
       this.reassertMutation(snapshot, signal)
+      await this.requireNoConflict(scope.threadId)
       let op: JournalEntry
       try {
         op = await this.journal.beginIntent({
@@ -762,9 +764,14 @@ export class WriteGate {
     return this.runExclusive(async () => {
       try {
         this.reassertMutation(snapshot, req.signal)
-    } catch (e) {
-      return textResult(e instanceof Error ? e.message : String(e))
-    }
+        // R4: recheck unresolved outcomes inside the serial boundary, after
+        // earlier work settled. A queued call admitted while its predecessor
+        // was still active must stop here when that predecessor is now
+        // unknown/pending, even though the pre-queue check passed.
+        await this.requireNoConflict(scope.threadId)
+      } catch (e) {
+        return textResult(e instanceof Error ? e.message : String(e))
+      }
 
       if (reservationId !== undefined && this.deps.checkPlanReservation && !this.deps.checkPlanReservation(reservationId, planScope)) {
         return textResult('PLAN_MISMATCH: the approved operation is no longer valid for this turn — request a fresh review. No changes were made.')
