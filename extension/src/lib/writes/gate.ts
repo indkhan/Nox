@@ -286,6 +286,17 @@ export class WriteGate {
       this.activeIntentIds.add(undoOpId)
       this.undoActive = true
       try {
+        try {
+          this.assertDispatchAuthority(snapshot, scope, opts.signal, original?.inverse?.tool ?? tool)
+        } catch (e) {
+          if (isAbortError(e)) {
+            await this.settleUndo(undoOpId, opts.journalId, 'failed', 'cancelled before dispatch')
+            throw new Error('TURN_CANCELLED: the undo was cancelled before dispatch. No changes were made.')
+          }
+          const detail = e instanceof Error ? e.message : String(e)
+          await this.settleUndo(undoOpId, opts.journalId, 'failed', detail)
+          throw e
+        }
         const guard = await this.runGuardPhase(
           { rid: 0, tool, args, namespace: null, provenance: 'user-only', signal: opts.signal },
           classifyToolCall(tool, args),
@@ -297,10 +308,15 @@ export class WriteGate {
           throw new Error(guardDetail)
         }
         try {
-          opts.signal?.throwIfAborted()
-        } catch {
-          await this.settleUndo(undoOpId, opts.journalId, 'failed', 'cancelled before dispatch')
-          throw new Error('TURN_CANCELLED: the undo was cancelled before dispatch. No changes were made.')
+          this.assertDispatchAuthority(snapshot, scope, opts.signal, original?.inverse?.tool ?? tool)
+        } catch (e) {
+          if (isAbortError(e)) {
+            await this.settleUndo(undoOpId, opts.journalId, 'failed', 'cancelled before dispatch')
+            throw new Error('TURN_CANCELLED: the undo was cancelled before dispatch. No changes were made.')
+          }
+          const detail = e instanceof Error ? e.message : String(e)
+          await this.settleUndo(undoOpId, opts.journalId, 'failed', detail)
+          throw e
         }
         let result: unknown
         try {
@@ -404,10 +420,15 @@ export class WriteGate {
       this.activeIntentIds.add(op.id)
       try {
         try {
-          signal?.throwIfAborted()
-        } catch {
-          await this.settleProtected(op.id, { status: 'failed', outcomeDetail: 'cancelled before dispatch' })
-          throw new Error('TURN_CANCELLED: the effect was cancelled before dispatch. No changes were made.')
+          this.assertDispatchAuthority(snapshot, scope, signal, intent.tool)
+        } catch (e) {
+          if (isAbortError(e)) {
+            await this.settleProtected(op.id, { status: 'failed', outcomeDetail: 'cancelled before dispatch' })
+            throw new Error('TURN_CANCELLED: the effect was cancelled before dispatch. No changes were made.')
+          }
+          const detail = e instanceof Error ? e.message : String(e)
+          await this.settleProtected(op.id, { status: 'failed', outcomeDetail: detail })
+          throw e
         }
         try {
           const value = await fn()

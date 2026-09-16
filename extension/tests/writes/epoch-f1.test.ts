@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { WriteGate } from '../../src/lib/writes/gate'
 import { MutationJournal, type JournalEntry, type JournalStore } from '../../src/lib/writes/journal'
+import { requestRuntimeUndo } from '../../src/lib/writes/undo'
 import { createTurnAccessState } from '../../src/lib/agent/turn-access'
 
 const PAGE = 'f'.repeat(32)
@@ -195,5 +196,110 @@ describe('Epoch F1.1 — R1 forward-write dispatch revalidation', () => {
     const rows = await harness.journal.newestFirst()
     expect(rows).toHaveLength(1)
     expect(rows[0].status).toBe('failed')
+  })
+})
+
+describe('Epoch F1.2 — R1 undo and shared-effect dispatch revalidation', () => {
+  function propertiesArgs() {
+    return { data: { page_id: PAGE }, command: { type: 'update_properties', properties: {} } }
+  }
+
+  async function seedApplied(h: GateHarness) {
+    return h.journal.record({
+      tool: 'notion-update-page',
+      args: propertiesArgs(),
+      kind: 'properties',
+      inverse: { tool: 'notion-update-page', args: propertiesArgs() },
+    })
+  }
+
+  it('undo refuses with zero transport when the owner is lost during reservation persistence', async () => {
+    let harness!: GateHarness
+    harness = makeHarness({
+      onAppend: (entry) => {
+        if (entry.kind === 'undo' && entry.status === 'pending') harness.setOwner(false)
+      },
+    })
+    const entry = await seedApplied(harness)
+    await expect(
+      harness.gate.handleUndo(entry.inverse!.tool, entry.inverse!.args, { journalId: entry.id }),
+    ).rejects.toThrow(/NOT_OWNER|LEASE_EXPIRED/)
+    expect(harness.calls).toHaveLength(0)
+    // The refused undo settles as failed and releases the original.
+    expect(await harness.journal.undoable()).toHaveLength(1)
+    const undos = (await harness.journal.newestFirst()).filter((e) => e.kind === 'undo')
+    expect(undos).toHaveLength(1)
+    expect(undos[0].status).toBe('failed')
+  })
+
+  it('undo refuses with zero transport when the connection changes during reservation persistence', async () => {
+    let harness!: GateHarness
+    harness = makeHarness({
+      onAppend: (entry) => {
+        if (entry.kind === 'undo' && entry.status === 'pending') harness.setConnGen('conn-2')
+      },
+    })
+    const entry = await seedApplied(harness)
+    await expect(
+      harness.gate.handleUndo(entry.inverse!.tool, entry.inverse!.args, { journalId: entry.id }),
+    ).rejects.toThrow(/CONNECTION_CHANGED/)
+    expect(harness.calls).toHaveLength(0)
+    expect(await harness.journal.undoable()).toHaveLength(1)
+  })
+
+  it('undo refuses with zero transport when the owner is lost during guard reads', async () => {
+    let harness!: GateHarness
+    harness = makeHarness({
+      fetchImpl: async () => {
+        harness.setOwner(false)
+        return '# Simple\noriginal text'
+      },
+    })
+    const contentArgs = { data: { page_id: PAGE }, command: { type: 'replace_content', content: '# Undo content' } }
+    const entry = await harness.journal.record({
+      tool: 'notion-update-page',
+      args: { data: { page_id: PAGE }, command: { type: 'replace_content', content: '# Before' } },
+      kind: 'content-replace',
+      inverse: { tool: 'notion-update-page', args: contentArgs },
+    })
+    await expect(
+      harness.gate.handleUndo(entry.inverse!.tool, entry.inverse!.args, { journalId: entry.id }),
+    ).rejects.toThrow(/NOT_OWNER|LEASE_EXPIRED/)
+    expect(harness.calls).toHaveLength(0)
+    expect(await harness.journal.undoable()).toHaveLength(1)
+  })
+
+  it('shared effects refuse without invoking the effect when authority is lost during intent persistence', async () => {
+    let harness!: GateHarness
+    harness = makeHarness({
+      onAppend: (entry) => {
+        if (entry.kind === 'upload' && entry.status === 'pending') harness.setOwner(false)
+      },
+    })
+    let ran = 0
+    await expect(
+      harness.gate.runEffectExclusive(
+        async () => { ran++; return 'ok' },
+        undefined,
+        { tool: 'nox-upload-local-file', args: { attachment_id: 'a1' }, kind: 'upload' },
+      ),
+    ).rejects.toThrow(/NOT_OWNER|LEASE_EXPIRED/)
+    expect(ran).toBe(0)
+    expect(harness.calls).toHaveLength(0)
+    const rows = await harness.journal.newestFirst()
+    expect(rows).toHaveLength(1)
+    expect(rows[0].status).toBe('failed')
+  })
+
+  it('restored undo still reaches the runtime path helper with zero transport on revoked authority', async () => {
+    let harness!: GateHarness
+    harness = makeHarness({
+      onAppend: (entry) => {
+        if (entry.kind === 'undo' && entry.status === 'pending') harness.setOwner(false)
+      },
+    })
+    const entry = await seedApplied(harness)
+    await expect(requestRuntimeUndo(harness.gate, entry.id)).rejects.toThrow(/NOT_OWNER|LEASE_EXPIRED/)
+    expect(harness.calls).toHaveLength(0)
   })
 })
