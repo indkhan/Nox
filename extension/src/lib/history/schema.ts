@@ -1,9 +1,40 @@
 import { openDB, type IDBPDatabase } from 'idb'
 import type { ActivityItem } from '../agent/activity'
+import { isDeletionPending, refreshDeletionState, defaultDeletionStore, type DeletionStore } from './deletion'
 
 export const DB_NAME = 'nox'
 export const DB_VERSION = 3
-const openConnections = new Set<IDBPDatabase>()
+
+/**
+ * One cached connection per panel document. Caching (instead of opening per
+ * call) bounds connection objects and lets `blocking` close promptly: when
+ * another context deletes or upgrades the database, IndexedDB fires
+ * versionchange and this panel closes immediately instead of holding the
+ * deletion blocked. The cache resets on open rejection, explicit close,
+ * versionchange-close, and connection termination.
+ */
+let cachedOpen: Promise<IDBPDatabase> | null = null
+let cachedConnection: IDBPDatabase | null = null
+
+function resetCache(promise: Promise<IDBPDatabase> | null): void {
+  if (cachedOpen === promise) {
+    cachedOpen = null
+    cachedConnection = null
+  }
+}
+
+function closeCachedConnection(): void {
+  const connection = cachedConnection
+  cachedOpen = null
+  cachedConnection = null
+  if (connection) {
+    try {
+      connection.close()
+    } catch {
+      // Already closed or terminated; the cache reset is what matters.
+    }
+  }
+}
 
 export interface ThreadRow {
   id: string
@@ -52,8 +83,20 @@ function migrations(db: IDBPDatabase, oldVersion: number): void {
   // v2 stores structured activity inside existing message records; no new store is required.
 }
 
-export async function openNoxDB(): Promise<IDBPDatabase> {
-  const connection = await openDB(DB_NAME, DB_VERSION, {
+export async function openNoxDB(store: DeletionStore = defaultDeletionStore()): Promise<IDBPDatabase> {
+  if (cachedOpen) return cachedOpen
+  // Refresh on miss only: the cached connection implies a recent check, and
+  // close paths (explicit, blocking, terminated) reset the cache.
+  let deleting = false
+  try {
+    deleting = await refreshDeletionState(store)
+  } catch {
+    deleting = isDeletionPending()
+  }
+  if (deleting) {
+    throw new Error('DELETION_PENDING: Nox data is being deleted — close other Nox windows to finish, then retry.')
+  }
+  const promise = openDB(DB_NAME, DB_VERSION, {
     upgrade(db, oldVersion, _newVersion, transaction) {
       migrations(db, oldVersion)
       if (oldVersion < 3) {
@@ -64,12 +107,29 @@ export async function openNoxDB(): Promise<IDBPDatabase> {
         transaction.objectStore('messages').deleteIndex('by_ts')
       }
     },
+    blocking: () => {
+      closeCachedConnection()
+    },
+    terminated: () => {
+      resetCache(promise)
+    },
   })
-  openConnections.add(connection)
-  return connection
+  cachedOpen = promise
+  try {
+    cachedConnection = await promise
+  } catch (error) {
+    resetCache(promise)
+    throw error
+  }
+  return cachedConnection
 }
 
+/** Close this panel's cached connection, if any. Other contexts are unaffected. */
 export function closeNoxDBConnections(): void {
-  for (const connection of openConnections) connection.close()
-  openConnections.clear()
+  closeCachedConnection()
+}
+
+/** Test-only: close and drop the cache so tests start isolated. */
+export function __resetConnectionCacheForTests(): void {
+  closeCachedConnection()
 }

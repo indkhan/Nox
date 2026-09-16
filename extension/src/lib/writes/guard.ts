@@ -1,21 +1,32 @@
+import { normalizePageText, type NormalizedPageFetch } from '../notion/page-content'
+
 export interface PageSnapshot {
   pageId: string
   hash: string
   markdown: string
   capturedAt: number
+  /** Normalized fetch record behind this snapshot (completeness metadata). */
+  record: NormalizedPageFetch
 }
 
 /**
  * The overwrite race (RESEARCH §2.7): Notion MCP has no conditional writes, so
  * the only defence against clobbering concurrent edits is re-fetch + compare
- * immediately before writing.
+ * immediately before writing. Snapshots are normalized provider content, never
+ * raw concatenated envelopes: partial, unavailable, and unrecognized payloads
+ * throw instead of becoming a baseline.
+ *
+ * Residual race: an external edit landing between the final read and the
+ * provider write cannot be atomically excluded without provider
+ * conditional-write support.
  */
 export async function capturePageSnapshot(
   fetchPageMarkdown: (pageId: string) => Promise<string>,
   pageId: string,
 ): Promise<PageSnapshot> {
-  const markdown = await fetchPageMarkdown(pageId)
-  return { pageId, hash: await hashMarkdown(markdown), markdown, capturedAt: Date.now() }
+  const raw = await fetchPageMarkdown(pageId)
+  const record = normalizePageText(pageId, raw)
+  return { pageId: record.pageId, hash: await hashMarkdown(record.markdown), markdown: record.markdown, capturedAt: Date.now(), record }
 }
 
 export class GuardViolation extends Error {
@@ -30,9 +41,8 @@ export async function assertUnchanged(
   fetchPageMarkdown: (pageId: string) => Promise<string>,
   snapshot: PageSnapshot,
 ): Promise<void> {
-  const fresh = await fetchPageMarkdown(snapshot.pageId)
-  const freshHash = await hashMarkdown(fresh)
-  if (freshHash !== snapshot.hash) {
+  const fresh = await capturePageSnapshot(fetchPageMarkdown, snapshot.pageId)
+  if (fresh.hash !== snapshot.hash) {
     throw new GuardViolation(
       'PAGE_CHANGED_SINCE_READ: this page was edited in Notion after Nox read it. ' +
         'Re-read the page and try again — refusing to overwrite the newer edits.',

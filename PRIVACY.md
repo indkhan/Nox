@@ -16,8 +16,12 @@ analytics, advertising, or telemetry service.
 
 Workspace requests go directly to Notion's hosted MCP service at
 `mcp.notion.com`. Prompts and relevant workspace content go through the local
-Nox bridge to your installed OpenAI Codex app-server under your own account.
-Nox does not send data elsewhere. Notion and OpenAI process data under their
+Nox bridge to your installed OpenAI Codex app-server under your own account,
+where they are processed under your provider's terms. When you enable web
+research, Codex may retrieve external web sources. File upload into Notion is
+unavailable in this alpha, so selected files never leave the browser and no
+upload destination receives them. Nox itself operates no backend and sends data
+nowhere else. Notion and OpenAI process data under their
 own terms.
 
 ## Storage and deletion
@@ -29,7 +33,9 @@ in session storage. Codex may retain conversations in its normal local
 
 Delete Nox history from its history menu, disconnect Notion to remove its
 tokens, or uninstall the extension to remove Chrome-managed Nox data. Remove
-Codex history separately using Codex's controls.
+Codex history separately using Codex's controls. Local deletion removes Nox's
+browser data only: it does not delete remote Notion workspace effects or
+Codex provider and history records.
 
 Nox does not sell personal data, share it for advertising, or retain a
 server-side copy. Browser data remains until you delete it or uninstall Nox.

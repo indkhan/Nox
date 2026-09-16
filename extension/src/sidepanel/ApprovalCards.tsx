@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNoxStore } from './store'
 import { writeGate } from '../lib/agent/panel'
-import { undoNewest } from '../lib/writes/undo'
+import { onDeletionNotice } from '../lib/history/deletion'
+import { requestRuntimeUndo } from '../lib/writes/undo'
+import type { ApprovalDisplay } from '../lib/writes/approvals'
 
-type CardApproval = { id: number; tool: string; summary: string; payloadJson: string; reasons: string[]; targetUrl?: string; reversibility: string }
+type CardApproval = ApprovalDisplay
 
 /**
- * Approval cards (MVP §7): tool, plain-language summary, exact payload,
- * Approve / Approve all this turn / Reject. Renders above the composer and
- * blocks the turn until answered.
+ * Approval cards (MVP §7): tool, plain-language summary, targets and effect
+ * scope, complete inspectable payload, Approve / Reject. Renders above the
+ * composer and blocks the turn until answered.
  */
 export function ApprovalCards({ readOnly = false }: { readOnly?: boolean }) {
   const pending = useNoxStore((s) => s.pendingApprovals)
@@ -32,13 +34,18 @@ export function ApprovalCards({ readOnly = false }: { readOnly?: boolean }) {
               <li key={reason}>{reason}</li>
             ))}
           </ul>
+          <p className="mt-1.5 text-[11px] text-zinc-400" data-testid={`approval-scope-${approval.id}`}>
+            {approval.affectedCount} object{approval.affectedCount === 1 ? '' : 's'}
+            {approval.targets.length > 0 && ` · ${approval.targets.slice(0, 5).join(', ')}${approval.targets.length > 5 ? ', …' : ''}`}
+            {approval.destructive ? ' · Destructive' : ' · Non-destructive'}
+          </p>
           <div className="mt-2 flex items-center gap-2 text-[11px] text-zinc-500">
             {approval.targetUrl && <a href={approval.targetUrl} target="_blank" rel="noreferrer" className="nox-active underline-offset-2 hover:underline">Open target</a>}
             <span>{approval.reversibility}</span>
           </div>
           <details className="mt-1.5">
             <summary className="cursor-pointer select-none text-[11px] text-zinc-500">Technical details</summary>
-            <pre className="mt-1 max-h-32 overflow-auto rounded bg-zinc-950 p-2 font-mono text-[10px] text-zinc-400">{approval.payloadJson}</pre>
+            <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-words rounded bg-zinc-950 p-2 font-mono text-[10px] text-zinc-400">{approval.payloadJson}</pre>
           </details>
           <div className="mt-3 flex flex-wrap gap-2">
             <button
@@ -50,15 +57,6 @@ export function ApprovalCards({ readOnly = false }: { readOnly?: boolean }) {
               className="rounded-md bg-zinc-100 px-3 py-1.5 text-xs font-semibold text-zinc-900 hover:bg-white"
             >
               Approve
-            </button>
-            <button
-              onClick={() => {
-                writeGate.approvals.answer(approval.id, 'approve-all')
-                useNoxStore.getState().pendingApprovals.forEach((a) => removeApproval(a.id))
-              }}
-              className="rounded-md border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800"
-            >
-              Approve all this turn
             </button>
             <button
               onClick={() => {
@@ -78,26 +76,45 @@ export function ApprovalCards({ readOnly = false }: { readOnly?: boolean }) {
 }
 
 /** One-click undo of the latest reversible mutation (MVP §6.5). */
-export function UndoBar({ readOnly = false }: { readOnly?: boolean }) {
+export function UndoBar({ readOnly = false, busy = false }: { readOnly?: boolean; busy?: boolean }) {
   const [undoableCount, setUndoableCount] = useState(0)
   const [status, setStatus] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
+  const activeThreadId = useNoxStore((s) => s.activeThreadId)
 
   useEffect(() => {
-    const refresh = () => void writeGate.journal.undoable().then((entries) => setUndoableCount(entries.length))
+    // Event-driven, thread-scoped count: refresh after known journal changes,
+    // on thread change, and on deletion notices — never a full-journal poll.
+    // A failed count read (e.g. mid-deletion) shows zero, never stale data.
+    let cancelled = false
+    const refresh = () => {
+      void writeGate.journal
+        .undoableCount()
+        .then((count) => {
+          if (!cancelled) setUndoableCount(count)
+        })
+        .catch(() => {
+          if (!cancelled) setUndoableCount(0)
+        })
+    }
     refresh()
-    const timer = setInterval(refresh, 3000)
-    return () => clearInterval(timer)
-  }, [])
+    const unsubscribeJournal = writeGate.journal.onChange(refresh)
+    const unsubscribeDeletion = onDeletionNotice(refresh)
+    return () => {
+      cancelled = true
+      unsubscribeJournal()
+      unsubscribeDeletion()
+    }
+  }, [activeThreadId])
 
-  if (readOnly || (undoableCount === 0 && !status && !running)) return null
+  if (readOnly || (undoableCount === 0 && !status && !running && !busy)) return null
 
   const run = async () => {
-    if (running) return
+    if (running || busy) return
     setRunning(true)
-    const message = await runUndo(readOnly)
+    const message = await runUndo(readOnly, busy)
     setStatus(message)
-    setUndoableCount((await writeGate.journal.undoable()).length)
+    setUndoableCount(await writeGate.journal.undoableCount().catch(() => 0))
     setRunning(false)
     window.setTimeout(() => setStatus(null), 2500)
   }
@@ -105,12 +122,13 @@ export function UndoBar({ readOnly = false }: { readOnly?: boolean }) {
   return (
     <div className="flex items-center justify-between border-t border-zinc-800 px-3 py-1.5" data-testid="undo-bar">
       <span className="text-[11px] text-zinc-500" role="status" aria-live="polite" aria-atomic="true">
-        {status ?? `${undoableCount} reversible change${undoableCount === 1 ? '' : 's'}`}
+        {status ?? (busy ? 'Undo unavailable while Nox is working' : `${undoableCount} reversible change${undoableCount === 1 ? '' : 's'}`)}
       </span>
       {undoableCount > 0 && (
         <button
           onClick={() => void run()}
-          disabled={running}
+          disabled={running || busy}
+          title={busy ? 'Undo unavailable while Nox is working' : undefined}
           data-testid="undo-latest"
           className="rounded-md border border-zinc-700 px-2 py-0.5 text-[11px] text-zinc-300 hover:bg-zinc-800"
         >
@@ -121,10 +139,13 @@ export function UndoBar({ readOnly = false }: { readOnly?: boolean }) {
   )
 }
 
-async function runUndo(readOnly: boolean): Promise<string> {
+async function runUndo(readOnly: boolean, busy: boolean): Promise<string> {
   if (readOnly) return 'Undo unavailable in read-only mode'
+  if (busy) return 'Undo unavailable while Nox is working'
   try {
-    const undone = await undoNewest(writeGate.journal, (tool, args) => writeGate.handleUndo(tool, args))
+    // Same runtime undo path as the timeline: the gate re-validates scope
+    // and status from storage before dispatching.
+    const undone = await requestRuntimeUndo(writeGate)
     return undone ? 'Undone — note block ids change on content restores' : 'Nothing available to undo'
   } catch (e) {
     return `Partial failure: ${e instanceof Error ? e.message : String(e)}`

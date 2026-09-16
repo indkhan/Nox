@@ -173,3 +173,119 @@ it('ignores messages and disconnects from a replaced native port', async () => {
   expect(notified).not.toHaveBeenCalled()
   bridge.disconnect()
 })
+
+describe('NativeBridge envelope validation (Epoch 12 / M12)', () => {
+  let harness: ReturnType<typeof fakePort>
+  let bridge: NativeBridge
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    harness = fakePort()
+    bridge = new NativeBridge(() => harness.port)
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('does not coerce malformed resp cids into pending promises', async () => {
+    const p = bridge.rpc<string>('model/list', {})
+    await vi.waitFor(() => expect(harness.sent.length).toBeGreaterThan(0))
+    const cid = (harness.sent[0] as { cid: string }).cid
+    // Wrong type (number) must not settle the string-cid promise.
+    harness.emit({ t: 'resp', cid: 12345, result: { data: [] } })
+    harness.emit({ t: 'resp', cid: { nested: true }, result: { data: [] } })
+    let settled = false
+    void p.then(() => { settled = true }, () => { settled = true })
+    await vi.advanceTimersByTimeAsync(10)
+    expect(settled).toBe(false)
+    // The correct cid still settles afterwards.
+    harness.emit({ t: 'resp', cid, result: { data: [] } })
+    await expect(p).resolves.toEqual({ data: [] })
+  })
+
+  it('ignores resp for unknown cids without touching pending work', async () => {
+    const p = bridge.rpc<string>('model/list', {})
+    await vi.waitFor(() => expect(harness.sent.length).toBeGreaterThan(0))
+    const cid = (harness.sent[0] as { cid: string }).cid
+    harness.emit({ t: 'resp', cid: 'c9999', result: { data: [] } })
+    let settled = false
+    void p.then(() => { settled = true }, () => { settled = true })
+    await vi.advanceTimersByTimeAsync(10)
+    expect(settled).toBe(false)
+    harness.emit({ t: 'resp', cid, result: { data: [] } })
+    await expect(p).resolves.toEqual({ data: [] })
+  })
+
+  it('never forwards malformed req envelopes to handlers', () => {
+    const req = vi.fn()
+    bridge.onCodexRequest = req
+    bridge.ensureConnected()
+    harness.emit({ t: 'req', rid: 'not-a-number', method: 'item/tool/call', params: {} })
+    harness.emit({ t: 'req', rid: 5, method: 123, params: {} })
+    harness.emit({ t: 'req', rid: 6, method: 'item/tool/call', params: 'oops' })
+    harness.emit({ t: 'req', method: 'item/tool/call', params: {} })
+    expect(req).not.toHaveBeenCalled()
+  })
+
+  it('replies with a bounded correlated error for a malformed req with a valid rid', () => {
+    bridge.ensureConnected()
+    const evil = 'x'.repeat(5000)
+    harness.emit({ t: 'req', rid: 42, method: 123, params: { evil } })
+    const reply = harness.sent.find((m) => (m as { t?: string }).t === 'tool-response') as { rid: number; result: unknown } | undefined
+    expect(reply?.rid).toBe(42)
+    expect(JSON.stringify(reply)).not.toContain(evil)
+    expect(JSON.stringify(reply).length).toBeLessThan(1000)
+  })
+
+  it('drops unknown envelope discriminants without crashing', () => {
+    const notif = vi.fn()
+    bridge.onNotification = notif
+    bridge.ensureConnected()
+    harness.emit({ t: 'bogus', method: 'x', params: {} })
+    harness.emit(null)
+    harness.emit('string-frame')
+    harness.emit({ t: 'notif', method: 123, params: {} })
+    expect(notif).not.toHaveBeenCalled()
+  })
+
+  it('rejects chunkEnd count mismatches and unknown ends without dispatch', () => {
+    const notif = vi.fn()
+    bridge.onNotification = notif
+    bridge.ensureConnected()
+    harness.emit({ t: 'chunk', id: 1, data: 'hel' })
+    harness.emit({ t: 'chunk', id: 1, data: 'lo' })
+    harness.emit({ t: 'chunkEnd', id: 1, totalChars: 5, chunks: 100 })
+    harness.emit({ t: 'chunkEnd', id: 999, totalChars: 0, chunks: 0 })
+    expect(notif).not.toHaveBeenCalled()
+  })
+
+  it('reassembles a unicode chunked resp without corruption', async () => {
+    const text = 'Grüße 中文 😀 € 𝄞'
+    const p = bridge.rpc<Record<string, string>>('big/thing')
+    await vi.waitFor(() => expect(harness.sent.length).toBeGreaterThan(0))
+    const cid = (harness.sent[0] as { cid: string }).cid
+    const envelope = JSON.stringify({ t: 'resp', cid, result: { text } })
+    const mid = Math.floor(envelope.length / 2)
+    harness.emit({ t: 'chunk', id: 77, data: envelope.slice(0, mid) })
+    harness.emit({ t: 'chunk', id: 77, data: envelope.slice(mid) })
+    harness.emit({ t: 'chunkEnd', id: 77, totalChars: envelope.length, chunks: 2 })
+    await expect(p).resolves.toEqual({ text })
+  })
+
+  it('clears partial assemblies on disconnect', () => {
+    bridge.ensureConnected()
+    harness.emit({ t: 'chunk', id: 3, data: 'partial' })
+    harness.emitDisconnect()
+    // A new connection starts clean: the old partial cannot complete.
+    const h2 = fakePort()
+    const b2 = new NativeBridge(() => h2.port)
+    b2.ensureConnected()
+    const notif = vi.fn()
+    b2.onNotification = notif
+    h2.emit({ t: 'chunkEnd', id: 3, totalChars: 7, chunks: 1 })
+    expect(notif).not.toHaveBeenCalled()
+    b2.disconnect()
+    bridge.disconnect()
+  })
+})

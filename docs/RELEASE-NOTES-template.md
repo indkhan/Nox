@@ -8,8 +8,8 @@ workspace and **your** local Codex subscription. No Nox server exists.
 - Knows which Notion page you're on and uses it as context automatically
 - Workspace search, page reads/creates/edits/moves through Notion's official MCP server
 - Full database support: query, rows, schemas, views (DSL authored by the model against Notion's own spec)
-- Every action shown in a collapsible stream; reversible changes undo in one click
-- Ask-before-changes by default; approval cards with exact payloads; write guard prevents clobbering concurrent edits
+- Every action shown in a collapsible stream; supported plain-page edits undo in one click
+- Ask-before-changes by default; approval cards with the complete bounded payload; write guard prevents clobbering concurrent edits (with a documented final race: Notion MCP offers no conditional writes)
 - Model picker built live from your account (`model/list`) — new OpenAI models appear without a Nox update
 
 ## Install
@@ -22,5 +22,7 @@ workspace and **your** local Codex subscription. No Nox server exists.
 ## Known limitations
 
 - Created pages/databases cannot be undone (Notion's MCP has no delete)
-- Undo restores text, not block identity; block comments/links don't survive
-- Codex stores conversation history under `~/.codex`
+- Undo restores text, not block identity; block comments/links don't survive. Rich pages, properties, schemas, views, and moves cannot be undone.
+- File upload into Notion is unavailable: attachments stay local-only. No PDF/image analysis.
+- No dedicated bulk-autofill orchestration or quota estimate.
+- Codex stores conversation history under `~/.codex`; local deletion removes Nox browser data only

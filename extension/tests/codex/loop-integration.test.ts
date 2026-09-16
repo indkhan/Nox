@@ -22,6 +22,7 @@ class ScriptedBridge {
   toolResults: Array<{ rid: number; result: unknown }> = []
   failNextTurnStart = false
   failAfterTool = false
+  planFirstTurn = false
   private nextRid = 100
   private interrupted = false
 
@@ -67,23 +68,16 @@ class ScriptedBridge {
     this.disconnectedCount++
   }
 
-  private notif(method: string, params: Record<string, unknown>) {
-    this.onNotification?.({ method, params: { turnId: 'turn_1', itemId: 'a1', ...params } })
-  }
-
-  /** Plays one scripted turn: reasoning → tool request → answer → completed. */
-  private async streamTurn(threadId: string): Promise<void> {
-    this.notif('item/reasoning/summaryTextDelta', { threadId, delta: 'thinking' })
-    this.notif('item/started', { threadId, item: { type: 'dynamicToolCall', id: 't1', tool: 'notion-search' } })
-
+  private async requestTool(threadId: string, tool: string, args: Record<string, unknown>, callId: string): Promise<void> {
     const rid = this.nextRid++
     const answered = new Promise<void>((resolve) => {
       const check = () => {
         if (this.toolResults.some((r) => r.rid === rid)) resolve()
       }
       Object.defineProperty(this.toolResults, 'push', {
-        value: (...args: never[]) => {
-          Array.prototype.push.apply(this.toolResults, args)
+        configurable: true,
+        value: (...pushArgs: never[]) => {
+          Array.prototype.push.apply(this.toolResults, pushArgs)
           resolve()
           check()
           return this.toolResults.length
@@ -93,9 +87,27 @@ class ScriptedBridge {
     this.onCodexRequest?.({
       rid,
       method: 'item/tool/call',
-      params: { threadId, turnId: 'turn_1', tool: 'notion-search', namespace: null, arguments: { query: 'overdue' }, callId: 'call_1' },
+      params: { threadId, turnId: 'turn_1', tool, namespace: null, arguments: args, callId },
     })
     await Promise.race([answered, new Promise((r) => setTimeout(r, 2000))])
+  }
+
+  private notif(method: string, params: Record<string, unknown>) {
+    this.onNotification?.({ method, params: { turnId: 'turn_1', itemId: 'a1', ...params } })
+  }
+
+  /** Plays one scripted turn: reasoning → tool request → answer → completed. */
+  private async streamTurn(threadId: string): Promise<void> {
+    this.notif('item/reasoning/summaryTextDelta', { threadId, delta: 'thinking' })
+    if (this.planFirstTurn) {
+      this.planFirstTurn = false
+      this.notif('item/started', { threadId, item: { type: 'dynamicToolCall', id: 't0', tool: 'nox-propose-workspace-plan' } })
+      await this.requestTool(threadId, 'nox-propose-workspace-plan', {}, 'call_0')
+      this.notif('item/completed', { threadId, item: { type: 'dynamicToolCall', id: 't0', status: 'completed' } })
+    }
+    this.notif('item/started', { threadId, item: { type: 'dynamicToolCall', id: 't1', tool: 'notion-search' } })
+
+    await this.requestTool(threadId, 'notion-search', { query: 'overdue' }, 'call_1')
     if (this.failAfterTool) throw new Error('bridge port disconnected')
 
     this.notif('item/completed', { threadId, item: { type: 'dynamicToolCall', id: 't1', status: 'completed' } })
@@ -263,6 +275,38 @@ describe('AgentLoop integration (scripted codex)', () => {
     await expect(loop.sendUserMessage('continue')).rejects.toThrow(/resume/i)
     expect(loop.currentThreadId).toBe('missing-thread')
     expect(rpc.mock.calls.some(([method]) => method === 'thread/start')).toBe(false)
+  })
+
+  it('refuses a new turn while an undo holds the mutation boundary', async () => {
+    loop = new AgentLoop({
+      bridge: bridge as unknown as NativeBridge,
+      codex,
+      executor,
+      getDynamicTools: async () => [],
+      developerInstructions: buildInstructionsStub(),
+      isUndoActive: () => true,
+    })
+    await expect(loop.sendUserMessage('hello')).rejects.toThrow(/UNDO_IN_PROGRESS/)
+    expect(bridge.turnInputs).toHaveLength(0)
+  })
+
+  it('treats an empty context preparation as no untrusted exposure', async () => {
+    await loop.sendUserMessage('summarize', { prepareContext: async () => [] })
+    expect(notionCalls).toEqual([{ name: 'notion-search', args: { query: 'overdue' }, provenance: 'user-only' }])
+  })
+
+  it('treats metadata-only mentions as no untrusted exposure', async () => {
+    await loop.sendUserMessage('summarize', { mentions: [{ pageId: 'page_abc', title: 'Projects DB' }] })
+    expect(notionCalls).toEqual([{ name: 'notion-search', args: { query: 'overdue' }, provenance: 'user-only' }])
+  })
+
+  it('does not taint the turn with local plan receipts', async () => {
+    bridge.planFirstTurn = true
+    await loop.sendUserMessage('summarize', { prepareContext: async () => [] })
+    expect(notionCalls).toEqual([
+      { name: 'nox-propose-workspace-plan', args: {}, provenance: 'user-only' },
+      { name: 'notion-search', args: { query: 'overdue' }, provenance: 'user-only' },
+    ])
   })
 
 })

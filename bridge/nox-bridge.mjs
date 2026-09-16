@@ -6,12 +6,21 @@
 // See PROTOCOL.md for envelope shapes.
 import { spawn } from 'node:child_process';
 import { tmpdir } from 'node:os';
+import { StringDecoder } from 'node:string_decoder';
 import { resolveCodex } from './resolve-codex.mjs';
 
 const MAX = 1024 * 1024;
 // Raw slices can expand up to ~6x once JSON-escaped inside the envelope
 // (e.g. a quote becomes \"), so stay well under the cap.
 const SAFE_CHUNK = 256 * 1024;
+// Bound for one newline-delimited Codex stdout line, counted in UTF-16 code
+// units (JS string length). This is intentionally separate from the byte
+// budgets below: inbound native frames are capped at 32 MiB UTF-8 bytes and
+// outbound host→extension envelopes at 1 MiB framed bytes, while SAFE_CHUNK
+// slices the serialized envelope by UTF-16 units. 8M units comfortably holds
+// the 2 MB fixture answer plus large non-ASCII frames (CJK/emoji expand to
+// ~2-3 bytes per unit) while bounding memory before a newline arrives.
+const MAX_CODEX_LINE_CHARS = 8 * 1024 * 1024;
 const MAX_RESTARTS = 5;
 const STABLE_RUN_MS = 60_000;
 
@@ -86,8 +95,10 @@ export function startCodex({ force = false } = {}) {
   status(state.proc ? 'restarting' : 'spawning', { attempt: state.restarts + 1, codexPath: info.path });
   state.spawnState = 'restarting';
 
-  // Explicit non-writable cwd — omitting it makes the thread inherit whatever
-  // directory the browser launched us from (RESEARCH §3.4, spike-verified).
+  // Explicit pinned cwd — omitting it makes the thread inherit whatever
+  // directory the browser launched us from. The OS temporary directory is
+  // writable; Codex-side restriction comes from the extension-configured
+  // read-only sandbox profile on every thread, not from this directory.
   // Node-script candidates (test fixtures) launch through the interpreter.
   const cmd = info.launcher ?? info.path;
   const args = info.launcher ? [info.path, 'app-server'] : ['app-server'];
@@ -104,14 +115,45 @@ export function startCodex({ force = false } = {}) {
     sendToExtension({ t: 'status', state: 'running', detail: { codexPath: info.path, pid: proc.pid } });
   });
 
+  // Streaming UTF-8 decode: chunk boundaries are not character boundaries,
+  // so decoder state persists across data events. Both the decoder and the
+  // pending line buffer are per-process and reset on restart (a new closure
+  // per startCodex call); truncated bytes never carry into the next process.
+  const decoder = new StringDecoder('utf8');
   let buf = '';
   proc.stdout.on('data', (chunk) => {
-    buf += chunk.toString('utf8');
+    // Chunk may arrive as Buffer (no setEncoding) or string; decode
+    // incrementally so a 2/3/4-byte sequence split across writes survives.
+    const text = typeof chunk === 'string' ? chunk : decoder.write(chunk);
+    if (text) {
+      if (buf.length + text.length > MAX_CODEX_LINE_CHARS) {
+        noteStderr(`codex line exceeded ${MAX_CODEX_LINE_CHARS} chars; discarding ${buf.length} buffered chars`);
+        buf = '';
+        // Drop this chunk's contribution to the overlong line and resync at
+        // the next newline it contains, if any.
+        const nlInChunk = text.indexOf('\n');
+        if (nlInChunk >= 0) buf = text.slice(nlInChunk + 1);
+        // Fall through to frame any complete lines in the resynced buffer.
+      } else {
+        buf += text;
+      }
+    }
     let nl;
     while ((nl = buf.indexOf('\n')) >= 0) {
       const line = buf.slice(0, nl).trim();
       buf = buf.slice(nl + 1);
       if (line) handleCodexLine(line);
+      // A single chunk could complete many lines; keep the bound tight.
+      if (buf.length > MAX_CODEX_LINE_CHARS) {
+        noteStderr(`codex line exceeded ${MAX_CODEX_LINE_CHARS} chars; discarding buffer`);
+        buf = '';
+        break;
+      }
+    }
+    // Bound the unterminated tail even when no newline arrived yet.
+    if (buf.length > MAX_CODEX_LINE_CHARS) {
+      noteStderr(`codex line exceeded ${MAX_CODEX_LINE_CHARS} chars without newline; discarding ${buf.length} chars`);
+      buf = '';
     }
   });
 
@@ -121,6 +163,21 @@ export function startCodex({ force = false } = {}) {
     clearTimeout(state.stableTimer);
     state.stableTimer = null;
     state.proc = null;
+    // Truncated final protocol data (a line without its newline, or an
+    // incomplete UTF-8 sequence flushed here) is an explicit failure, never
+    // silent corruption: pending work already fails below, and the leftover
+    // is recorded for diagnosis instead of carried to the next process.
+    let tail = '';
+    try {
+      tail = decoder.end();
+    } catch {
+      tail = '';
+    }
+    const leftover = (buf + (tail || '')).trim();
+    if (leftover) {
+      noteStderr(`codex truncated final line discarded (${leftover.length} chars): ${leftover.slice(0, 200)}`);
+    }
+    buf = '';
     failAllPending(`codex exited (${code ?? signal})`);
     declineAllIncoming();
     // Crash restart with backoff; the extension re-initializes and resumes threads.
@@ -146,6 +203,9 @@ function handleCodexLine(line) {
   try {
     m = JSON.parse(line);
   } catch {
+    // Malformed protocol data is an explicit diagnostic failure (bounded
+    // preview only), never silent corruption of later lines.
+    noteStderr(`codex malformed line discarded (${line.length} chars): ${line.slice(0, 200)}`);
     return;
   }
 

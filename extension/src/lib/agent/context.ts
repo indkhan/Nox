@@ -10,7 +10,12 @@ export function truncateResult(text: string, budgetChars: number): string {
   return text.slice(0, Math.max(0, budgetChars - TRUNCATION_MARKER.length)) + TRUNCATION_MARKER
 }
 
-export interface PageContext extends MentionRef { markdown?: string; error?: string }
+export interface PageContext extends MentionRef {
+  markdown?: string
+  error?: string
+  /** Provider completeness of the read behind `markdown`, when established. */
+  remoteStatus?: 'complete' | 'partial' | 'unavailable'
+}
 
 export interface ContextInput {
   currentPage?: CurrentPage
@@ -21,8 +26,11 @@ export interface ContextInput {
 /**
  * The per-turn context preamble. Only pages the user explicitly @-mentioned
  * enter context. Pure so it is trivially testable; fetching lives in the loop.
+ * Epoch F2 / R2: `excerpt` receives the normalized page id so truncation
+ * before Codex can be reported to the write gate (model-partial baselines).
+ * Existing two-arg excerpts keep working; the id is simply ignored.
  */
-export function buildContextPreamble(input: ContextInput, excerpt: (text: string, budget: number) => string = truncateResult): string {
+export function buildContextPreamble(input: ContextInput, excerpt: (text: string, budget: number, pageId?: string) => string = truncateResult): string {
   const blocks: string[] = []
   const { currentPage, mentions = [], attachments = [] } = input
 
@@ -40,21 +48,29 @@ export function buildContextPreamble(input: ContextInput, excerpt: (text: string
     const active = currentPage && key(currentPage.pageId) === id
     const text = page.markdown
     const budget = Math.min(8000, remaining)
-    const status = page.error ? 'unavailable' : text === undefined ? 'reference-only' : text.length > budget ? 'partial' : 'fetched'
+    // Remote completeness outranks local length: a provider-partial read is
+    // partial even when short, so the model fetches the omitted scope.
+    const status = page.error || page.remoteStatus === 'unavailable'
+      ? 'unavailable'
+      : text === undefined
+        ? 'reference-only'
+        : page.remoteStatus === 'partial' || text.length > budget
+          ? 'partial'
+          : 'fetched'
     const view = active && currentPage.viewId ? ` view_id="${escapeXml(currentPage.viewId)}"` : ''
     const tag = active ? 'page' : 'mentioned_page'
     const location = active ? '<current_notion_location>\n' : ''
     content.push(`${location}<${tag} id="${escapeXml(id)}"${view}>\n` +
       `title: ${escapeXml(page.title ?? 'Untitled')}\n` +
       `<retrieval status="${status}" total_chars="${text?.length ?? 0}" supplied_chars="${Math.min(text?.length ?? 0, budget)}"/>\n` +
-      (page.error ? `Fetch unavailable: ${escapeXml(page.error)}` : text === undefined ? 'Reference only: fetch this page before making claims about its contents.' : `content:\n${excerpt(text, budget)}`) +
+      (page.error ? `Fetch unavailable: ${escapeXml(page.error)}` : text === undefined ? 'Reference only: fetch this page before making claims about its contents.' : `content:\n${excerpt(text, budget, id)}`) +
       `\n</${tag}>${active ? '\n</current_notion_location>' : ''}`)
     remaining -= Math.min(text?.length ?? 0, budget)
   }
   for (const attachment of attachments) {
     content.push(`<local_attachment id="${escapeXml(attachment.id)}" name="${escapeXml(attachment.name)}" mime="${escapeXml(attachment.mimeType)}" size="${attachment.size}"/>`)
   }
-  if (attachments.length) content.push('Local attachments are upload inputs only. Their file contents have not been read; PDF/image analysis is unavailable.')
+  if (attachments.length) content.push('Local attachments are local-only inputs: file upload into Notion is unavailable in this alpha. Their file contents have not been read; PDF/image analysis is unavailable.')
   blocks.push('<context>')
   if (content.length) blocks.push(wrapUntrusted(content.join('\n')))
   blocks.push('</context>')

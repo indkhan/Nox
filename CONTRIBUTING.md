@@ -23,10 +23,12 @@ through Node's Corepack when pnpm 10+ is unavailable.
 
 ## Ground rules
 
-- **Every commit** passes typecheck, tests, and build. Commit subjects follow
-  `E<epic>.<n>: <summary>` for epic work.
-- Modules under `src/lib/` never touch `chrome.*` directly — side effects are
-  injected so vitest can drive everything without Chrome.
+- **Every commit** passes typecheck, tests, and build. Commit subjects follow the
+  repository's conventional style (`fix(scope): …`, `docs: …`, `chore(test): …`).
+- Pure library modules avoid browser globals so vitest can drive them without
+  Chrome. The existing `*/panel.ts`, storage/settings, and assembly modules
+  deliberately perform side effects; tests cover them through injected fakes and
+  seams — do not refactor them to satisfy the pure-module rule.
 - Discover, don't hardcode: tool schemas from `tools/list`, capabilities from
   `notion-fetch self`, models from `model/list`.
 - Every mutation path goes through `src/lib/writes/gate.ts` (approval + guard +
@@ -46,3 +48,6 @@ through Node's Corepack when pnpm 10+ is unavailable.
 
 Architecture and verified implementation details live in `docs/application.md`.
 Update it briefly whenever an architecture change makes it inaccurate.
+Historical `RESEARCH` / `MVP` / `docs/plans/E*.md` materials are archived in
+`docs/old_planning.md`; link current behavior to `docs/application.md`, not to
+the archive.

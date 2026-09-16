@@ -1,8 +1,13 @@
 name: CI
 
+# macOS is unverified in this alpha (see scripts/release/README.md): no macOS
+# job runs here. Add macOS coverage before advertising it as tested.
+permissions:
+  contents: read
+
 on:
   push:
-    paths: ["extension/**", "bridge/**", ".github/workflows/ci.yml"]
+    paths: ["extension/**", "bridge/**", "scripts/**", "install.mjs", "extension-id.json", "LICENSE", ".github/workflows/ci.yml"]
   pull_request:
 
 jobs:
@@ -12,11 +17,11 @@ jobs:
       run:
         working-directory: extension
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
           version: 10
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: pnpm
@@ -32,22 +37,41 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
       - run: node --test bridge/test-bridge.mjs
 
-  package:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: [check, bridge]
+  release-tools:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
           version: 10
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: extension/pnpm-lock.yaml
+      - run: pnpm --dir extension install --frozen-lockfile
+      - run: pnpm --dir extension build
+      - run: node --test scripts/install.test.mjs scripts/live/answer-quality-eval.test.mjs scripts/package-release.test.mjs
+
+  package:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [check, bridge, release-tools]
+    permissions:
+      contents: read
+      actions: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: pnpm
@@ -55,7 +79,7 @@ jobs:
       - run: pnpm --dir extension install --frozen-lockfile
       - run: pnpm --dir extension build
       - run: node scripts/package-release.mjs
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: nox-release-zips
           path: nox-*.zip

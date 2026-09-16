@@ -1,8 +1,20 @@
 import type { CallClassification } from './classify'
 import { normalizeId } from '../../shared/notion-page'
 import type { ToolCallRequest } from '../codex/client'
+import { isDestructiveKind } from './effects'
 
 export type Mode = 'ask' | 'auto'
+
+/**
+ * Explicit per-turn small-edit grant captured from the composer at Send.
+ * Available only in Auto, off by default, never set by model tools: silent
+ * edits may only touch listed pages, and only for fixture-verified
+ * non-destructive property updates and targeted text additions.
+ */
+export interface SmallEditGrant {
+  allowed: boolean
+  pages: string[]
+}
 
 export interface ApprovalContext {
   mode: Mode
@@ -18,21 +30,43 @@ export type ApprovalVerdict =
 
 export const BULK_CONFIRM_ROWS = 25
 
+export interface ApprovalCall extends CallClassification {
+  name: string
+  args: Record<string, unknown>
+  provenance?: ToolCallRequest['provenance']
+  /** Pre-parsed affected targets from the validated effect — never re-derived from raw args. */
+  targets: string[]
+  /** Pre-parsed parent/destination ids, also consent-relevant for creations and moves. */
+  parents: string[]
+  /** Affected-object count from the validated effect (creations count even with no existing targets). */
+  affectedCount: number
+  /** Explicit per-turn grant; Auto without it requests ordinary consent. */
+  grant: SmallEditGrant
+}
+
 /**
  * Decides whether a mutation may run immediately (MVP §6.3). Ask-before-changes
- * is the default; Auto still gates the escalation list.
+ * is the default. In Auto, silence requires the explicit per-turn small-edit
+ * grant for an eligible effect — anything else takes the ordinary action card.
+ * The grant never waives other escalations: schema, moves, out-of-context
+ * targets, and untrusted exposure still need review.
  */
-export function evaluateApproval(call: CallClassification & { name: string; args: Record<string, unknown>; provenance?: ToolCallRequest['provenance'] }, ctx: ApprovalContext): ApprovalVerdict {
+export function evaluateApproval(call: ApprovalCall, ctx: ApprovalContext): ApprovalVerdict {
   if (!call.mutates) return { action: 'allow' }
 
   const reasons: string[] = []
 
   if (ctx.mode === 'ask') {
     reasons.push('ask-before-changes mode is on')
+  } else if (!isGrantEligible(call)) {
+    reasons.push(grantRefusalReason(call))
   }
 
-  const targetPageId = extractTargetPageId(call.args)
-  if (targetPageId && ![...ctx.contextSet].some((id) => (normalizeId(id) ?? id) === targetPageId)) {
+  const scoped = [...ctx.contextSet].map((id) => normalizeId(id) ?? id)
+  const outOfContext = [...call.targets, ...call.parents].some(
+    (target) => !scoped.includes(normalizeId(target) ?? target),
+  )
+  if (outOfContext) {
     reasons.push('the target page is outside this conversation’s context')
   }
 
@@ -47,97 +81,128 @@ export function evaluateApproval(call: CallClassification & { name: string; args
   return { action: 'allow' }
 }
 
-function extractTargetPageId(args: Record<string, unknown>): string | null {
-  const candidates = [args.page_id, args.parent, args.data, args.command]
-  for (const c of candidates) {
-    if (typeof c === 'string') {
-      return normalizeId(c) ?? c
-    }
-    if (c && typeof c === 'object') {
-      const nested = c as Record<string, unknown>
-      const id = nested.page_id ?? nested.id
-      if (typeof id === 'string') return normalizeId(id) ?? id
-    }
-  }
-  return null
+/**
+ * Grant-eligible effects: fixture-verified non-destructive single-object
+ * property updates and targeted text additions on listed pages only.
+ * Excludes replacement, deletion, creation, moves, schema/view changes,
+ * upload, unknown effects, and out-of-grant targets.
+ */
+function isGrantEligible(call: ApprovalCall): boolean {
+  if (!call.grant.allowed) return false
+  if (call.kind !== 'properties' && call.kind !== 'content-update') return false
+  const pages = new Set(call.grant.pages.map((id) => normalizeId(id) ?? id))
+  const scopeIds = [...call.targets, ...call.parents].map((id) => normalizeId(id) ?? id)
+  if (scopeIds.length === 0) return false
+  return scopeIds.every((id) => pages.has(id))
 }
 
-/** One pending approval card; resolves when the user answers. */
-export interface PendingApproval {
+function grantRefusalReason(call: ApprovalCall): string {
+  if (!call.grant.allowed) {
+    return 'Auto mode needs the “Allow small edits this turn” grant for silent edits — approve each change instead'
+  }
+  if (call.kind !== 'properties' && call.kind !== 'content-update') {
+    return 'the small-edit grant covers only property updates and small text additions on the listed pages'
+  }
+  return 'the change targets pages outside the granted small-edit pages'
+}
+
+/**
+ * Display data for one pending approval card. Components receive exactly
+ * this — never the frozen execution snapshot and never promise authority.
+ */
+export interface ApprovalDisplay {
   id: number
   tool: string
   summary: string
+  /** Complete bounded canonical JSON — never sliced. */
   payloadJson: string
   reasons: string[]
   targetUrl?: string
   reversibility: string
-  resolve: (approved: boolean) => void
+  targets: string[]
+  affectedCount: number
+  destructive: boolean
+}
+
+/** What an answered card resolves: the decision plus the frozen execution payload. */
+export interface ApprovalDecision {
+  approved: boolean
+  frozenArgs: Record<string, unknown>
+}
+
+interface PendingEntry {
+  display: ApprovalDisplay
+  frozenArgs: Record<string, unknown>
+  resolve: (decision: ApprovalDecision) => void
 }
 
 let nextApprovalId = 1
 
 export class ApprovalEngine {
-  private pending = new Map<number, PendingApproval>()
-  private approveAllUntilTurnEnd = false
+  private pending = new Map<number, PendingEntry>()
 
   constructor(
-    private readonly notify?: (approval: PendingApproval) => void,
+    private readonly notify?: (approval: ApprovalDisplay) => void,
   ) {}
-
-  beginTurn(): void {
-    this.approveAllUntilTurnEnd = false
-  }
 
   get pendingCount(): number {
     return this.pending.size
   }
 
+  get pendingIds(): number[] {
+    return [...this.pending.keys()]
+  }
+
   /**
-   * Blocks until the user answers the card. Resolves true when approved
-   * directly or via approve-all-this-turn.
+   * Blocks until the user answers the card. The execution payload is frozen
+   * privately at request time; later edits of the caller's object cannot
+   * change what an approval dispatches.
    */
   async request(
-    call: CallClassification & { name: string; args: Record<string, unknown> },
+    call: ApprovalCall,
     verdict: Extract<ApprovalVerdict, { action: 'require-approval' }>,
-  ): Promise<boolean> {
-    if (this.approveAllUntilTurnEnd) return true
-    return new Promise<boolean>((resolve) => {
-      const approval: PendingApproval = {
+  ): Promise<ApprovalDecision> {
+    const frozenArgs: Record<string, unknown> = structuredClone(call.args)
+    return new Promise<ApprovalDecision>((resolve) => {
+      const display: ApprovalDisplay = {
         id: nextApprovalId++,
         tool: call.name,
         summary: summarizeCall(call),
-        payloadJson: JSON.stringify(call.args, null, 2).slice(0, 2000),
+        payloadJson: JSON.stringify(frozenArgs, null, 2),
         reasons: verdict.reasons,
-        targetUrl: approvalTargetUrl(call.args),
+        targetUrl: approvalTargetUrl(call.targets),
         reversibility: approvalReversibility(call.kind),
-        resolve: (approved) => {
-          this.pending.delete(approval.id)
-          resolve(approved)
-        },
+        targets: [...call.targets],
+        affectedCount: call.affectedCount,
+        destructive: isDestructiveKind(call.kind),
       }
-      this.pending.set(approval.id, approval)
-      this.notify?.(approval)
+      this.pending.set(display.id, { display, frozenArgs, resolve })
+      this.notify?.(display)
     })
   }
 
-  answer(id: number, decision: 'approve' | 'reject' | 'approve-all'): void {
-    if (!this.pending.has(id)) return
-    if (decision === 'approve-all') this.approveAllUntilTurnEnd = true
-    // Resolve every waiting card on approve-all; just this one otherwise.
-    if (decision === 'approve-all') {
-      for (const approval of [...this.pending.values()]) approval.resolve(true)
-    } else {
-      this.pending.get(id)?.resolve(decision === 'approve')
-    }
+  /**
+   * Answer one pending card. Returns false for stale or already-resolved
+   * ids — a late decision never approves anything.
+   */
+  answer(id: number, decision: 'approve' | 'reject'): boolean {
+    const entry = this.pending.get(id)
+    if (!entry) return false
+    this.pending.delete(id)
+    entry.resolve({ approved: decision === 'approve', frozenArgs: entry.frozenArgs })
+    return true
   }
 
   rejectAllPending(): void {
-    for (const approval of [...this.pending.values()]) approval.resolve(false)
+    for (const entry of [...this.pending.values()]) {
+      this.pending.delete(entry.display.id)
+      entry.resolve({ approved: false, frozenArgs: entry.frozenArgs })
+    }
   }
 }
 
-function approvalTargetUrl(args: Record<string, unknown>): string | undefined {
-  const pageId = extractTargetPageId(args)
+function approvalTargetUrl(targets: string[]): string | undefined {
+  const pageId = targets[0]
   return pageId ? `https://www.notion.so/${pageId.replace(/-/g, '')}` : undefined
 }
 

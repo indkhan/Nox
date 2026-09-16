@@ -10,6 +10,19 @@ export interface ExecutorDeps {
   callTool: (name: string, args: Record<string, unknown>, signal?: AbortSignal, provenance?: ToolCallRequest['provenance']) => Promise<{ content: Array<{ type: string; text?: string }> }>
   /** Throws when the tool is plan-gated. */
   assertToolAllowed: (name: string) => void
+  /**
+   * Reports local truncation before Codex (Epoch F2 / R2). The provider
+   * fetch may be complete, but only `deliveredChars` of `totalChars`
+   * reached model context — the gate must downgrade that page to
+   * model-partial so replacement refuses before approval.
+   */
+  onModelTruncation?: (pageId: string, deliveredChars: number, totalChars: number) => void
+  /**
+   * Reports continuation delivery (Epoch F2 / R2). Only actual reads count:
+   * possession of a handle never completes a baseline by itself.
+   */
+  onModelDelivery?: (pageId: string, offset: number, end: number, totalChars: number, readId?: string) => void
+  getModelReadId?: (pageId: string) => string | null
 }
 
 export interface ToolOutcome {
@@ -24,7 +37,7 @@ export interface ToolOutcome {
  * Errors become model-readable results — a failing tool never crashes the turn.
  */
 export class ToolExecutor {
-  private continuations = new Map<string, { text: string; source: string }>()
+  private continuations = new Map<string, { text: string; source: string; pageId?: string; readId?: string | null }>()
   private storedChars = 0
   private stepsUsed = 0
   private signal: AbortSignal | undefined
@@ -46,15 +59,19 @@ export class ToolExecutor {
     this.storedChars = 0
   }
 
-  excerpt(text: string, budget: number, source = 'notion-fetch'): string {
+  excerpt(text: string, budget: number, source = 'notion-fetch', pageId?: string): string {
     if (text.length <= budget) return text
-    // Bound ephemeral memory across every result in this turn.
+    const delivered = Math.min(budget, text.length)
+    // Bound ephemeral memory across every result in this turn. No handle is
+    // stored, so continuation can never complete this delivery (F2.3).
     if (this.storedChars + text.length > 1_000_000) {
+      if (pageId) this.deps.onModelTruncation?.(pageId, delivered, text.length)
       return truncateResult(text, budget) + '\nCONTINUATION_UNAVAILABLE: turn memory limit. Retrieve a targeted subtree or state the missing scope.'
     }
     const handle = crypto.randomUUID()
-    this.continuations.set(handle, { text, source })
+    this.continuations.set(handle, { text, source, pageId, readId: pageId ? this.deps.getModelReadId?.(pageId) : undefined })
     this.storedChars += text.length
+    if (pageId) this.deps.onModelTruncation?.(pageId, delivered, text.length)
     return text.slice(0, budget) + `\n<continuation handle="${handle}" offset="${budget}" total_chars="${text.length}" tool="nox-read-continuation"/>`
   }
 
@@ -65,6 +82,7 @@ export class ToolExecutor {
     const offset = args.offset
     if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0 || offset > value.text.length) throw new Error('INVALID_OFFSET')
     const end = Math.min(offset + (this.opts.resultBudgetChars ?? DEFAULT_RESULT_BUDGET_CHARS), value.text.length)
+    if (value.pageId) this.deps.onModelDelivery?.(value.pageId, offset, end, value.text.length, value.readId ?? undefined)
     return value.text.slice(offset, end) + `\n<continuation offset="${end}" total_chars="${value.text.length}"/>\n` + (end === value.text.length ? 'END_OF_RESULT' : 'MORE_AVAILABLE')
   }
 
@@ -98,7 +116,11 @@ export class ToolExecutor {
         .filter((c) => c.type === 'text' && typeof c.text === 'string')
         .map((c) => c.text)
         .join('\n')
-      const processed = wrapUntrusted(req.tool === 'nox-read-continuation' ? text : this.excerpt(text, this.opts.resultBudgetChars ?? DEFAULT_RESULT_BUDGET_CHARS, req.tool))
+      const fetchPageId =
+        req.tool === 'notion-fetch'
+          ? (typeof req.args.id === 'string' && req.args.id ? req.args.id : typeof req.args.page_id === 'string' ? req.args.page_id : undefined)
+          : undefined
+      const processed = wrapUntrusted(req.tool === 'nox-read-continuation' ? text : this.excerpt(text, this.opts.resultBudgetChars ?? DEFAULT_RESULT_BUDGET_CHARS, req.tool, fetchPageId))
       this.opts.onJournalEvent?.({ req, status: 'ok', ms: Date.now() - startedAt })
       return { success: true, contentItems: [{ type: 'inputText', text: processed }], displayText: truncateResult(text, 2_000) }
     } catch (e) {

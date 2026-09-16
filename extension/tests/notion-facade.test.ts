@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { Notion } from '../src/lib/notion'
+import { McpClient } from '../src/lib/mcp/client'
 import { memoryStore } from '../src/lib/storage'
 
 const PRM = { resource: 'https://mcp.notion.com/mcp', authorization_servers: ['https://mcp.notion.com'] }
@@ -147,5 +148,189 @@ describe('Notion facade', () => {
   it('explain() exposes the classifier for UI callers', () => {
     standardServer()
     expect(notion.explain(new Error('Failed to fetch')).kind).toBe('transient')
+  })
+
+  it('refresh uses the validated discovered token endpoint, not a hardcoded fallback (Epoch 11 / M8)', async () => {
+    const customTokenUrl = 'https://mcp.notion.com/custom-token'
+    const customAS = { ...AS, token_endpoint: customTokenUrl }
+    scripted((url, body) => {
+      if (url.includes('protected-resource')) return jsonRes(PRM)
+      if (url.includes('oauth-authorization-server')) return jsonRes(customAS)
+      if (url.endsWith('/register')) return jsonRes({ client_id: 'cid-1' }, 201)
+      if (url === customTokenUrl) return jsonRes({ access_token: 'at-2', refresh_token: 'rt-2', expires_in: 3600 })
+      if (url.endsWith('/token')) throw new Error(`hardcoded fallback hit: ${url}`)
+      if (typeof body.method === 'string') {
+        if (body.method === 'initialize') return jsonRes({ jsonrpc: '2.0', id: body.id as number, result: {} }, 200, { 'mcp-session-id': 's1' })
+        if (body.method === 'tools/call') {
+          return rpcResult(body.id as number, { content: [{ type: 'text', text: SELF_TEXT }] })
+        }
+        if (body.method?.startsWith('notifications/')) return new Response(null, { status: 202 })
+      }
+      throw new Error(`unexpected ${url}`)
+    })
+    await notion.importToken({ access_token: 'at', refresh_token: 'rt', expires_in: 3600 })
+    // Forced refresh must hit the discovered endpoint from metadata.
+    await notion.tokens.refresh()
+    expect(fetchCalls.some((c) => c.url === customTokenUrl)).toBe(true)
+    expect(fetchCalls.some((c) => c.url === 'https://mcp.notion.com/token')).toBe(false)
+  })
+
+  it('rejects a non-HTTPS discovered token endpoint fail-closed (Epoch 11 / M8)', async () => {
+    const badAS = { ...AS, token_endpoint: 'http://mcp.notion.com/token' }
+    scripted((url, body) => {
+      if (url.includes('protected-resource')) return jsonRes(PRM)
+      if (url.includes('oauth-authorization-server')) return jsonRes(badAS)
+      if (url.endsWith('/register')) return jsonRes({ client_id: 'cid-1' }, 201)
+      if (url.includes('/token')) return jsonRes({ access_token: 'at-1', refresh_token: 'rt-1', expires_in: 3600 })
+      if (typeof body.method === 'string') {
+        if (body.method === 'initialize') return jsonRes({ jsonrpc: '2.0', id: body.id as number, result: {} }, 200, { 'mcp-session-id': 's1' })
+        if (body.method === 'tools/call') {
+          return rpcResult(body.id as number, { content: [{ type: 'text', text: SELF_TEXT }] })
+        }
+        if (body.method?.startsWith('notifications/')) return new Response(null, { status: 202 })
+      }
+      throw new Error(`unexpected ${url}`)
+    })
+    await notion.importToken({ access_token: 'at', refresh_token: 'rt', expires_in: 3600 })
+    await expect(notion.tokens.refresh()).rejects.toThrow(/discovered token endpoint/i)
+  })
+
+  it('never retries a mutation after a transient 503: exactly one dispatch', async () => {
+    let mutationCalls = 0
+    scripted((url, body) => {
+      if (url.includes('protected-resource')) return jsonRes(PRM)
+      if (url.includes('oauth-authorization-server')) return jsonRes(AS)
+      if (url.endsWith('/register')) return jsonRes({ client_id: 'cid-1' }, 201)
+      if (url.endsWith('/token')) return jsonRes({ access_token: 'at-1', refresh_token: 'rt-1', expires_in: 3600 })
+      if (typeof body.method === 'string') {
+        if (body.method === 'initialize') return jsonRes({ jsonrpc: '2.0', id: body.id as number, result: {} }, 200, { 'mcp-session-id': 's1' })
+        if (body.method === 'tools/call') {
+          const params = body.params as { name: string }
+          if (params.name === 'notion-fetch') {
+            return rpcResult(body.id as number, { content: [{ type: 'text', text: SELF_TEXT }] })
+          }
+          mutationCalls++
+          return new Response('downstream failure after commit', { status: 503 })
+        }
+        if (body.method?.startsWith('notifications/')) return new Response(null, { status: 202 })
+      }
+      throw new Error(`unexpected ${url}`)
+    })
+    await notion.importToken({ access_token: 'at', refresh_token: 'rt', expires_in: 3600 })
+    await expect(notion.scheduleCallTool('notion-update-page', { page_id: 'p1' })).rejects.toThrow(/UNCERTAIN_OUTCOME/)
+    expect(mutationCalls).toBe(1)
+  })
+
+  it('does not replay a 429-after-effect mutation', async () => {
+    let mutationCalls = 0
+    scripted((url, body) => {
+      if (url.includes('protected-resource')) return jsonRes(PRM)
+      if (url.includes('oauth-authorization-server')) return jsonRes(AS)
+      if (url.endsWith('/register')) return jsonRes({ client_id: 'cid-1' }, 201)
+      if (url.endsWith('/token')) return jsonRes({ access_token: 'at-1', refresh_token: 'rt-1', expires_in: 3600 })
+      if (typeof body.method === 'string') {
+        if (body.method === 'initialize') return jsonRes({ jsonrpc: '2.0', id: body.id as number, result: {} }, 200, { 'mcp-session-id': 's1' })
+        if (body.method === 'tools/call') {
+          const params = body.params as { name: string }
+          if (params.name === 'notion-fetch') {
+            return rpcResult(body.id as number, { content: [{ type: 'text', text: SELF_TEXT }] })
+          }
+          mutationCalls++
+          return new Response('slow down', { status: 429 })
+        }
+        if (body.method?.startsWith('notifications/')) return new Response(null, { status: 202 })
+      }
+      throw new Error(`unexpected ${url}`)
+    })
+    await notion.importToken({ access_token: 'at', refresh_token: 'rt', expires_in: 3600 })
+    await expect(notion.scheduleCallTool('notion-create-pages', { pages: [] })).rejects.toThrow(/UNCERTAIN_OUTCOME/)
+    expect(mutationCalls).toBe(1)
+  })
+
+  it('recovers reads after a transient failure', async () => {
+    let fetchCalls = 0
+    scripted((url, body) => {
+      if (url.includes('protected-resource')) return jsonRes(PRM)
+      if (url.includes('oauth-authorization-server')) return jsonRes(AS)
+      if (url.endsWith('/register')) return jsonRes({ client_id: 'cid-1' }, 201)
+      if (url.endsWith('/token')) return jsonRes({ access_token: 'at-1', refresh_token: 'rt-1', expires_in: 3600 })
+      if (typeof body.method === 'string') {
+        if (body.method === 'initialize') return jsonRes({ jsonrpc: '2.0', id: body.id as number, result: {} }, 200, { 'mcp-session-id': 's1' })
+        if (body.method === 'tools/call') {
+          const params = body.params as { name: string }
+          if (params.name === 'notion-fetch' && ++fetchCalls === 1) {
+            return new Response('brief outage', { status: 503 })
+          }
+          return rpcResult(body.id as number, { content: [{ type: 'text', text: SELF_TEXT }] })
+        }
+        if (body.method?.startsWith('notifications/')) return new Response(null, { status: 202 })
+      }
+      throw new Error(`unexpected ${url}`)
+    })
+    await notion.importToken({ access_token: 'at', refresh_token: 'rt', expires_in: 3600 })
+    const result = await notion.scheduleCallTool('notion-fetch', { id: 'self' })
+    expect(McpClient.resultText(result)).toContain('Acme')
+  })
+
+  it('stops scheduled waits past a caller deadline without dispatching', async () => {
+    standardServer()
+    await notion.importToken({ access_token: 'at', refresh_token: 'rt', expires_in: 3600 })
+    await notion.scheduleCallTool('notion-fetch', { id: 'a' })
+    await notion.scheduleCallTool('notion-fetch', { id: 'b' })
+    // Identity plus two reads drain the three global tokens; the next wait
+    // exceeds an already-past deadline instead of sleeping through it.
+    await expect(
+      notion.scheduleCallTool('notion-fetch', { id: 'c' }, undefined, { deadline: Date.now() - 1 }),
+    ).rejects.toThrow(/DEADLINE_EXCEEDED/)
+  })
+
+  describe('authenticated endpoint acceptance (Epoch 13 / M13)', () => {
+    function acceptanceServer(status: number, body?: unknown) {
+      scripted((url, payload) => {
+        if (url.includes('protected-resource')) return jsonRes(PRM)
+        if (url.includes('oauth-authorization-server')) return jsonRes(AS)
+        if (url.endsWith('/register')) return jsonRes({ client_id: 'cid-1' }, 201)
+        if (url.endsWith('/token')) return jsonRes({ access_token: 'at-1', refresh_token: 'rt-1', expires_in: 3600 })
+        if (typeof payload.method === 'string') {
+          if (payload.method === 'initialize') {
+            if (body !== undefined) return new Response(JSON.stringify(body), { status })
+            return new Response('acceptance probe failure', { status })
+          }
+          if (payload.method === 'tools/call') {
+            return rpcResult(payload.id as number, { content: [{ type: 'text', text: SELF_TEXT }] })
+          }
+          if (payload.method?.startsWith('notifications/')) return new Response(null, { status: 202 })
+        }
+        throw new Error(`unexpected ${url}`)
+      })
+    }
+
+    it('verifyEndpointAcceptance succeeds on an affirmative accepted response', async () => {
+      standardServer()
+      await notion.importToken({ access_token: 'at', refresh_token: 'rt', expires_in: 3600 })
+      await expect(notion.verifyEndpointAcceptance()).resolves.toBeUndefined()
+    })
+
+    it.each([401, 403, 429, 500, 503])(
+      'rejects HTTP %i as verification success (no silent pass)',
+      async (status) => {
+        acceptanceServer(status)
+        await notion.tokens.saveFromTokenResponse({ access_token: 'at', refresh_token: 'rt', expires_in: 3600 })
+        await expect(notion.verifyEndpointAcceptance()).rejects.toThrow()
+        await expect(notion.refreshIdentity()).rejects.toThrow()
+      },
+    )
+
+    it('rejects redirects as verification success', async () => {
+      acceptanceServer(302)
+      await notion.tokens.saveFromTokenResponse({ access_token: 'at', refresh_token: 'rt', expires_in: 3600 })
+      await expect(notion.verifyEndpointAcceptance()).rejects.toThrow()
+    })
+
+    it('rejects malformed protocol envelopes as verification success', async () => {
+      acceptanceServer(200, { jsonrpc: '2.0', id: 1, error: { code: -32600, message: 'bad' } })
+      await notion.tokens.saveFromTokenResponse({ access_token: 'at', refresh_token: 'rt', expires_in: 3600 })
+      await expect(notion.verifyEndpointAcceptance()).rejects.toThrow()
+    })
   })
 })

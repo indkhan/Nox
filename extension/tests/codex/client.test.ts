@@ -399,4 +399,29 @@ describe('CodexClient', () => {
     expect(h.bridge.rpc.mock.calls.some(c => c[0] === 'thread/inject_items')).toBe(false)
   })
 
+  it('refuses malformed tool-call params without emitting a tool call', async () => {
+    await startThreadFixture()
+    const toolCalls = events.filter((e) => e.kind === 'tool-call')
+    expect(toolCalls).toHaveLength(0)
+    client.onToolCall = async () => ({ success: true })
+    const pending = client.runTurn([])
+    // Non-string tool and non-object arguments must not reach the executor.
+    h.bridge.onCodexRequest?.({ rid: 91, method: 'item/tool/call', params: { threadId: 'thr_9', turnId: 'turn_1', tool: 123, arguments: { page_id: 'p1' } } })
+    h.bridge.onCodexRequest?.({ rid: 92, method: 'item/tool/call', params: { threadId: 'thr_9', turnId: 'turn_1', tool: 'notion-fetch', arguments: 'oops' } })
+    await vi.waitFor(() => expect(h.responses.filter((r) => r.rid === 91 || r.rid === 92)).toHaveLength(2))
+    expect(events.filter((e) => e.kind === 'tool-call')).toHaveLength(0)
+    expect(JSON.stringify(h.responses)).not.toContain('oops')
+    emit(h.bridge, 'turn/completed', {})
+    await pending
+  })
+
+  it('ignores non-string deltas without corrupting the answer', async () => {
+    await startThreadFixture()
+    const pending = client.runTurn([])
+    emit(h.bridge, 'item/agentMessage/delta', { threadId: 'thr_9', delta: 12345 as never })
+    emit(h.bridge, 'item/agentMessage/delta', { threadId: 'thr_9', delta: 'hello' })
+    emit(h.bridge, 'turn/completed', {})
+    expect((await pending).finalText).toBe('hello')
+  })
+
 })

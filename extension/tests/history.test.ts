@@ -1,13 +1,21 @@
 // @vitest-environment jsdom
 import 'fake-indexeddb/auto'
 import { openDB, deleteDB } from 'idb'
-import { beforeEach, describe, expect, it } from 'vitest'
-import { openNoxDB, DB_VERSION } from '../src/lib/history/schema'
+import { beforeEach, describe, expect, it, vi, afterEach } from 'vitest'
+import { openNoxDB, closeNoxDBConnections, DB_VERSION, __resetConnectionCacheForTests } from '../src/lib/history/schema'
+import type { MessageRow } from '../src/lib/history/schema'
+import { __resetDeletionStateForTests, type DeletionMark, type DeletionStore } from '../src/lib/history/deletion'
+import { deleteAllData } from '../src/lib/history/panel'
+import { attachmentRepository } from '../src/lib/history/attachments'
 import { threadRepository, type ThreadRepository } from '../src/lib/history/repository'
-import { MutationJournal, idbJournalStore } from '../src/lib/writes/journal'
+import { MutationJournal, idbJournalStore, type JournalEntry } from '../src/lib/writes/journal'
 import { startPersistedTurn } from '../src/lib/history/turn'
 
 describe('IndexedDB schema', () => {
+  beforeEach(() => {
+    __resetConnectionCacheForTests()
+    __resetDeletionStateForTests()
+  })
   it('removes unused v2 stores and indexes while preserving records', async () => {
     const old = await openDB('nox', 2, {
       upgrade(db) {
@@ -36,7 +44,7 @@ describe('IndexedDB schema', () => {
         expect(await db.get(store, store)).toMatchObject({ id: store, text: 'retained' })
       }
     } finally {
-      db.close()
+      closeNoxDBConnections()
       await deleteDB('nox')
     }
   })
@@ -48,15 +56,45 @@ describe('IndexedDB schema', () => {
     for (const store of ['threads', 'messages', 'journal', 'attachments']) {
       expect(db.objectStoreNames.contains(store)).toBe(true)
     }
-    db.close()
+    closeNoxDBConnections()
   })
 
   it('upgrades idempotently from an older version without duplicating stores', async () => {
-    const db = await openNoxDB()
+    await openNoxDB()
     const db2 = await openNoxDB()
     expect(db2.version).toBe(DB_VERSION)
-    db.close()
-    db2.close()
+    closeNoxDBConnections()
+  })
+
+  it('reuses one cached connection across repeated calls', async () => {
+    const first = await openNoxDB()
+    const second = await openNoxDB()
+    expect(second).toBe(first)
+    closeNoxDBConnections()
+  })
+
+  it('opens a fresh connection after explicit close', async () => {
+    const first = await openNoxDB()
+    closeNoxDBConnections()
+    const second = await openNoxDB()
+    expect(second).not.toBe(first)
+    expect(second.version).toBe(DB_VERSION)
+    closeNoxDBConnections()
+  })
+
+  it('closes promptly on versionchange so another context can delete', async () => {
+    const owned = await openNoxDB()
+    // A second raw connection stands in for another open panel.
+    const other = await openDB('nox', DB_VERSION)
+    const deleted = deleteDB('nox')
+    // Our cached connection closes itself on versionchange even though the
+    // other panel still holds the database blocked …
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(() => owned.transaction('threads', 'readonly')).toThrow()
+    // … and once the other panel closes too, deletion completes for real.
+    other.close()
+    await deleted
+    closeNoxDBConnections()
   })
 })
 
@@ -76,7 +114,7 @@ describe('persistent mutation journal', () => {
     expect(entries).toHaveLength(1)
     expect(entries[0]).toMatchObject({ threadId: 'thread-a', status: 'applied' })
     expect(entries[0].turnId).toBeTruthy()
-    db.close()
+    closeNoxDBConnections()
   })
 
   it('does not overwrite concurrent journal records', async () => {
@@ -89,7 +127,7 @@ describe('persistent mutation journal', () => {
       journal.record({ tool: 'second', args: {}, kind: 'content-update' }),
     ])
     expect(await journal.newestFirst()).toHaveLength(2)
-    db.close()
+    closeNoxDBConnections()
   })
 
   it('orders journal entries by timestamp rather than UUID key order', async () => {
@@ -113,13 +151,136 @@ describe('persistent mutation journal', () => {
     expect(await journal.newestFirst()).toEqual([])
   })
 
-  it('continues timestamp order after reopening persisted future entries', async () => {
-    const entries = [{ id: 'old', ts: Date.now() + 10_000, threadId: 't', turnId: 'x', status: 'applied' as const, tool: 'old', args: {}, kind: 'write' }]
-    const store = { append: async (entry: typeof entries[number]) => { entries.push(entry) }, list: async () => [...entries] }
-    const reopened = new MutationJournal(store)
-    reopened.setThread('t')
-    await reopened.record({ tool: 'new', args: {}, kind: 'write' })
-    expect((await reopened.newestFirst()).map((entry) => entry.tool)).toEqual(['new', 'old'])
+  it('orders same-timestamp entries deterministically by id', async () => {
+    const fixed = Date.now()
+    const entries = [
+      { id: 'z-last', ts: fixed, threadId: 't', turnId: 'x', status: 'applied' as const, tool: 'old', args: {}, kind: 'write' },
+      { id: 'a-first', ts: fixed, threadId: 't', turnId: 'x', status: 'applied' as const, tool: 'new', args: {}, kind: 'write' },
+    ]
+    const journal = new MutationJournal({ append: async () => undefined, list: async () => entries })
+    const first = await journal.newestFirst()
+    const second = await journal.newestFirst()
+    expect(first.map((entry) => entry.id)).toEqual(second.map((entry) => entry.id))
+    expect(first).toHaveLength(2)
+  })
+
+  it('assigns timestamps without scanning stored payloads', async () => {
+    let lists = 0
+    const kept: JournalEntry[] = []
+    const journal = new MutationJournal({
+      append: async (entry) => { kept.push(entry) },
+      list: async () => { lists++; throw new Error('must not scan') },
+    })
+    journal.setThread('t')
+    await journal.record({ tool: 'write', args: {}, kind: 'write' })
+    expect(kept).toHaveLength(1)
+    expect(kept[0].ts).toBeGreaterThan(0)
+    expect(lists).toBe(0)
+  })
+
+  it('keeps intent and settlement under one operation id', async () => {
+    const journal = new MutationJournal()
+    journal.setThread('thread-a')
+    const scope = { threadId: 'thread-a', turnId: 'turn-1', workspaceId: 'ws', connectionGeneration: 'c', ownerGeneration: 'o' }
+    const intent = await journal.beginIntent({ tool: 'notion-update-page', args: { a: 1 }, kind: 'content-update', scope })
+    expect(intent.status).toBe('pending')
+    expect(intent.scope).toEqual(scope)
+    const settled = await journal.settleIntent(intent.id, { status: 'applied', outcomeDetail: 'ok' })
+    expect(settled?.id).toBe(intent.id)
+    expect(settled?.status).toBe('applied')
+    expect(await journal.newestFirst()).toHaveLength(1)
+  })
+
+  it('reserves an undo atomically so a second claim loses', async () => {
+    const journal = new MutationJournal()
+    journal.setThread('thread-a')
+    const scope = { threadId: 'thread-a', turnId: 'turn-1', workspaceId: 'ws', connectionGeneration: 'c', ownerGeneration: 'o' }
+    const original = await journal.record({
+      tool: 'write', args: {}, kind: 'content-update', inverse: { tool: 'undo', args: {} },
+    })
+    const first = await journal.beginUndoReservation(original.id, { tool: 'undo', args: {}, kind: 'undo', scope })
+    expect(first).not.toBeNull()
+    expect((await journal.getEntry(original.id))?.reservedByUndoOpId).toBe(first!.undo.id)
+    expect(await journal.undoable()).toHaveLength(0)
+    const second = await journal.beginUndoReservation(original.id, { tool: 'undo', args: {}, kind: 'undo', scope })
+    expect(second).toBeNull()
+  })
+
+  it('records user review without rewriting the outcome', async () => {
+    const journal = new MutationJournal()
+    journal.setThread('thread-a')
+    const scope = { threadId: 'thread-a', turnId: 'turn-1', workspaceId: 'ws', connectionGeneration: 'c', ownerGeneration: 'o' }
+    const intent = await journal.beginIntent({ tool: 't', args: {}, kind: 'write', scope })
+    expect(await journal.markReviewed(intent.id, 'inspected')).toBe(true)
+    expect(await journal.markReviewed('missing', 'x')).toBe(false)
+    const entry = await journal.getEntry(intent.id)
+    expect(entry?.status).toBe('pending')
+    expect(entry?.reviewedAt).toBeGreaterThan(0)
+  })
+
+  it('serves thread-scoped journal reads without loading other threads', async () => {
+    const db = await openNoxDB()
+    await db.clear('journal')
+    const journal = new MutationJournal(idbJournalStore(openNoxDB))
+    journal.setThread('thread-a')
+    await journal.record({ tool: 'a-write', args: {}, kind: 'write' })
+    journal.setThread('thread-b')
+    await journal.record({ tool: 'b-write', args: {}, kind: 'write' })
+    const scoped = new MutationJournal(idbJournalStore(openNoxDB))
+    scoped.scopeThread('thread-a')
+    expect((await scoped.newestFirst()).map((e) => e.tool)).toEqual(['a-write'])
+    expect((await scoped.newestForThread('thread-b')).map((e) => e.tool)).toEqual(['b-write'])
+    closeNoxDBConnections()
+  })
+
+  it('resolves concurrent undo reservations atomically in IndexedDB', async () => {
+    const db = await openNoxDB()
+    await db.clear('journal')
+    const scope = { threadId: 'thread-a', turnId: 'turn-1', workspaceId: 'ws', connectionGeneration: 'c', ownerGeneration: 'o' }
+    const first = new MutationJournal(idbJournalStore(openNoxDB))
+    first.setThread('thread-a')
+    const original = await first.record({
+      tool: 'write', args: {}, kind: 'content-update', inverse: { tool: 'undo', args: {} },
+    })
+    const second = new MutationJournal(idbJournalStore(openNoxDB))
+    second.setThread('thread-a')
+    const [a, b] = await Promise.all([
+      first.beginUndoReservation(original.id, { tool: 'undo', args: {}, kind: 'undo', scope }),
+      second.beginUndoReservation(original.id, { tool: 'undo', args: {}, kind: 'undo', scope }),
+    ])
+    expect([a, b].filter(Boolean)).toHaveLength(1)
+    const winner = a ?? b
+    expect((await first.getEntry(original.id))?.reservedByUndoOpId).toBe(winner!.undo.id)
+    closeNoxDBConnections()
+  })
+
+  it('releases a failed undo claim instead of wedging later undo', async () => {
+    let failures = 1
+    const stored = {
+      id: 'e1',
+      ts: 1,
+      threadId: 't',
+      turnId: 'x',
+      status: 'applied' as const,
+      tool: 'write',
+      args: {},
+      kind: 'content-update',
+      inverse: { tool: 'undo', args: {} },
+    }
+    const journal = new MutationJournal({
+      append: async () => undefined,
+      list: async () => {
+        if (failures > 0) {
+          failures--
+          throw new Error('storage offline')
+        }
+        return [stored]
+      },
+    })
+    await expect(journal.claimUndo()).rejects.toThrow('storage offline')
+    const entry = await journal.claimUndo()
+    expect(entry?.id).toBe('e1')
+    journal.releaseUndo()
   })
 })
 
@@ -244,3 +405,407 @@ describe('ThreadRepository', () => {
   })
 })
 
+describe('thread-owned attachments (Epoch 10 / M7)', () => {
+  let repo: ThreadRepository
+
+  beforeEach(async () => {
+    const { IDBFactory } = await import('fake-indexeddb')
+    new IDBFactory()
+    __resetConnectionCacheForTests()
+    __resetDeletionStateForTests()
+    repo = threadRepository(openNoxDB)
+  })
+
+  afterEach(() => {
+    closeNoxDBConnections()
+  })
+
+  function owned(id: string, name: string, text: string) {
+    const bytes = new TextEncoder().encode(text).buffer as ArrayBuffer
+    return { id, name, mimeType: 'text/plain', size: bytes.byteLength, bytes }
+  }
+
+  it('deletes thread-owned file bytes with the thread, keeping other threads intact', async () => {
+    const attachments = attachmentRepository(openNoxDB)
+    const first = await startPersistedTurn(repo, null, 'first files', [owned('a1', 'a.txt', 'aaa')])
+    const second = await startPersistedTurn(repo, null, 'second files', [owned('b1', 'b.txt', 'bbb')])
+
+    await repo.deleteThread(first.threadId)
+
+    expect(await repo.getMessages(first.threadId)).toEqual([])
+    expect(await attachments.get('a1')).toBeUndefined()
+    expect((await repo.getMessages(second.threadId)).map((m) => m.text)).toEqual(['second files'])
+    expect(await attachments.get('b1')).toMatchObject({ name: 'b.txt', threadId: second.threadId })
+    expect((await repo.listThreads()).map((t) => t.id)).not.toContain(first.threadId)
+  })
+
+  it('leaves unlinked legacy rows to the explicit orphan cleanup, never guessing ownership', async () => {
+    const attachments = attachmentRepository(openNoxDB)
+    const legacy = await attachments.save(new File(['legacy-bytes'], 'legacy.txt', { type: 'text/plain' }))
+    const turn = await startPersistedTurn(repo, null, 'owned files', [owned('o1', 'o.txt', 'ooo')])
+
+    await repo.deleteThread(turn.threadId)
+
+    // The legacy orphan has no thread linkage: thread deletion neither claims
+    // it (by filename or otherwise) nor deletes it implicitly.
+    expect((await attachments.get(legacy.id))?.blob.size).toBe(12)
+    expect(await attachments.get('o1')).toBeUndefined()
+  })
+
+  it('exports attachment metadata while excluding bytes, tickets, and tokens', async () => {
+    const secret = 'SUPER-SECRET-FILE-BYTES-9f8c'
+    const turn = await startPersistedTurn(repo, null, 'with files', [owned('e1', 'evidence.txt', secret)])
+    const threadId = turn.threadId
+
+    const raw = await repo.exportThread(threadId, 'json')
+    expect(raw).not.toContain(secret)
+    expect(raw).not.toContain('bytes')
+    expect(raw).not.toContain('blob')
+    const json = JSON.parse(raw)
+    expect(json.attachments).toEqual([expect.objectContaining({ id: 'e1', name: 'evidence.txt', mimeType: 'text/plain' })])
+    for (const row of json.attachments) {
+      expect(row).not.toHaveProperty('bytes')
+      expect(row).not.toHaveProperty('blob')
+    }
+
+    const markdown = await repo.exportThread(threadId, 'markdown')
+    expect(markdown).toContain('evidence.txt')
+    expect(markdown).toContain('metadata only')
+    expect(markdown).not.toContain(secret)
+  })
+})
+
+describe('cooperative deletion (Epoch 09)', () => {
+  function memoryDeletionStore() {
+    let mark: DeletionMark | null = null
+    return {
+      store: {
+        get: async () => mark,
+        set: async (next: DeletionMark) => {
+          mark = next
+        },
+        clear: async () => {
+          mark = null
+        },
+        onChange: () => () => undefined,
+      } satisfies DeletionStore,
+      peek: () => mark,
+    }
+  }
+
+  function stubChrome() {
+    const localClear = vi.fn(async () => undefined)
+    const sessionClear = vi.fn(async () => undefined)
+    vi.stubGlobal('chrome', { storage: { local: { clear: localClear }, session: { clear: sessionClear } } })
+    return { localClear, sessionClear }
+  }
+
+  beforeEach(() => {
+    __resetConnectionCacheForTests()
+    __resetDeletionStateForTests()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    __resetConnectionCacheForTests()
+    __resetDeletionStateForTests()
+  })
+
+  it('clears credentials before deleting the database', async () => {
+    const { store, peek } = memoryDeletionStore()
+    stubChrome()
+    const events: string[] = []
+    await deleteAllData({
+      deletionStore: store,
+      clearCredentials: async () => void events.push('credentials'),
+      deleteDatabase: async () => void events.push('database'),
+    })
+    expect(events).toEqual(['credentials', 'database'])
+    // Tombstone was set during the run and lifted at the end.
+    expect(peek()).toBeNull()
+  })
+
+  it('clears credentials even when database deletion hangs', async () => {
+    const { store } = memoryDeletionStore()
+    stubChrome()
+    let credentialsCleared = false
+    let databaseAttempted = false
+    const pending = deleteAllData({
+      deletionStore: store,
+      clearCredentials: async () => {
+        credentialsCleared = true
+      },
+      deleteDatabase: () => {
+        databaseAttempted = true
+        return new Promise<void>(() => undefined) // hangs forever
+      },
+    })
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    expect(databaseAttempted).toBe(true)
+    expect(credentialsCleared).toBe(true)
+    // Tokens are not held hostage: the pending request keeps its own
+    // lifecycle instead of resolving early.
+    void pending.catch(() => undefined)
+  })
+
+  it('reports blocked deletions through onBlocked while still waiting', async () => {
+    const { store } = memoryDeletionStore()
+    stubChrome()
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let blockedCalls = 0
+    let settled = false
+    const pending = deleteAllData({
+      deletionStore: store,
+      clearCredentials: async () => undefined,
+      deleteDatabase: (onBlocked) => {
+        onBlocked?.()
+        blockedCalls++
+        return gate
+      },
+    })
+    void pending.then(() => {
+      settled = true
+    })
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    // Blocked is visible ("another Nox window…") but the request is still
+    // pending: no false success on a transient signal.
+    expect(blockedCalls).toBe(1)
+    expect(settled).toBe(false)
+    release()
+    await pending
+    expect(settled).toBe(true)
+  })
+
+  it('refuses database opens while deletion is pending and allows them after', async () => {
+    const { store } = memoryDeletionStore()
+    await openNoxDB(store)
+    closeNoxDBConnections()
+    // Another panel's tombstone, observed on refresh (message missed).
+    await store.set({ state: 'deleting', generation: 2, ts: Date.now() })
+    await expect(openNoxDB(store)).rejects.toThrow(/DELETION_PENDING/)
+    // Late callbacks cannot recreate the database through the guard …
+    await expect(openNoxDB(store)).rejects.toThrow(/DELETION_PENDING/)
+    // … but normal operation resumes once the mark lifts.
+    await store.clear()
+    const reopened = await openNoxDB(store)
+    expect(reopened.version).toBe(DB_VERSION)
+    closeNoxDBConnections()
+  })
+
+  it('runs a real blocked deletion end to end with a second connection', async () => {
+    const { store } = memoryDeletionStore()
+    stubChrome()
+    await openNoxDB(store)
+    const other = await openDB('nox', DB_VERSION)
+    let blockedCalls = 0
+    const pending = deleteAllData({ deletionStore: store, onBlocked: () => void blockedCalls++ })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    // The cached connection closed itself; the raw second connection is the
+    // remaining blocker, which the UI names explicitly.
+    expect(blockedCalls).toBeGreaterThanOrEqual(1)
+    other.close()
+    await pending
+    closeNoxDBConnections()
+  })
+})
+
+describe('journal change notifications (Epoch 09)', () => {  it('notifies observers after durable changes, never on storage failure', async () => {
+    const journal = new MutationJournal()
+    journal.setThread('thread-a')
+    let notices = 0
+    const unsubscribe = journal.onChange(() => void notices++)
+    await journal.record({ tool: 'write', args: {}, kind: 'content-update' })
+    expect(notices).toBe(1)
+    const scope = { threadId: 'thread-a', turnId: 'turn-1', workspaceId: 'ws', connectionGeneration: 'c', ownerGeneration: 'o' }
+    const intent = await journal.beginIntent({ tool: 't', args: {}, kind: 'write', scope })
+    expect(notices).toBe(2)
+    await journal.settleIntent(intent.id, { status: 'applied' })
+    expect(notices).toBe(3)
+    unsubscribe()
+    await journal.record({ tool: 'write-2', args: {}, kind: 'write' })
+    expect(notices).toBe(3)
+  })
+
+  it('counts scoped undoables without loading other threads', async () => {
+    const journal = new MutationJournal()
+    journal.setThread('thread-a')
+    await journal.record({ tool: 'a-write', args: {}, kind: 'move', inverse: { tool: 'u', args: {} } })
+    await journal.record({ tool: 'a-plain', args: {}, kind: 'move' })
+    journal.setThread('thread-b')
+    await journal.record({ tool: 'b-write', args: {}, kind: 'move', inverse: { tool: 'u', args: {} } })
+    journal.scopeThread('thread-a')
+    expect(await journal.undoableCount()).toBe(1)
+    journal.scopeThread('thread-b')
+    expect(await journal.undoableCount()).toBe(1)
+    journal.scopeThread(null)
+    expect(await journal.undoableCount()).toBe(0)
+  })
+})
+
+describe('persisted turn queue (Epoch 09)', () => {
+  interface StoredMessage {
+    id: string
+    threadId: string
+    text: string
+    turnStatus?: string
+  }
+
+  /** Memory repository with scripted per-append failures and call counting. */
+  function scriptedRepo(script: Array<'ok' | 'fail'> = []) {
+    const messages: StoredMessage[] = []
+    let calls = 0
+    let threads = 0
+    const repo = {
+      createThread: async () => {
+        threads++
+        return { id: `thread-${threads}`, title: 't', createdAt: 0, updatedAt: 0, mode: 'ask', pinned: false }
+      },
+      appendMessage: async (threadId: string, message: Omit<MessageRow, 'id' | 'ts' | 'threadId'> & { id?: string }) => {
+        const step = script[calls] ?? 'ok'
+        calls++
+        if (step === 'fail') throw new Error(`storage offline (append ${calls})`)
+        const row = { id: message.id ?? `m${calls}`, threadId, text: message.text, turnStatus: message.turnStatus }
+        const existing = messages.findIndex((m) => m.id === row.id)
+        if (existing >= 0) messages[existing] = row
+        else messages.push(row)
+        return row
+      },
+    } as unknown as ThreadRepository
+    return { repo, messages, calls: () => calls }
+  }
+
+  it('recovers after a failed partial so the final still lands', async () => {
+    const { repo, messages } = scriptedRepo(['ok', 'fail', 'ok'])
+    const turn = await startPersistedTurn(repo, null, 'do work')
+    const errors: string[] = []
+    turn.onSaveError((message) => void errors.push(message))
+    await expect(turn.persistAssistant('partial')).rejects.toThrow(/storage offline/)
+    // The queue is not poisoned: the final is attempted and succeeds, and a
+    // recovered partial failure never raised the banner.
+    await turn.persistAssistant('complete', undefined, undefined, 'complete')
+    expect(messages.map((m) => m.text)).toEqual(['do work', 'complete'])
+    expect(errors).toEqual([])
+  })
+
+  it('gives each save its own result while the tail recovers', async () => {
+    const { repo } = scriptedRepo(['ok', 'fail', 'ok', 'ok'])
+    const turn = await startPersistedTurn(repo, null, 'do work')
+    const first = turn.persistAssistant('one')
+    const second = turn.persistAssistant('two', undefined, undefined, 'complete')
+    await expect(first).rejects.toThrow(/storage offline/)
+    await expect(second).resolves.toBeUndefined()
+    // … and the turn stays usable afterwards.
+    await expect(turn.persistAssistant('three', undefined, undefined, 'complete')).resolves.toBeUndefined()
+  })
+
+  it('lets a final supersede waiting partials without later overwrite', async () => {
+    const { repo, messages } = scriptedRepo()
+    // Gate installed before the turn starts so append #1 is the user row
+    // and #2 is the first in-flight partial.
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const innerAppend = repo.appendMessage.bind(repo)
+    let appends = 0
+    repo.appendMessage = (async (threadId: string, message: Omit<MessageRow, 'id' | 'ts' | 'threadId'> & { id?: string }) => {
+      appends++
+      if (appends === 2) await gate // block the first partial mid-flight
+      return innerAppend(threadId, message)
+    }) as typeof repo.appendMessage
+    const turn = await startPersistedTurn(repo, null, 'do work')
+    const partial1 = turn.persistAssistant('partial-1')
+    const partial2 = turn.persistAssistant('partial-2')
+    const final = turn.persistAssistant('final answer', { output_tokens: 9 }, undefined, 'complete')
+    release()
+    await Promise.all([partial1, partial2, final])
+    // user + in-flight partial-1 + final only: partial-2 coalesced away, the
+    // final upserts the assistant row last, and nothing writes after it.
+    expect(appends).toBe(3)
+    expect(messages.map((m) => m.text)).toEqual(['do work', 'final answer'])
+  })
+
+  it('bounds rapid partials to one in-flight and one waiting write', async () => {
+    const { repo, messages } = scriptedRepo()
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const innerAppend = repo.appendMessage.bind(repo)
+    let appends = 0
+    repo.appendMessage = (async (threadId: string, message: Omit<MessageRow, 'id' | 'ts' | 'threadId'> & { id?: string }) => {
+      appends++
+      if (appends === 2) await gate
+      return innerAppend(threadId, message)
+    }) as typeof repo.appendMessage
+    const turn = await startPersistedTurn(repo, null, 'do work')
+    const saves = Array.from({ length: 10 }, (_, i) => turn.persistAssistant(`partial-${i}`))
+    const final = turn.persistAssistant('final answer', undefined, undefined, 'complete')
+    release()
+    await Promise.all([...saves, final])
+    expect(appends).toBe(3)
+    expect(messages.map((m) => m.text)).toEqual(['do work', 'final answer'])
+  })
+
+  it('surfaces final failure with retry instead of rerunning the turn', async () => {
+    const { repo, messages } = scriptedRepo(['ok', 'ok', 'fail', 'ok'])
+    const turn = await startPersistedTurn(repo, null, 'do work')
+    const errors: string[] = []
+    turn.onSaveError((message) => void errors.push(message))
+    await turn.persistAssistant('partial')
+    await expect(turn.persistAssistant('final answer', undefined, undefined, 'complete')).rejects.toThrow(/storage offline/)
+    expect(errors).toEqual(['History could not be saved'])
+    // Retry re-attempts the full local snapshot; the model turn never reruns.
+    await turn.retryFinal()
+    expect(messages.map((m) => m.text)).toEqual(['do work', 'final answer'])
+  })
+
+  it('does not surface recovered partial failures', async () => {
+    const { repo } = scriptedRepo(['ok', 'fail', 'ok'])
+    const turn = await startPersistedTurn(repo, null, 'do work')
+    const errors: string[] = []
+    turn.onSaveError((message) => void errors.push(message))
+    await expect(turn.persistAssistant('partial')).rejects.toThrow()
+    await turn.persistAssistant('complete', undefined, undefined, 'complete')
+    expect(errors).toEqual([])
+  })
+
+  it('keeps interleaved turns isolated to their own threads', async () => {
+    const { repo, messages } = scriptedRepo()
+    const turnA = await startPersistedTurn(repo, null, 'question A')
+    const turnB = await startPersistedTurn(repo, null, 'question B')
+    expect(turnA.threadId).not.toBe(turnB.threadId)
+    await Promise.all([
+      turnA.persistAssistant('partial A'),
+      turnB.persistAssistant('partial B'),
+      turnA.persistAssistant('final A', undefined, undefined, 'complete'),
+      turnB.persistAssistant('final B', undefined, undefined, 'failed', 'boom'),
+    ])
+    const forThread = (id: string) => messages.filter((m) => m.threadId === id).map((m) => m.text)
+    // The assistant row upserts per turn: question + latest snapshot each,
+    // with no row ever landing in the other thread.
+    expect(forThread(turnA.threadId)).toEqual(['question A', 'final A'])
+    expect(forThread(turnB.threadId)).toEqual(['question B', 'final B'])
+  })
+
+  it('refuses retry before any final snapshot exists', async () => {
+    const { repo } = scriptedRepo()
+    const turn = await startPersistedTurn(repo, null, 'do work')
+    expect(() => turn.retryFinal()).toThrow(/no final snapshot/)
+  })
+
+  it('stops notifying unsubscribed save-error observers', async () => {
+    const { repo } = scriptedRepo(['ok', 'fail', 'fail'])
+    const turn = await startPersistedTurn(repo, null, 'do work')
+    let notices = 0
+    const unsubscribe = turn.onSaveError(() => void notices++)
+    await expect(turn.persistAssistant('final-1', undefined, undefined, 'failed', 'x')).rejects.toThrow()
+    expect(notices).toBe(1)
+    unsubscribe()
+    await expect(turn.persistAssistant('final-2', undefined, undefined, 'failed', 'x')).rejects.toThrow()
+    expect(notices).toBe(1)
+  })
+})

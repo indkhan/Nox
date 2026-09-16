@@ -1,10 +1,15 @@
 import { parseNotionUrl } from '../shared/notion-page'
+import { MAX_ICON_EMOJI_CHARS, MAX_ICON_URL_CHARS, MAX_TITLE_CHARS } from '../shared/messages'
 
 /**
  * Content script on notion.so/notion.com tabs. Reads the open page's icon and
  * title from the DOM and reports it to the background worker so the panel can
  * show the real page chip. Best-effort: Notion's DOM is private, so every
  * lookup degrades silently to "no meta".
+ *
+ * This script needs no chrome.storage access (Epoch 13 / L3): it only sends
+ * bounded runtime messages. Credential-bearing storage stays restricted to
+ * trusted contexts, and metadata still flows without it.
  */
 
 interface PageMeta {
@@ -54,9 +59,24 @@ function readMeta(): PageMeta {
   return { url: location.href.split('?')[0], ...readIcon(), title: readTitle() }
 }
 
+/** Bounds DOM-derived labels to the receiving-boundary limits (L3). */
+function boundMeta(meta: PageMeta): PageMeta {
+  const out: PageMeta = { url: meta.url }
+  if (typeof meta.title === 'string' && meta.title.length > 0) {
+    out.title = meta.title.slice(0, MAX_TITLE_CHARS)
+  }
+  if (typeof meta.iconEmoji === 'string' && meta.iconEmoji.length > 0) {
+    out.iconEmoji = meta.iconEmoji.slice(0, MAX_ICON_EMOJI_CHARS)
+  }
+  if (typeof meta.iconUrl === 'string' && meta.iconUrl.length > 0) {
+    out.iconUrl = meta.iconUrl.slice(0, MAX_ICON_URL_CHARS)
+  }
+  return out
+}
+
 function report(): void {
   if (!parseNotionUrl(location.href)) return
-  void chrome.runtime.sendMessage({ type: 'nox/page-meta', ...readMeta() }).catch(() => {})
+  void chrome.runtime.sendMessage({ type: 'nox/page-meta', ...boundMeta(readMeta()) }).catch(() => {})
 }
 
 // SPA navigation: Notion never reloads the document on internal navigation.

@@ -125,6 +125,64 @@ const streamed = deltas.map((d) => d.params.delta).join('');
 assert.equal(streamed.length, 2 * 1024 * 1024, 'streamed deltas reassemble to the full text');
 console.log(`✔ turn relayed: tool round trip + ${deltas.length} deltas (${(streamed.length / 1048576).toFixed(1)} MB) via ${chunkFrames.length} chunk frames`);
 
+// ── 4a. Unicode split across stdout byte boundaries (M11) ──
+send({ t: 'rpc', cid: 'u-split', method: 'test/unicode-split', params: {} });
+const uSplitResp = await waitFor((m) => m.t === 'resp' && m.cid === 'u-split', 'unicode split response', 15000);
+assert.equal(uSplitResp.result?.echo, 'Grüße äöü|中文 €|😀 𝄞', `unicode split echo corrupted: ${uSplitResp.result?.echo}`);
+const uDeltas = messages.filter((m) => m.t === 'notif' && m.method === 'item/agentMessage/delta' && String(m.params?.itemId ?? '').startsWith('u'));
+assert(uDeltas.some((d) => d.params.delta === 'Grüße äöü'), '2-byte split delta corrupted');
+assert(uDeltas.some((d) => d.params.delta === '中文 €'), '3-byte split delta corrupted');
+assert(uDeltas.some((d) => d.params.delta === '😀 𝄞'), '4-byte split delta corrupted');
+console.log('✔ unicode 2/3/4-byte sequences survive byte splits');
+
+// ── 4b. Unicode inside tool-call arguments ──
+send({ t: 'rpc', cid: 'u-args', method: 'test/unicode-tool-args', params: {} });
+const uToolReq = await waitFor(
+  (m) => m.t === 'req' && m.method === 'item/tool/call' && m.params?.callId === 'call_unicode',
+  'unicode tool request',
+  15000,
+);
+assert.equal(uToolReq.params.arguments?.title, 'Grüße äöü 中文 € 😀 𝄞', `tool-arg unicode corrupted: ${uToolReq.params.arguments?.title}`);
+send({ t: 'tool-response', rid: uToolReq.rid, result: { success: true, contentItems: [{ type: 'inputText', text: 'ok' }] } });
+const uArgsResp = await waitFor((m) => m.t === 'resp' && m.cid === 'u-args', 'unicode args response', 15000);
+assert.equal(uArgsResp.result?.echo, 'Grüße äöü 中文 € 😀 𝄞');
+console.log('✔ unicode tool arguments survive byte splits');
+
+// ── 4c. Large non-ASCII frame stays chunked under the cap ──
+send({ t: 'rpc', cid: 'u-large', method: 'test/unicode-large', params: {} });
+const uLargeResp = await waitFor((m) => m.t === 'resp' && m.cid === 'u-large', 'unicode large response', 30000);
+const uLargeDelta = messages.find((m) => m.t === 'notif' && m.params?.itemId === 'u-large');
+assert(uLargeDelta, 'large unicode delta missing');
+assert.equal(uLargeDelta.params.delta.length, uLargeResp.result.chars, 'large unicode delta truncated');
+assert(!uLargeDelta.params.delta.includes('�'), 'large unicode delta contains replacement chars');
+for (const c of chunkFrames) {
+  const framed = Buffer.byteLength(JSON.stringify(c), 'utf8');
+  assert(framed < 1024 * 1024, `chunk frame ${framed} exceeds the cap (multibyte)`);
+}
+console.log(`✔ large non-ASCII frame preserved (${(uLargeDelta.params.delta.length / 1024).toFixed(0)}K chars, ${chunkFrames.length} chunk frames under cap)`);
+
+// ── 4d. Overlong unterminated line is discarded, later lines work ──
+send({ t: 'rpc', cid: 'u-overlong', method: 'test/overlong-line', params: {} });
+const uOverlongResp = await waitFor((m) => m.t === 'resp' && m.cid === 'u-overlong', 'overlong response', 30000);
+assert.equal(uOverlongResp.result?.ok, true);
+await waitFor((m) => m.t === 'notif' && m.params?.itemId === 'u-after-overlong', 'post-overlong line', 15000);
+console.log('✔ overlong line discarded without stalling the bridge');
+
+// ── 4e. EOF midway through a sequence restarts cleanly ──
+{
+  const runningBeforeEof = messages.filter((m) => m.t === 'status' && m.state === 'running').length;
+  send({ t: 'rpc', cid: 'u-eof', method: 'test/unicode-eof', params: {} });
+  await waitFor(
+    () => messages.filter((m) => m.t === 'status' && m.state === 'running').length > runningBeforeEof,
+    'restart after unicode EOF',
+    8000,
+  );
+  assert(!messages.some((m) => m.params?.itemId === 'u-eof'), 'truncated EOF bytes must never surface as a message');
+  send({ t: 'rpc', cid: 'u-after-eof', method: 'model/list', params: {} });
+  await waitFor((m) => m.t === 'resp' && m.cid === 'u-after-eof', 'response after unicode EOF restart', 8000);
+  console.log('✔ truncated EOF discarded; decoder reset on restart');
+}
+
 // ── 5. crash restart ──
 const runningBefore = messages.filter((m) => m.t === 'status' && m.state === 'running').length;
 send({ t: 'rpc', cid: 'crash', method: 'test/crash', params: {} });
@@ -137,18 +195,22 @@ send({ t: 'rpc', cid: 'after-crash', method: 'model/list', params: {} });
 await waitFor((m) => m.t === 'resp' && m.cid === 'after-crash', 'response after crash restart', 5000);
 console.log('✔ codex restarted after crash');
 
-// Repeated crashes exhaust the consecutive restart budget.
-for (let i = 0; i < 3; i++) {
+// Repeated crashes exhaust the consecutive restart budget. Prior unicode-EOF
+// already consumed one restart, so crash until dead instead of fixed counts.
+for (let i = 0; i < 6; i++) {
+  if (messages.some((m) => m.t === 'status' && m.state === 'dead')) break;
   const before = messages.filter((m) => m.t === 'status' && m.state === 'running').length;
   send({ t: 'rpc', cid: `crash-${i}`, method: 'test/crash', params: {} });
-  await waitFor(
-    () => messages.filter((m) => m.t === 'status' && m.state === 'running').length > before,
-    `restart ${i + 2}`,
-    6000,
-  );
+  const deadline = Date.now() + 12000;
+  for (;;) {
+    const running = messages.filter((m) => m.t === 'status' && m.state === 'running').length;
+    if (running > before) break;
+    if (messages.some((m) => m.t === 'status' && m.state === 'dead')) break;
+    if (Date.now() > deadline) throw new Error(`bridge test timed out waiting for restart ${i + 2}`);
+    await new Promise((r) => setTimeout(r, 20));
+  }
 }
-send({ t: 'rpc', cid: 'final-crash', method: 'test/crash', params: {} });
-await waitFor((m) => m.t === 'status' && m.state === 'dead', 'restart budget exhaustion', 7000);
+await waitFor((m) => m.t === 'status' && m.state === 'dead', 'restart budget exhaustion', 12000);
 console.log('✔ repeated crashes exhaust restart budget');
 
 child.kill();

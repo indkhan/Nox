@@ -11,3 +11,8 @@ Never include real Notion tokens or private workspace content. You should receiv
 an acknowledgement within 72 hours.
 
 During alpha, only the latest tagged release receives security fixes.
+
+Whether GitHub private vulnerability reporting is enabled for this repository
+is unverified from this checkout. If the link above is unavailable, file a
+minimal public issue describing the affected area without private workspace
+content or tokens, and ask for a private channel.

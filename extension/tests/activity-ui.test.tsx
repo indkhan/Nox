@@ -1,14 +1,15 @@
+// @vitest-environment jsdom
 import { describe, expect, it, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { readFileSync } from 'node:fs'
-import { ActivityTimeline, FollowUpActions } from '../src/sidepanel/MessageParts'
+import { ActivityTimeline, AssistantMarkdown, FollowUpActions } from '../src/sidepanel/MessageParts'
 
 describe('ActivityTimeline', () => {
   it('provides polished activity motion with an accessible fallback', () => {
     const html = renderToStaticMarkup(<ActivityTimeline active items={[]} />)
     expect(html).toContain('nox-activity-mark')
     expect(html).toContain('data-active="true"')
-    const css = readFileSync(new URL('../src/sidepanel/index.css', import.meta.url), 'utf8')
+    const css = readFileSync('src/sidepanel/index.css', 'utf8')
     expect(css).toContain('@keyframes nox-activity-breathe')
     expect(css).toMatch(/prefers-reduced-motion[\s\S]*nox-activity-mark/)
   })
@@ -80,6 +81,33 @@ describe('ActivityTimeline', () => {
     expect(html).toContain('Undo this change')
   })
 
+  it('explains unavailable undo instead of rendering an enabled button', () => {
+    const html = renderToStaticMarkup(<ActivityTimeline active items={[
+      { kind: 'tool', id: 'u', tool: 'notion-update-page', args: {}, status: 'completed', journalId: 'journal-1', undoable: true },
+    ]} initiallyExpanded undoUnavailableReason="Undo unavailable in read-only mode" />)
+    expect(html).not.toContain('Undo this change')
+    expect(html).toContain('Undo unavailable in read-only mode')
+  })
+
+  it('renders unresolved operations as prominent reviewable rows', () => {
+    const onMarkReviewed = vi.fn()
+    const onCheckState = vi.fn()
+    const html = renderToStaticMarkup(<ActivityTimeline active items={[
+      {
+        kind: 'tool', id: 'u', tool: 'notion-update-page', args: { page_id: 'p1' },
+        status: 'unknown', journalId: 'op-1',
+        unresolvedDetail: 'Outcome unknown — it may or may not have applied.',
+        inspectUrl: 'https://www.notion.so/p1',
+      },
+    ]} initiallyExpanded onMarkReviewed={onMarkReviewed} onCheckState={onCheckState} />)
+    expect(html).toContain('Needs review')
+    expect(html).toContain('Outcome unknown')
+    expect(html).toContain('href="https://www.notion.so/p1"')
+    expect(html).toContain('Mark reviewed')
+    expect(html).toContain('Check current state')
+    expect(html).not.toContain('Undo this change')
+  })
+
   it('renders follow-up actions as buttons', () => {
     const html = renderToStaticMarkup(<FollowUpActions suggestions={['Summarize these results']} onSelect={vi.fn()} />)
     expect(html).toContain('Follow-ups')
@@ -118,4 +146,11 @@ it('shows commentary and expandable evidence details', () => {
   expect(html).toContain('node release')
   expect(html).toContain('https://nodejs.org/')
   expect(html).toContain('<details')
+})
+
+it('keeps restored assistant media as a non-loading source link', () => {
+  const html = renderToStaticMarkup(<AssistantMarkdown markdown="![receipt](https://attacker.invalid/history.png)" />)
+  expect(html).not.toContain('<img')
+  expect(html).not.toContain('src=')
+  expect(html).toContain('href="https://attacker.invalid/history.png"')
 })

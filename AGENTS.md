@@ -1,6 +1,8 @@
 # AGENTS.md
 
-Read `docs/application.md` before doing anything else. If architecture changes,
+Read `docs/application.md` before changing runtime flows, trust boundaries,
+persistence, or cross-component behavior; for local changes, read the relevant
+code and tests first. If architecture changes,
 update that file in the same change, briefly and accurately.
 
 ## Nox Boundaries

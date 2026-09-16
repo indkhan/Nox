@@ -48,6 +48,18 @@ If the extension port dies before answering, the bridge declines on its behalf
 `detail` carries `exitCode`/`signal`/`attempt`/`codexPath`. After `dead` the host
 keeps answering `ping` (health only); a new session requires reopening the panel.
 
+## Codex stdout framing (codex → host)
+
+Newline-delimited JSON over stdio, decoded as a UTF-8 stream with a persistent
+`StringDecoder` per child process: pipe-chunk boundaries are not character
+boundaries, so a 2/3/4-byte sequence split across `data` events must survive.
+Decoder and pending-line state reset on restart; a truncated final line (no
+newline, or an incomplete UTF-8 sequence at EOF) is discarded with a bounded
+stderr diagnostic and pending work fails — never silent corruption. One line is
+bounded at 8 MiB UTF-16 code units (`MAX_CODEX_LINE_CHARS`); overlong data is
+discarded and resyncs at the next newline. Malformed JSON lines are discarded
+with a bounded (200-char) diagnostic preview.
+
 ## Chunk framing (host → ext)
 
 Any envelope whose serialized length exceeds `SAFE_CHUNK` (256 Ki UTF-16 code units) is split:
@@ -57,13 +69,21 @@ Any envelope whose serialized length exceeds `SAFE_CHUNK` (256 Ki UTF-16 code un
 {"t":"chunkEnd","id":41,"totalChars":2097152,"chunks":4}
 ```
 
+Byte versus character counts: `SAFE_CHUNK`/`totalChars` count UTF-16 code units
+(`string.length`/`slice`), while the wire caps count UTF-8 framed bytes (host→ext
+1 MiB per native message, extension→host 32 MiB per inbound frame). A 256 Ki-unit
+slice of CJK/emoji stays well under the 1 MiB byte cap (2–3 bytes per unit, no
+JSON-escape expansion for those scripts); ASCII slices with heavy quoting stay
+under it via the 6x-escape headroom. The receiver validates both `totalChars`
+and `chunks` plus byte/age budgets before joining.
+
 The receiver concatenates all slices for `id`, validates `totalChars`, then treats
 the joined string as one JSON envelope. Ids increase monotonically per host process.
 
 ## Extension → host oversize
 
 Not needed for V1: dynamicTools schemas stay well under 64 MiB. The bridge rejects
-single inbound frames above 32 MiB defensively.
+single inbound frames above 32 MiB UTF-8 bytes defensively.
 
 ## Configuration inspection
 

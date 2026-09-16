@@ -1,14 +1,28 @@
 import { defineManifest } from '@crxjs/vite-plugin'
+import { readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const PUBLIC_KEY =
   'MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAk34/PLF2O0uaReFhW8ISpW3LlAi7YfvSIYZ6+sVu5l5eWvFqYduf19vaeuKWZqcVoUGsjt8VGc5ptbDCa8IGgYJtq8w253uthpS875gleig/IPB4hXC3zG9ubkZFwgeIBdgcfzPkbLrdQlrNzzEM7iSAV2uN2pD0I5vroIZrIKo6pbMuy8/oc6r3iAJaivf1oZOLYalB3ws1erYuJFSDF8ULtM000digZHH7RRdvySe+lt1RJ46N6T1Xmrrq6lFcnxbO/N+3CBc4MX68K1+WEubqPFxS4pGrvXlG+i58lGa8hCQL7iSZcxXKr5aZgf9gsJUdiQz3ImL7Psj7O+XWxwIDAQAB'
 
+// Single version source: extension/package.json.
+// Chrome numeric `version` below must equal package.json `version`.
+// Display/tag label mapping: `v<version>-alpha` (e.g. v0.1.0-alpha);
+// release ZIPs are named `nox-v<version>.zip` (existing names kept, not renamed).
+const { version: NOX_VERSION } = JSON.parse(
+  readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'package.json'), 'utf8'),
+)
+
 export default defineManifest({
   manifest_version: 3,
   name: 'Nox',
-  version: '0.1.0',
+  version: NOX_VERSION,
   description: 'Open-source Notion AI-style assistant powered by your local Codex login.',
   key: PUBLIC_KEY,
+  content_security_policy: {
+    extension_pages: "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; font-src 'self'; connect-src https://mcp.notion.com; media-src 'none'; object-src 'none'; frame-src 'none'",
+  },
   permissions: [
     'sidePanel',
     'storage',

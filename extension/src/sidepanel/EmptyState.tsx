@@ -11,10 +11,9 @@ interface SuggestionDef {
   mention?: MentionRef
 }
 
-/** The real Notion page icon when known, falling back to a generic page glyph. */
-function CurrentPageChip({ iconEmoji, iconUrl }: { iconEmoji?: string; iconUrl?: string }) {
+/** Page metadata never causes a panel-side network request. */
+function CurrentPageChip({ iconEmoji }: { iconEmoji?: string }) {
   if (iconEmoji) return <span className="shrink-0 leading-none">{iconEmoji}</span>
-  if (iconUrl) return <img src={iconUrl} alt="" className="h-3.5 w-3.5 shrink-0 rounded-[3px] object-cover" />
   return <PageIcon className="h-3.5 w-3.5 shrink-0" />
 }
 
@@ -30,7 +29,7 @@ export function EmptyState({
   const timeOfDay = hour < 12 ? 'morning' : hour < 18 ? 'afternoon' : 'evening'
   const name = identity?.userName?.split(' ')[0]
   const pageTitle = currentPage?.title ?? 'this page'
-  const chip = <CurrentPageChip iconEmoji={currentPage?.iconEmoji} iconUrl={currentPage?.iconUrl} />
+  const chip = <CurrentPageChip iconEmoji={currentPage?.iconEmoji} />
   const mention: MentionRef | undefined = currentPage
     ? { pageId: currentPage.pageId, title: currentPage.title, iconEmoji: currentPage.iconEmoji, iconUrl: currentPage.iconUrl }
     : undefined

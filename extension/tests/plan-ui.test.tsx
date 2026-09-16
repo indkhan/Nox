@@ -18,7 +18,7 @@ describe('PlanCards', () => {
       plan: {
         goal: 'Track habits', recommendation: 'Reuse Daily Log',
         evidence: [{ id: 'db-1', title: 'Daily Log', kind: 'database', reason: 'Already dated' }],
-        operations: [{ tool: 'notion-update-data-source', targetId: 'db-1', summary: 'Add Completed checkbox' }],
+        operations: [{ tool: 'notion-update-data-source', targetId: 'db-1', args: { data_source_id: 'db-1' }, summary: 'Add Completed checkbox' }],
         consequences: ['One database changes'],
       },
       resolve: (value) => { decision = value },
@@ -31,12 +31,36 @@ describe('PlanCards', () => {
     expect(host.textContent).toContain('Reuse Daily Log')
     expect(host.textContent).toContain('Add Completed checkbox')
     expect(host.textContent).toContain('One database changes')
-    expect(host.querySelector('details')?.open).toBe(false)
-    expect(host.querySelector('details')?.textContent).toContain('Daily Log')
+    const evidenceDetails = [...host.querySelectorAll('details')].find((el) => el.textContent?.includes('Inspected'))
+    expect(evidenceDetails?.open).toBe(false)
+    expect(evidenceDetails?.textContent).toContain('Daily Log')
     expect(host.querySelector('[data-testid="approve-plan-1"]')?.textContent).toBe('Approve and continue')
     await act(async () => (host.querySelector('[data-testid="approve-plan-1"]') as HTMLButtonElement).click())
     expect(decision).toBe('approved')
     expect(useNoxStore.getState().pendingPlans).toHaveLength(0)
     await act(async () => root.unmount())
+  })
+
+  it('shows creation references and operation arguments before consent', async () => {
+    useNoxStore.setState({ pendingPlans: [{
+      id: 'plan-2',
+      plan: {
+        goal: 'G', recommendation: 'R',
+        evidence: [{ id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', title: 'E', kind: 'page', reason: 'why' }],
+        operations: [
+          { opId: 'mk', tool: 'notion-create-pages', args: { pages: [] }, summary: 'Create one' },
+          { opId: 'use', tool: 'notion-update-page', targetId: { ref: 'mk' }, args: {}, summary: 'Edit it' },
+        ],
+        consequences: [],
+      },
+      resolve: () => undefined,
+    }] })
+    const host = document.createElement('div')
+    const root = createRoot(host)
+    await act(async () => root.render(<PlanCards />))
+    expect(host.textContent).toContain('uses the new object from step 1')
+    expect(host.textContent).toContain('Operation details')
+    await act(async () => root.unmount())
+    useNoxStore.setState({ pendingPlans: [] })
   })
 })

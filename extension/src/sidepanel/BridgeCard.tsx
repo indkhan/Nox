@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNoxStore } from './store'
-import { connectCodexAction } from './codex-connect'
+import { connectCodexAction, reconnectCodexAction } from './codex-connect'
 
 export function BridgeCard() {
   const { codexStatus, codexVersion, codexModelCount, codexHint } = useNoxStore((s) => s)
@@ -9,7 +9,13 @@ export function BridgeCard() {
   async function connect() {
     setBusy(true)
     try {
-      await connectCodexAction()
+      // Reconnect forces a fresh transport + model list even when the label
+      // still says connected (stale UI); initial connect stays single-flight.
+      if (codexStatus === 'disconnected' || codexStatus === 'error') {
+        await reconnectCodexAction()
+      } else {
+        await connectCodexAction()
+      }
     } finally {
       setBusy(false)
     }
@@ -27,6 +33,8 @@ export function BridgeCard() {
     )
   }
 
+  const reconnectLabel =
+    codexStatus === 'connecting' ? 'Connecting…' : codexStatus === 'error' || codexStatus === 'disconnected' ? 'Reconnect' : 'Connect Codex'
   return (
     <section className="rounded-lg border border-zinc-800 bg-zinc-900 p-3" data-testid="bridge-card">
       <p className="mb-1 text-xs uppercase tracking-wide text-zinc-500">Codex</p>
@@ -41,7 +49,7 @@ export function BridgeCard() {
         data-testid="bridge-connect"
         className="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500 disabled:opacity-50"
       >
-        {codexStatus === 'connecting' ? 'Connecting…' : codexStatus === 'error' ? 'Retry' : 'Connect Codex'}
+        {reconnectLabel}
       </button>
     </section>
   )

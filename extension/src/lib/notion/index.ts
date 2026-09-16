@@ -3,10 +3,11 @@ import {
   fetchAuthorizationServerMetadata,
   type AuthorizationServerMetadata,
 } from '../oauth/discovery'
-import { TokenStore } from '../oauth/tokens'
+import { TokenStore, type CredentialLock } from '../oauth/tokens'
 import type { KeyValueStore } from '../storage'
 import { McpClient, type McpCallResult, type McpTool } from '../mcp/client'
 import { Scheduler } from '../mcp/scheduler'
+import { classifyToolCall } from '../writes/classify'
 import { classifyError } from '../mcp/errors'
 import { CapabilityGate, parseSelfResult, type SelfInfo } from './capabilities'
 
@@ -23,6 +24,13 @@ export class Notion {
   private tokenStore: TokenStore
   private gate: CapabilityGate = new CapabilityGate()
   private selfInfo: SelfInfo | null = null
+  /**
+   * Connection generation: minted per instance and bumped on every
+   * (re)connect, identity refresh, and sign-out. The write gate captures it
+   * on admission and refuses a queued mutation if it changed before
+   * dispatch, so work queued under a stale connection never runs silently.
+   */
+  private connectionGenerationValue = crypto.randomUUID()
 
   constructor(
     private readonly deps: {
@@ -30,6 +38,12 @@ export class Notion {
       session: KeyValueStore
       local: KeyValueStore
       redirectUri: () => string
+      /**
+       * Shared credential lock for cross-panel serialization (Epoch F3 / R5).
+       * Production defaults to the shared Web Lock inside TokenStore; tests
+       * inject one serial lock shared across facade instances.
+       */
+      lock?: CredentialLock
     },
   ) {
     const { fetchImpl, session, local } = deps
@@ -38,9 +52,23 @@ export class Notion {
       session,
       local,
       fetchImpl,
+      lock: deps.lock,
       getClientId: async () => {
         if (!this.metadata) await this.loadMetadata()
         return this.registrar.getClientId(this.metadata!, this.deps.redirectUri())
+      },
+      // Validated discovered token endpoint (Epoch 11 / M8): refresh never
+      // uses a hardcoded fallback when discovery has established metadata.
+      getTokenEndpoint: async () => {
+        const meta = this.metadata ?? (await this.loadMetadata())
+        let url: URL
+        try {
+          url = new URL(meta.token_endpoint)
+        } catch {
+          throw new Error('[token-refresh] invalid discovered token endpoint')
+        }
+        if (url.protocol !== 'https:') throw new Error('[token-refresh] invalid discovered token endpoint')
+        return url.toString()
       },
     })
     this.client = new McpClient({ fetchImpl, getAccessToken: () => this.tokenStore.getAccessToken() })
@@ -58,6 +86,10 @@ export class Notion {
     return this.selfInfo?.identity ?? null
   }
 
+  get connectionGeneration(): string {
+    return this.connectionGenerationValue
+  }
+
   async loadMetadata(): Promise<AuthorizationServerMetadata> {
     if (!this.metadata) {
       this.metadata = await fetchAuthorizationServerMetadata(this.deps.fetchImpl)
@@ -67,6 +99,13 @@ export class Notion {
 
   /** Full browser flow: discovery → DCR → consent → token exchange. */
   async connect(launchConsent: (authorizeUrl: string) => Promise<string>): Promise<SelfInfo> {
+    // Start of a replacement login (Epoch 11 / M8, bound in F3 / R5): abort
+    // any in-flight refresh and capture one login-attempt generation before
+    // async discovery/consent. The eventual save and identity completion
+    // commit only while this attempt is still current — wipe, sign-out,
+    // delete-all, or a newer login invalidates it under the credential
+    // write lock, so a stale response can never resurrect credentials.
+    const attempt = await this.tokenStore.beginLogin()
     // Every hop is named on failure — without this, a connect failure is a
     // guessing game across four network hops (spike 0.1 lesson).
     const metadata = await stage('discovery', () => this.loadMetadata())
@@ -103,39 +142,104 @@ export class Notion {
         codeVerifier: verifier,
       }),
     )
-    await this.tokenStore.saveFromTokenResponse(tokenResponse)
-    return stage('initialize+identity', () => this.refreshIdentity())
+    // Attempt-bound save (F3/R5): a superseded attempt throws
+    // STALE_LOGIN_ATTEMPT here with zero credential writes.
+    await this.tokenStore.saveFromTokenResponse(tokenResponse, attempt)
+    // A wipe/sign-out/newer login could land between the save and identity.
+    if (!(await this.tokenStore.isLoginAttemptCurrent(attempt))) {
+      throw new Error('[connect] STALE_LOGIN_ATTEMPT: superseded before identity — refusing to report connected')
+    }
+    const info = await stage('initialize+identity', () => this.loadIdentityForAttempt(attempt))
+    // A newer login/wipe completing during identity must not surface as this
+    // attempt's Connected result.
+    if (!(await this.tokenStore.isLoginAttemptCurrent(attempt))) {
+      throw new Error('[connect] STALE_LOGIN_ATTEMPT: superseded during identity — refusing to report connected')
+    }
+    return info
   }
 
   /** Dev escape hatch: import a token JSON without the consent flow. */
   async importToken(token: Parameters<TokenStore['saveFromTokenResponse']>[0]): Promise<SelfInfo> {
-    await this.tokenStore.saveFromTokenResponse(token)
-    return this.refreshIdentity()
+    // Bound like connect (F3/R5): this fresh login invalidates pending
+    // attempts, and a wipe/newer login before identity aborts it.
+    const attempt = await this.tokenStore.beginLogin()
+    await this.tokenStore.saveFromTokenResponse(token, attempt)
+    if (!(await this.tokenStore.isLoginAttemptCurrent(attempt))) {
+      throw new Error('[connect] STALE_LOGIN_ATTEMPT: superseded before identity — refusing to report connected')
+    }
+    const info = await this.loadIdentityForAttempt(attempt)
+    if (!(await this.tokenStore.isLoginAttemptCurrent(attempt))) {
+      throw new Error('[connect] STALE_LOGIN_ATTEMPT: superseded during identity — refusing to report connected')
+    }
+    return info
+  }
+
+  /**
+   * Identity load for one login attempt (F3/R5). Reads and parses identity
+   * but mutates facade state (selfInfo, capabilities, connection generation)
+   * only while the attempt is still current, so a stale completion never
+   * overwrites a newer login's state nor reports Connected.
+   */
+  private async loadIdentityForAttempt(attempt: string): Promise<SelfInfo> {
+    await this.verifyEndpointAcceptance()
+    const self = await this.scheduleCallTool('notion-fetch', { id: 'self' })
+    const text = McpClient.resultText(self)
+    const parsed = parseSelfResult(text)
+    if (!(await this.tokenStore.isLoginAttemptCurrent(attempt))) {
+      throw new Error('[connect] STALE_LOGIN_ATTEMPT: superseded during identity — refusing to report connected')
+    }
+    this.selfInfo = parsed
+    this.gate = new CapabilityGate(parsed.access)
+    this.connectionGenerationValue = crypto.randomUUID()
+    return parsed
+  }
+
+  /**
+   * Bounded authenticated read-only endpoint compatibility acceptance probe
+   * (Epoch 13 / M13): an authorized MCP initialize. Only an affirmative
+   * accepted protocol response verifies the scoped connection — 401, 403,
+   * 429, 5xx, redirects, malformed protocol, missing status, and lookup
+   * exceptions all throw and are not verification success. Read-only, bounded
+   * by the existing 8 MiB streaming budget, owner-called, and carrying no
+   * tokens in diagnostics. An ordinary 401 proves nothing about stripping
+   * (authentication runs before the Origin check).
+   */
+  async verifyEndpointAcceptance(): Promise<void> {
+    await this.client.initialize()
   }
 
   /**
    * MCP handshake + identity/capability load. Safe to call repeatedly; also
    * recovers a session after the browser restarted (access token was lost but
-   * the refresh token survived).
+   * the refresh token survived). The initialize step doubles as the
+   * authenticated acceptance probe above: success establishes acceptance,
+   * any failure leaves the connection unverified.
    */
   async refreshIdentity(): Promise<SelfInfo> {
-    await this.client.initialize()
+    await this.verifyEndpointAcceptance()
     const self = await this.scheduleCallTool('notion-fetch', { id: 'self' })
     const text = McpClient.resultText(self)
     this.selfInfo = parseSelfResult(text)
     this.gate = new CapabilityGate(this.selfInfo.access)
+    this.connectionGenerationValue = crypto.randomUUID()
     return this.selfInfo
   }
 
   async listTools(): Promise<McpTool[]> {
-    return this.scheduler.schedule('global', () => this.client.listTools())
+    return this.scheduler.schedule('global', () => this.client.listTools(), undefined, { retryable: true })
   }
 
-  /** Scheduled tool call; transient failures retry inside the scheduler. */
-  scheduleCallTool(name: string, args: Record<string, unknown>, signal?: AbortSignal): Promise<McpCallResult> {
+  /**
+   * Scheduled tool call. Retry safety comes from the trusted local taxonomy,
+   * never from a model-supplied argument: known reads may recover from
+   * transient failures, while unknown effects and every mutation run once —
+   * an ambiguous failure surfaces as an uncertain outcome, not a replay.
+   */
+  scheduleCallTool(name: string, args: Record<string, unknown>, signal?: AbortSignal, opts?: { deadline?: number; beforeInvoke?: () => void }): Promise<McpCallResult> {
     // Search has its own slower bucket; everything else rides the global one.
     const bucket = name === 'notion-search' ? 'search' : 'global'
-    return this.scheduler.schedule(bucket, () => this.client.callTool(name, args, signal), signal)
+    const retryable = !classifyToolCall(name, args).mutates
+    return this.scheduler.schedule(bucket, () => this.client.callTool(name, args, signal), signal, { retryable, deadline: opts?.deadline, beforeInvoke: opts?.beforeInvoke })
   }
 
   /** Classified failure helper for UI surfaces that catch directly. */
@@ -148,6 +252,7 @@ export class Notion {
     await this.tokenStore.signOut(metadata ?? {})
     this.gate = new CapabilityGate()
     this.selfInfo = null
+    this.connectionGenerationValue = crypto.randomUUID()
     this.client = new McpClient({
       fetchImpl: this.deps.fetchImpl,
       getAccessToken: () => this.tokenStore.getAccessToken(),
@@ -182,4 +287,3 @@ async function stage<T>(name: string, fn: () => Promise<T>): Promise<T> {
     throw new Error(`[${name}] ${e instanceof Error ? e.message : String(e)}`)
   }
 }
-

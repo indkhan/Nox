@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { useNoxStore } from './store'
 import { launchConsentFlow, notion } from '../lib/notion/panel'
-import { logError, logInfo } from '../lib/log'
+import { logError, logInfo, safeErrorDetail } from '../lib/log'
+import { agentLoop, expireAgentGrants, planEngine, writeGate } from '../lib/agent/panel'
 
 /** Dev-only: paste a token JSON (from spikes/.notion-token.json) to skip consent. */
 async function importDevToken(): Promise<void> {
@@ -20,25 +21,55 @@ export function ConnectionCard() {
     setBusy(true)
     logInfo('Notion connect: starting')
     try {
-      // Load-bearing precondition (RESEARCH §2.1): a working origin-strip rule.
-      // The SW self-probes rule variants; failure detail flows into the error.
+      // Load-bearing precondition (RESEARCH §2.1): the narrow origin-strip
+      // rule must be installed. This is endpoint compatibility preparation,
+      // not header observation: installed/unverified pre-OAuth, with
+      // authenticated acceptance established by the authorized initialize
+      // after credential acquisition. Lookup failure blocks (M13).
       try {
         const status = (await chrome.runtime.sendMessage({ type: 'nox/get-dnr-status' })) as
-          | { active?: boolean; variant?: string; probe?: string }
+          | { installed?: boolean; verified?: boolean; reason?: string; storageError?: string }
           | undefined
-        if (status?.active === false) {
+        if (status?.storageError) {
           throw new Error(
-            `Origin-strip rule could not be verified (probe=${status.probe ?? 'none'}, variant=${status.variant ?? 'none'}). ` +
-              'Reload the extension at chrome://extensions and retry.',
+            `Chrome storage restriction unavailable (${status.storageError}). ` +
+              'Update Chrome to a supported version to keep refresh credentials out of content-script reach.',
+          )
+        }
+        if (status?.installed !== true) {
+          throw new Error(
+            `Notion endpoint compatibility not established (installed=${String(status?.installed ?? 'unknown')}, reason=${status?.reason ?? 'none'}). ` +
+              'Reload the extension at chrome://extensions and retry; the narrow rule will be reinstalled.',
           )
         }
       } catch (e) {
-        if (e instanceof Error && e.message.includes('Origin-strip')) throw e
-        console.warn('[nox] DNR status check failed; continuing anyway', e)
+        if (e instanceof Error && (e.message.includes('endpoint compatibility') || e.message.includes('storage restriction'))) throw e
+        throw new Error(
+          `Endpoint compatibility check unavailable (${e instanceof Error ? e.message : String(e)}). ` +
+            'Reload the extension at chrome://extensions and retry.',
+        )
       }
 
-      const info = await notion.connect(launchConsentFlow)
-      logInfo(`Notion connected: ${info.identity.workspaceName ?? info.identity.userName ?? 'workspace'}`)
+      let info: Awaited<ReturnType<typeof notion.connect>>
+      try {
+        info = await notion.connect(launchConsentFlow)
+        // UI completion guard (F3/R5): a sign-out/wipe/delete-all landing
+        // after the facade returned must not restore a Connected label.
+        if (!(await notion.tokens.hasRefreshToken())) {
+          throw new Error('[connect] STALE_LOGIN_ATTEMPT: authorization was cleared before completion')
+        }
+      } catch (e) {
+        // Failed acceptance (including 401/403/429/5xx/redirect/malformed/
+        // missing): clear the rule so retry reinstalls narrowly. No tokens sent.
+        try {
+          await chrome.runtime.sendMessage({ type: 'nox/clear-dnr' })
+        } catch {
+          // Best effort; the error below already blocks workspace operation.
+        }
+        throw e
+      }
+      // Epoch 14 / L2: connection stage only — workspace/user names stay out of diagnostics.
+      logInfo('Notion connected')
       setConnection({
         connectionStatus: 'connected',
         identity: info.identity,
@@ -46,8 +77,7 @@ export function ConnectionCard() {
       })
     } catch (e) {
       const raw = e instanceof Error ? e.message : String(e)
-      console.error('[nox] Notion connect failed:', e)
-      logError(`Notion connect failed: ${raw}`)
+      logError(`Notion connect failed: ${safeErrorDetail(e)}`)
       const explained = notion.explain(e)
       // Friendly line + raw hop-level detail ([discovery]/[register]/[consent]/…)
       const detail = explained.userMessage === raw ? raw : `${explained.userMessage} (${raw})`
@@ -60,9 +90,35 @@ export function ConnectionCard() {
   async function disconnect() {
     setBusy(true)
     logInfo('Notion disconnect')
+    // Cancel active turns/grants first so no new mutation can dispatch while
+    // credentials are being invalidated (Epoch 11 / M8).
+    try {
+      agentLoop.cancel()
+    } catch {
+      /* best effort */
+    }
+    try {
+      planEngine.invalidateApproval()
+      planEngine.rejectPending()
+      writeGate.approvals.rejectAllPending()
+      writeGate.expireBaselines()
+      expireAgentGrants()
+    } catch {
+      /* best effort — sign-out hygiene still proceeds */
+    }
     try {
       await notion.signOut()
       setConnection({ connectionStatus: 'disconnected', identity: null, limitations: [], connectionError: null })
+    } catch (e) {
+      // Storage-clear failure is visible, never reported as complete (M8).
+      const message = e instanceof Error ? e.message : String(e)
+      logError(`Notion disconnect failed: ${safeErrorDetail(e)}`)
+      setConnection({
+        connectionStatus: 'error',
+        identity: null,
+        limitations: [],
+        connectionError: `Sign-out did not complete: ${message}`,
+      })
     } finally {
       setBusy(false)
     }
