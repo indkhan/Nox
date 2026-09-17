@@ -904,13 +904,17 @@ describe('WriteGate Auto grant and material plans (Epoch 06)', () => {
     expect(calls).toHaveLength(5)
   })
 
-  it('reads and search bypass plan and action consent', async () => {
+  it('reads, search, and recent-page listing bypass plan and action consent', async () => {
     const { gate, journal, calls } = makeGate({ mode: 'auto', grant: { allowed: false, pages: [] } })
     const out = (await gate.handle({ rid: 86, tool: 'notion-search', args: { query: 'x' }, namespace: null })) as {
       content: Array<{ text: string }>
     }
     expect(out.content[0].text).toContain('ran notion-search')
-    expect(calls).toHaveLength(1)
+    const recent = (await gate.handle({ rid: 87, tool: 'notion-list-recent-pages', args: {}, namespace: null })) as {
+      content: Array<{ text: string }>
+    }
+    expect(recent.content[0].text).toContain('ran notion-list-recent-pages')
+    expect(calls).toHaveLength(2)
     expect(gate.approvals.pendingCount).toBe(0)
     expect(await journal.newestFirst()).toHaveLength(0)
   })

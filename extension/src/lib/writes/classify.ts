@@ -25,6 +25,7 @@ export interface CallClassification {
 const READ_TOOLS = new Set([
   'notion-search',
   'notion-fetch',
+  'notion-list-recent-pages',
   'notion-query-data-sources',
   'notion-get-users',
   'notion-get-teams',

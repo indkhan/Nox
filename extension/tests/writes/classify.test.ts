@@ -4,7 +4,7 @@ import { canonicalizeArgs, EffectValidationError, validateEffect } from '../../s
 
 describe('classifyToolCall', () => {
   it('treats the known read tools as reads', () => {
-    for (const name of ['notion-search', 'notion-fetch', 'notion-query-data-sources', 'notion-get-users', 'notion-check-mcp-next-steps']) {
+    for (const name of ['notion-search', 'notion-fetch', 'notion-list-recent-pages', 'notion-query-data-sources', 'notion-get-users', 'notion-check-mcp-next-steps']) {
       expect(classifyToolCall(name)).toMatchObject({ mutates: false, kind: 'read', impact: 'low', requiresWorkspacePlan: false })
     }
   })
