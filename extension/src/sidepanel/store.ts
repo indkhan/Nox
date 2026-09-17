@@ -76,7 +76,7 @@ export const useNoxStore = create<NoxState>((set) => ({
   codexHint: null,
   setCodex: (update) => set(update),
 
-  mode: 'ask',
+  mode: 'auto',
   setMode: (mode) => set({ mode }),
 
   pendingApprovals: [],

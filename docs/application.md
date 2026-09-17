@@ -107,7 +107,7 @@ Workspace claims require workspace evidence;
 current external facts require available web research. Discussion/research does not
 authorize changes, including in Auto mode. Incomplete evidence and failed work must
 be disclosed, and selected files are described as local-only inputs. The composer supports the current page, explicit `@` page mentions, local
-attachments, Ask/Auto mode, model, reasoning effort, and service tier.
+attachments, Ask/Auto mode (Auto is the default), model, reasoning effort, and service tier.
 
 ### Notion connection
 
@@ -377,8 +377,8 @@ change requested
 classify ─► require a workspace plan when structural
       │
       ▼
-approval ─► Ask mode: ask for changes
-      │       Auto mode: allow only low-risk, in-context changes
+approval ─► Auto mode (default): allow only low-risk, in-context changes
+      │       Ask mode: ask for changes
       │       untrusted/out-of-context/bulk changes: always ask or refuse
       ▼
 guard ─────► normalized re-fetch; refuse stale, partial, or unrecognized baselines

@@ -10,7 +10,7 @@ export interface SmallEditGrantInput {
 }
 
 export function createTurnAccessState() {
-  let currentMode: Mode = 'ask'
+  let currentMode: Mode = 'auto'
   const pages = new Set<string>()
   const attachmentIds = new Set<string>()
   let grant: SmallEditGrant = { allowed: false, pages: [] }

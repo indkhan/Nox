@@ -43,7 +43,7 @@ export function threadRepository(db: () => Promise<IDBPDatabase>): ThreadReposit
     async createThread(title = 'New chat') {
       const conn = await db()
       const now = Date.now()
-      const thread: ThreadRow = { id: uid(), title, createdAt: now, updatedAt: now, mode: 'ask', pinned: false }
+      const thread: ThreadRow = { id: uid(), title, createdAt: now, updatedAt: now, mode: 'auto', pinned: false }
       await conn.put('threads', thread)
       return thread
     },
@@ -73,7 +73,7 @@ export function threadRepository(db: () => Promise<IDBPDatabase>): ThreadReposit
       const resolvedThreadId = threadId ?? uid()
       const userMessage: MessageRow = { id: uid(), threadId: resolvedThreadId, role: 'user', text: userText, ts: lastMessageTimestamp }
       const existing = threadId ? ((await conn.get('threads', threadId)) as ThreadRow | undefined) : undefined
-      const thread: ThreadRow = existing ?? { id: resolvedThreadId, title: 'New chat', createdAt: now, updatedAt: now, mode: 'ask', pinned: false }
+      const thread: ThreadRow = existing ?? { id: resolvedThreadId, title: 'New chat', createdAt: now, updatedAt: now, mode: 'auto', pinned: false }
       const rows: AttachmentRow[] = attachments.map((item) => ({
         id: item.id,
         name: item.name,

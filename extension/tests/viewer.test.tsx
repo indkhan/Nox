@@ -222,7 +222,7 @@ describe('viewer mode', () => {
     } finally {
       await act(async () => root.unmount())
       container.remove()
-      useNoxStore.setState({ mode: 'ask', currentPage: null })
+      useNoxStore.setState({ mode: 'auto', currentPage: null })
     }
   })
 

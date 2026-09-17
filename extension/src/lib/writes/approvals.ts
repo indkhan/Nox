@@ -45,11 +45,12 @@ export interface ApprovalCall extends CallClassification {
 }
 
 /**
- * Decides whether a mutation may run immediately (MVP §6.3). Ask-before-changes
- * is the default. In Auto, silence requires the explicit per-turn small-edit
+ * Decides whether a mutation may run immediately (MVP §6.3). Auto is the
+ * default. In Auto, silence requires the explicit per-turn small-edit
  * grant for an eligible effect — anything else takes the ordinary action card.
  * The grant never waives other escalations: schema, moves, out-of-context
- * targets, and untrusted exposure still need review.
+ * targets, and untrusted exposure still need review. Ask mode gates every
+ * mutation behind an approval card.
  */
 export function evaluateApproval(call: ApprovalCall, ctx: ApprovalContext): ApprovalVerdict {
   if (!call.mutates) return { action: 'allow' }

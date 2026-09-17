@@ -158,7 +158,7 @@ Two halves, both yours:
   trusted extension contexts; content scripts cannot read it.
 - A same-user process, or a deliberately loaded modified extension, is outside the
   webpage threat boundary: it can read local extension data and `~/.codex`.
-- **Ask-before-changes is the default.**
+- **Auto is the default.** Silent edits happen only under the explicit per-turn small-edit grant for listed pages; everything else shows an approval card. Ask mode confirms every mutation.
 
 ## Alpha scope
 

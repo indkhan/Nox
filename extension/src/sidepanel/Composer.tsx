@@ -476,8 +476,8 @@ export function Composer({
             data-testid="mode-selector"
             className="cursor-pointer appearance-none rounded-md px-1 py-0.5 text-xs text-zinc-300 outline-none hover:bg-zinc-800"
           >
-            <option value="ask">Ask before changes</option>
             <option value="auto">Auto</option>
+            <option value="ask">Ask before changes</option>
           </select>
           {busy ? (
             <button
