@@ -13,7 +13,7 @@ import { removeUnlinkedAttachments } from '../lib/history/attachments'
 import { openNoxDB } from '../lib/history/schema'
 import { onDeletionNotice } from '../lib/history/deletion'
 import { HISTORY_SAVE_ERROR, startPersistedTurn, type PersistedTurn } from '../lib/history/turn'
-import { logError, logInfo, safeErrorDetail } from '../lib/log'
+import { logError, logInfo, safeErrorDetail, describeArgKeys } from '../lib/log'
 import { requestRuntimeUndo } from '../lib/writes/undo'
 import { restoreTurns } from '../lib/history/restore'
 import type { MentionRef } from '../shared/notion-page'
@@ -209,7 +209,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
     setAgentBusy(true)
     setBusy(true)
     // Epoch 14 / L2: diagnostics record the turn operation only, never prompt text.
-    logInfo(`Send: starting turn ${turnId} (mode=${mode})`)
+    logInfo(`Send: starting turn ${turnId} (mode=${mode}, mentions=${mentions.length}, attachments=${committed.length})`)
     setTurns((t) => [...t, { id: turnId, userText: text, view: { activity: [], answer: '', error: null, pending: true, historyError: persisted ? null : HISTORY_SAVE_ERROR } }])
     const patch = (fn: (v: TurnView) => TurnView) =>
       setTurns((all) => all.map((turn) => turn.id === turnId ? { ...turn, view: fn(turn.view) } : turn))
@@ -253,6 +253,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
             patch((v) => ({ ...v, activity: currentActivity }))
             break
           case 'web-search-completed':
+            logInfo('Web search completed')
             currentActivity = applyActivityEvent(currentActivity, event)
             patch((v) => ({ ...v, activity: currentActivity }))
             break
@@ -262,11 +263,13 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
               pendingReasoning = ''
             }
             currentActivity = applyActivityEvent(currentActivity, event)
-            logInfo(`Tool call: ${event.tool}`)
+            // Verbose trace: tool name + arg keys only; values never enter diagnostics.
+            logInfo(`Tool call: ${event.tool} (${describeArgKeys(event.args)})`)
             patch((v) => ({ ...v, activity: currentActivity }))
             break
           }
           case 'tool-completed':
+            logInfo(`Tool completed: ${event.tool ?? 'tool'} ${event.success === false ? 'failed' : 'ok'} (${event.durationMs ?? 0}ms)`)
             currentActivity = applyActivityEvent(currentActivity, event)
             patch((v) => ({ ...v, activity: currentActivity }))
             break
@@ -324,7 +327,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
         error: result.interrupted ? 'Stopped before Nox finished responding.' : null,
         pending: false,
       }))
-      logInfo(result.interrupted ? 'Turn interrupted' : 'Turn complete')
+      logInfo(result.interrupted ? 'Turn interrupted' : `Turn complete (answer ${result.text.length} chars)`)
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e)
       patch((v) => ({ ...v, error: message, outcome: 'failed', pending: false }))
