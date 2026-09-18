@@ -1,7 +1,7 @@
 import { validateEffect, type ValidatedEffect } from '../writes/effects'
 import { isPlanRef, validateWorkspacePlan, type WorkspacePlan } from './plan'
 import { isInspectedEvidence } from '../agent/retrievals'
-import { describeToolNames, logInfo }
+import { describeToolNames, logInfo } from '../log'
 
 export interface PendingWorkspacePlan {
   id: string
