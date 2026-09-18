@@ -13,7 +13,7 @@ import { removeUnlinkedAttachments } from '../lib/history/attachments'
 import { openNoxDB } from '../lib/history/schema'
 import { onDeletionNotice } from '../lib/history/deletion'
 import { HISTORY_SAVE_ERROR, startPersistedTurn, type PersistedTurn } from '../lib/history/turn'
-import { logError, logInfo, safeErrorDetail, describeArgKeys } from '../lib/log'
+import { logError, logInfo, safeErrorDetail, describeArgKeys, detailedErrorText } from '../lib/log'
 import { requestRuntimeUndo } from '../lib/writes/undo'
 import { restoreTurns } from '../lib/history/restore'
 import type { MentionRef } from '../shared/notion-page'
@@ -269,7 +269,12 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
             break
           }
           case 'tool-completed':
-            logInfo(`Tool completed: ${event.tool ?? 'tool'} ${event.success === false ? 'failed' : 'ok'} (${event.durationMs ?? 0}ms)`)
+            if (event.success === false) {
+              // Error in detail: safe category plus the redacted, truncated message.
+              logError(`Tool failed: ${event.tool ?? 'tool'} (${event.durationMs ?? 0}ms): ${detailedErrorText(event.error ?? 'unknown error')}`)
+            } else {
+              logInfo(`Tool completed: ${event.tool ?? 'tool'} ok (${event.durationMs ?? 0}ms)`)
+            }
             currentActivity = applyActivityEvent(currentActivity, event)
             patch((v) => ({ ...v, activity: currentActivity }))
             break
@@ -332,7 +337,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
       const message = e instanceof Error ? e.message : String(e)
       patch((v) => ({ ...v, error: message, outcome: 'failed', pending: false }))
       await persisted?.persistAssistant(streamedAnswer, lastUsageRef.current ?? undefined, currentActivity, 'failed', message).catch(() => undefined)
-      logError(`Turn failed: ${safeErrorDetail(e)}`)
+      logError(`Turn failed: ${detailedErrorText(e)}`)
     } finally {
       clearTimeout(deadline)
       sendAbortRef.current = null

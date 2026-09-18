@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { ApprovalEngine } from '../src/lib/writes/approvals'
 import { PlanEngine } from '../src/lib/architect/plan-engine'
 import { recordRetrievals } from '../src/lib/agent/retrievals'
-import { clearLogs, describeArgKeys, describeToolNames, formatLogs } from '../src/lib/log'
+import { clearLogs, describeArgKeys, describeToolNames, detailedErrorText, formatLogs } from '../src/lib/log'
 
 const SECRET = 'SECRET_VALUE_abc123'
 const DB = '11111111-2222-3333-4444-555555555555'
@@ -76,5 +76,17 @@ describe('verbose turn trace', () => {
     engine.answer((engine as unknown as { pending: Map<string, unknown> })['pending'].keys().next().value as string, 'rejected')
     await pending
     expect(formatLogs()).toMatch(/Plan rejected/)
+  })
+
+  it('error detail carries the message behind the safe category', () => {
+    const text = detailedErrorText(new Error('STEP_LIMIT_REACHED: 12 tool calls were made'))
+    expect(text).toMatch(/STEP_LIMIT_REACHED/)
+  })
+
+  it('error detail redacts credentials and stays bounded', () => {
+    const text = detailedErrorText(new Error(`boom Bearer ABCDEF123456 ${'x'.repeat(2000)}`))
+    expect(text).not.toContain('ABCDEF123456')
+    expect(text).toMatch(/Bearer \[redacted\]/)
+    expect(text.length).toBeLessThan(500)
   })
 })

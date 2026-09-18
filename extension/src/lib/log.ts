@@ -13,6 +13,8 @@ export const MAX_LOG_MESSAGE_CHARS = 500
 export const MAX_TRACE_ARG_KEYS = 8
 /** Max tool names named in one plan-trace line. */
 export const MAX_TRACE_TOOLS = 10
+/** Max error-message chars kept after the safe category; keeps lines short. */
+export const MAX_ERROR_DETAIL_CHARS = 200
 const buffer: LogEntry[] = []
 const listeners = new Set<() => void>()
 
@@ -146,6 +148,22 @@ export function describeToolNames(tools: unknown[]): string {
     .map((t) => (t.length <= 48 ? t : t.slice(0, 48)))
     .slice(0, MAX_TRACE_TOOLS)
   return tools.length > names.length ? `[${names.join(',')},…] n=${tools.length}` : `[${names.join(',')}] n=${tools.length}`
+}
+
+/**
+ * Error line with detail: the safe category plus the redacted, truncated
+ * error message. Credential patterns are still redacted and the message
+ * suffix is bounded, so this stays one cheap push — but unlike the bare
+ * category, it shows what actually failed. Review before sharing: the
+ * message can name workspace content.
+ */
+export function detailedErrorText(error: unknown): string {
+  const category = safeErrorDetail(error)
+  const raw = error instanceof Error ? error.message : typeof error === 'string' ? error : ''
+  if (!raw || !raw.trim()) return category
+  const clean = sanitizeLogMessage(raw.trim())
+  const short = clean.length > MAX_ERROR_DETAIL_CHARS ? `${clean.slice(0, MAX_ERROR_DETAIL_CHARS)}…` : clean
+  return short === category ? category : `${category} — ${short}`
 }
 
 export function getLogs(): readonly LogEntry[] {
