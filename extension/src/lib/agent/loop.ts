@@ -5,6 +5,7 @@ import { ToolExecutor } from './executor'
 import { buildContextPreamble, type PageContext } from './context'
 import type { CurrentPage } from '../../shared/notion-page'
 import type { LocalAttachment } from '../../shared/attachments'
+import { logInfo } from '../log'
 
 export const DEFAULT_TURN_TIMEOUT_MS = 10 * 60 * 1000
 
@@ -196,6 +197,8 @@ export class AgentLoop {
         this.untrustedContextThisTurn = true
         this.untrustedConversation = true
       }
+      // Verbose trace: context fill counts only; page text never enters diagnostics.
+      logInfo(`Turn context filled: mentions=${mentions?.length ?? 0}, attachments=${opts.attachments?.length ?? 0}, currentPage=${opts.currentPage ? 'yes' : 'no'}`)
       await abortable(this.ensureThread(undefined, abort.signal), abort.signal)
       abort.signal.throwIfAborted()
       if (this.deps.codex.researchLimitation) this.listeners.forEach(l => l({ kind: 'commentary', id: 'research-limitation', text: this.deps.codex.researchLimitation! }))

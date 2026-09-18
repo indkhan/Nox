@@ -1,6 +1,7 @@
 import { validateEffect, type ValidatedEffect } from '../writes/effects'
 import { isPlanRef, validateWorkspacePlan, type WorkspacePlan } from './plan'
 import { isInspectedEvidence } from '../agent/retrievals'
+import { describeToolNames, logInfo } from '../log'
 
 export interface PendingWorkspacePlan {
   id: string
@@ -64,6 +65,9 @@ export class PlanEngine {
     if (this.rejectedDigests.has(digest)) {
       throw new Error('PLAN_REJECTED_REPEAT: this plan was already rejected this turn — ask the user before proposing it again.')
     }
+    // Verbose trace: op count + tool names only; goal, summaries, evidence
+    // titles, and args never enter diagnostics.
+    logInfo(`Plan proposed: ${plan.operations.length} ops ${describeToolNames(plan.operations.map((op) => op.tool))}`)
     return new Promise((resolve) => {
       const pending: PendingWorkspacePlan = {
         id: crypto.randomUUID(),
@@ -71,6 +75,7 @@ export class PlanEngine {
         resolve: (decision) => {
           this.pending.delete(pending.id)
           this.dismiss?.(pending.id)
+          logInfo(`Plan ${decision}: ${plan.operations.length} ops`)
           if (decision === 'approved') {
             this.approved = { plan, scope: { ...scope }, consumed: new Set(), reservations: new Map(), createdSlots: new Map() }
           } else {
@@ -170,7 +175,11 @@ export class PlanEngine {
   }
 
   rejectPending(): void {
+    const count = this.pending.size
     for (const pending of [...this.pending.values()]) pending.resolve('rejected')
+    // resolve() already logs each decision; only log the bare cancel when
+    // there was nothing pending to avoid a duplicate line per turn end.
+    if (count === 0) logInfo('Plan cancelled: no pending plan (turn end)')
   }
 }
 

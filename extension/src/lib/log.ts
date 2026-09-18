@@ -9,6 +9,12 @@ export interface LogEntry {
 const MAX_ENTRIES = 500
 /** Bounded event text: categories and safe codes stay, bodies never do. */
 export const MAX_LOG_MESSAGE_CHARS = 500
+/** Max tool-arg keys named in one trace line; keeps logging O(1). */
+export const MAX_TRACE_ARG_KEYS = 8
+/** Max tool names named in one plan-trace line. */
+export const MAX_TRACE_TOOLS = 10
+/** Max error-message chars kept after the safe category; keeps lines short. */
+export const MAX_ERROR_DETAIL_CHARS = 200
 const buffer: LogEntry[] = []
 const listeners = new Set<() => void>()
 
@@ -120,6 +126,44 @@ export function logInfo(msg: string): void {
 
 export function logError(msg: string): void {
   push('error', msg)
+}
+
+/**
+ * Verbose turn trace (safe by construction): logs event categories, counts,
+ * and key/tool names only — never arg values, titles, prompts, answers, or
+ * workspace ids. Every line stays short so the turn path costs one bounded
+ * push and cannot slow the program.
+ */
+export function describeArgKeys(args: unknown): string {
+  if (!args || typeof args !== 'object' || Array.isArray(args)) return 'args=?'
+  const keys = Object.keys(args as Record<string, unknown>).slice(0, MAX_TRACE_ARG_KEYS)
+  const total = Object.keys(args as Record<string, unknown>).length
+  const names = keys.map((k) => (k.length <= 32 ? k : k.slice(0, 32))).join(',')
+  return total > keys.length ? `keys=[${names},…] n=${total}` : `keys=[${names}] n=${total}`
+}
+
+export function describeToolNames(tools: unknown[]): string {
+  const names = tools
+    .filter((t): t is string => typeof t === 'string')
+    .map((t) => (t.length <= 48 ? t : t.slice(0, 48)))
+    .slice(0, MAX_TRACE_TOOLS)
+  return tools.length > names.length ? `[${names.join(',')},…] n=${tools.length}` : `[${names.join(',')}] n=${tools.length}`
+}
+
+/**
+ * Error line with detail: the safe category plus the redacted, truncated
+ * error message. Credential patterns are still redacted and the message
+ * suffix is bounded, so this stays one cheap push — but unlike the bare
+ * category, it shows what actually failed. Review before sharing: the
+ * message can name workspace content.
+ */
+export function detailedErrorText(error: unknown): string {
+  const category = safeErrorDetail(error)
+  const raw = error instanceof Error ? error.message : typeof error === 'string' ? error : ''
+  if (!raw || !raw.trim()) return category
+  const clean = sanitizeLogMessage(raw.trim())
+  const short = clean.length > MAX_ERROR_DETAIL_CHARS ? `${clean.slice(0, MAX_ERROR_DETAIL_CHARS)}…` : clean
+  return short === category ? category : `${category} — ${short}`
 }
 
 export function getLogs(): readonly LogEntry[] {

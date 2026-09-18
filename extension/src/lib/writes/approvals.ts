@@ -2,6 +2,7 @@ import type { CallClassification } from './classify'
 import { normalizeId } from '../../shared/notion-page'
 import type { ToolCallRequest } from '../codex/client'
 import { isDestructiveKind } from './effects'
+import { describeArgKeys, logInfo } from '../log'
 
 export type Mode = 'ask' | 'auto'
 
@@ -179,6 +180,9 @@ export class ApprovalEngine {
       }
       this.pending.set(display.id, { display, frozenArgs, resolve })
       this.notify?.(display)
+      // Verbose trace: category + tool + scope counts only; arg values,
+      // titles, and payloads never enter diagnostics.
+      logInfo(`Approval requested: ${call.name} (${call.affectedCount} objects, targets=${call.targets.length}, ${describeArgKeys(call.args)})`)
     })
   }
 
@@ -190,15 +194,18 @@ export class ApprovalEngine {
     const entry = this.pending.get(id)
     if (!entry) return false
     this.pending.delete(id)
+    logInfo(`Approval ${id} (${entry.display.tool}) ${decision}`)
     entry.resolve({ approved: decision === 'approve', frozenArgs: entry.frozenArgs })
     return true
   }
 
   rejectAllPending(): void {
+    const count = this.pending.size
     for (const entry of [...this.pending.values()]) {
       this.pending.delete(entry.display.id)
       entry.resolve({ approved: false, frozenArgs: entry.frozenArgs })
     }
+    if (count > 0) logInfo(`Approval cancelled: ${count} pending card(s) rejected (turn end)`)
   }
 }
 

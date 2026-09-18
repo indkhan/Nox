@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useNoxStore } from './store'
+import { logInfo } from '../lib/log'
 import type { PlannedOperation } from '../lib/architect/plan'
 
 export function PlanCards({ readOnly = false }: { readOnly?: boolean }) {
@@ -17,6 +18,7 @@ export function PlanCards({ readOnly = false }: { readOnly?: boolean }) {
     <div className="flex min-h-0 flex-1 flex-col bg-page" data-testid="plan-cards">
       {plans.map((pending, index) => {
         const decide = (decision: 'approved' | 'rejected') => {
+          logInfo(`User ${decision === 'approved' ? 'approved' : 'rejected'} plan: ${pending.plan.operations.length} ops`)
           pending.resolve(decision)
           removePlan(pending.id)
         }

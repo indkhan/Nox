@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNoxStore } from './store'
 import { writeGate } from '../lib/agent/panel'
+import { logInfo } from '../lib/log'
 import { onDeletionNotice } from '../lib/history/deletion'
 import { requestRuntimeUndo } from '../lib/writes/undo'
 import type { ApprovalDisplay } from '../lib/writes/approvals'
@@ -50,6 +51,7 @@ export function ApprovalCards({ readOnly = false }: { readOnly?: boolean }) {
           <div className="mt-3 flex flex-wrap gap-2">
             <button
               onClick={() => {
+                logInfo(`User approved change: ${approval.tool} (${approval.affectedCount} objects)`)
                 writeGate.approvals.answer(approval.id, 'approve')
                 removeApproval(approval.id)
               }}
@@ -60,6 +62,7 @@ export function ApprovalCards({ readOnly = false }: { readOnly?: boolean }) {
             </button>
             <button
               onClick={() => {
+                logInfo(`User rejected change: ${approval.tool} (${approval.affectedCount} objects)`)
                 writeGate.approvals.answer(approval.id, 'reject')
                 removeApproval(approval.id)
               }}
