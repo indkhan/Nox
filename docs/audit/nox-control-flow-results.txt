@@ -1,0 +1,8 @@
+ISOLATED CONTROL-FLOW DEMONSTRATIONS — NOT THE NOX TEST SUITE
+Runtime: v22.16.0
+REPRODUCED: NOX-01: string commands fall through to content-replace while the object command is recognized.
+REPRODUCED: NOX-08: the rich-page blacklist misses structural columns/table content. This does not itself demonstrate a lossy provider round-trip.
+REPRODUCED: NOX-12: three admitted-then-cancelled calls leave three permits reserved despite zero invocations.
+REPRODUCED: NOX-18: simultaneous cold callers create two opening attempts before the cache becomes authoritative.
+Total: 4 expected bad-behavior demonstrations reproduced.
+No repository build, browser/native-host integration, or authenticated provider test was run.
