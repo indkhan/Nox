@@ -21,13 +21,21 @@ const chatMocks = vi.hoisted(() => ({
   onChange: vi.fn<(callback: () => void) => () => void>(),
   deleteAllData: vi.fn<(deps?: { onBlocked?: () => void }) => Promise<void>>(),
   restoreThread: vi.fn(),
+  newThread: vi.fn(),
+  sendUserMessage: vi.fn(async () => ({ text: 'done', interrupted: false })),
+  onTurnEvent: vi.fn(() => () => {}),
   setOverrides: vi.fn(),
   getMessages: vi.fn(async (): Promise<any[]> => []),
   getThread: vi.fn(async (): Promise<any> => null),
+  beginTurn: vi.fn(async (): Promise<any> => { throw new Error('storage offline') }),
+  unresolvedInScope: vi.fn(async (): Promise<any[]> => []),
+  markReviewed: vi.fn(async () => true),
+  readbackForReview: vi.fn(async () => ({ detail: 'Current page was read', targetPageId: 'a'.repeat(32) })),
+  resumeSubmittedTasks: vi.fn(async () => {}),
 }))
 
 vi.mock('../src/lib/agent/panel', () => ({
-  agentLoop: { setOverrides: chatMocks.setOverrides, restoreThread: chatMocks.restoreThread },
+  agentLoop: { setOverrides: chatMocks.setOverrides, restoreThread: chatMocks.restoreThread, newThread: chatMocks.newThread, sendUserMessage: chatMocks.sendUserMessage, onTurnEvent: chatMocks.onTurnEvent },
   fetchMentionContext: vi.fn(),
   prepareAgentTurn: vi.fn(),
   setAgentHistoryThread: vi.fn(),
@@ -40,12 +48,16 @@ vi.mock('../src/lib/agent/panel', () => ({
       scopeThread: chatMocks.scopeThread,
       newestForThread: chatMocks.newestForThread,
       newestFirst: chatMocks.newestFirst,
+      unresolvedInScope: chatMocks.unresolvedInScope,
+      markReviewed: chatMocks.markReviewed,
     },
     handleUndo: chatMocks.handleUndo,
+    readbackForReview: chatMocks.readbackForReview,
+    resumeSubmittedTasks: chatMocks.resumeSubmittedTasks,
   },
 }))
 vi.mock('../src/lib/history/panel', () => ({
-  historyRepo: { getMessages: chatMocks.getMessages, getThread: chatMocks.getThread },
+  historyRepo: { getMessages: chatMocks.getMessages, getThread: chatMocks.getThread, beginTurn: chatMocks.beginTurn },
   storageUsageBytes: vi.fn(async () => null),
   deleteAllData: (...args: unknown[]) => (chatMocks.deleteAllData as (...a: unknown[]) => Promise<void>)(...args),
 }))
@@ -58,7 +70,7 @@ vi.mock('../src/lib/codex/panel', () => ({
     serviceTiers: [{ id: 'fast', name: 'Fast', description: 'Faster responses' }],
   }]) },
 }))
-vi.mock('../src/lib/notion/panel', () => ({ notion: { scheduleCallTool: vi.fn() } }))
+vi.mock('../src/lib/notion/panel', () => ({ notion: { scheduleCallTool: vi.fn(), connectionGeneration: 'a', identity: { workspaceId: 'a' } } }))
 
 import { describe, expect, it } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -75,6 +87,99 @@ import { agentLoop } from '../src/lib/agent/panel'
 import { beginDeletion, endDeletion, __resetDeletionStateForTests } from '../src/lib/history/deletion'
 
 describe('viewer mode', () => {
+  it('resumes accepted Notion tasks when the owner reconnects', async () => {
+    useNoxStore.setState({ connectionStatus: 'connected', codexStatus: 'connected', newChatTick: 0 })
+    chatMocks.onChange.mockReturnValue(() => {})
+    chatMocks.resumeSubmittedTasks.mockClear()
+    const container = document.createElement('div')
+    const root = createRoot(container)
+    try {
+      await act(async () => root.render(<ChatPanel />))
+      expect(chatMocks.resumeSubmittedTasks).toHaveBeenCalledOnce()
+    } finally {
+      await act(async () => root.unmount())
+      useNoxStore.setState({ connectionStatus: 'disconnected', codexStatus: 'unknown' })
+    }
+  })
+  it('shows workspace recovery after its chat was deleted', async () => {
+    useNoxStore.setState({ connectionStatus: 'connected', codexStatus: 'connected', newChatTick: 0, activeThreadId: null })
+    chatMocks.onChange.mockReturnValue(() => {})
+    chatMocks.unresolvedInScope.mockResolvedValueOnce([{ id: 'orphan', threadId: 'deleted', status: 'unknown', tool: 'notion-update-page', targetPageId: 'a'.repeat(32), scope: { workspaceId: 'a' } }])
+    const container = document.createElement('div')
+    const root = createRoot(container)
+    try {
+      await act(async () => root.render(<ChatPanel />))
+      expect(container.querySelector('[data-testid=workspace-recovery]')?.textContent).toContain('Needs review')
+      expect(container.querySelector('[data-testid=workspace-recovery] a')).not.toBeNull()
+      await act(async () => (container.querySelector('[data-testid=workspace-recovery] button:last-of-type') as HTMLButtonElement).click())
+      expect(chatMocks.markReviewed).toHaveBeenCalledWith('orphan', 'inspected from workspace recovery')
+    } finally {
+      await act(async () => root.unmount())
+      useNoxStore.setState({ connectionStatus: 'disconnected', codexStatus: 'unknown' })
+      chatMocks.unresolvedInScope.mockReset().mockResolvedValue([])
+    }
+  })
+  it('does not resume a chat from another workspace', async () => {
+    useNoxStore.setState({ connectionStatus: 'connected', codexStatus: 'connected', newChatTick: 0, openThreadRequest: null })
+    chatMocks.onChange.mockReturnValue(() => {})
+    chatMocks.restoreThread.mockClear()
+    chatMocks.getThread.mockResolvedValueOnce({ id: 'foreign', workspaceId: 'other', codexThreadId: 'old-codex', title: 'Old chat' })
+    const container = document.createElement('div')
+    const root = createRoot(container)
+    try {
+      await act(async () => root.render(<ChatPanel />))
+      await act(async () => useNoxStore.getState().requestOpenThread('foreign'))
+      expect(chatMocks.restoreThread).not.toHaveBeenCalledWith('old-codex')
+    } finally {
+      await act(async () => root.unmount())
+      useNoxStore.setState({ connectionStatus: 'disconnected', codexStatus: 'unknown', openThreadRequest: null })
+    }
+  })
+
+  it('does not send a turn when a persisted chat fails the workspace check', async () => {
+    useNoxStore.setState({ connectionStatus: 'connected', codexStatus: 'connected', newChatTick: 0, openThreadRequest: null })
+    chatMocks.onChange.mockReturnValue(() => {})
+    chatMocks.getThread.mockResolvedValueOnce({ id: 'owned', workspaceId: 'a', codexThreadId: 'old-codex', title: 'Owned' })
+    chatMocks.beginTurn.mockRejectedValueOnce(new Error('WORKSPACE_MISMATCH'))
+    chatMocks.sendUserMessage.mockClear()
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    try {
+      await act(async () => root.render(<ChatPanel />))
+      await act(async () => useNoxStore.getState().requestOpenThread('owned'))
+      ;(notion as unknown as { identity: { workspaceId: string } }).identity.workspaceId = 'b'
+      await act(async () => (container.querySelector('[data-testid=suggest-related]') as HTMLButtonElement).click())
+      expect(chatMocks.sendUserMessage).not.toHaveBeenCalled()
+      expect(container.textContent).toContain('nothing was sent')
+    } finally {
+      await act(async () => root.unmount())
+      container.remove()
+      ;(notion as unknown as { identity: { workspaceId: string } }).identity.workspaceId = 'a'
+      useNoxStore.setState({ connectionStatus: 'disconnected', codexStatus: 'unknown', openThreadRequest: null })
+    }
+  })
+  it('accepts only one of two same-tick starter sends', async () => {
+    useNoxStore.setState({ connectionStatus: 'connected', codexStatus: 'connected', newChatTick: 0 })
+    chatMocks.sendUserMessage.mockClear()
+    chatMocks.onChange.mockReturnValue(() => {})
+    const scrollTo = HTMLElement.prototype.scrollTo
+    HTMLElement.prototype.scrollTo = vi.fn()
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    try {
+      await act(async () => root.render(<ChatPanel />))
+      const button = container.querySelector('[data-testid=suggest-related]') as HTMLButtonElement
+      await act(async () => { button.click(); button.click() })
+      expect(chatMocks.sendUserMessage).toHaveBeenCalledTimes(1)
+    } finally {
+      await act(async () => root.unmount())
+      container.remove()
+      useNoxStore.setState({ connectionStatus: 'disconnected', codexStatus: 'unknown' })
+      HTMLElement.prototype.scrollTo = scrollTo
+    }
+  })
   it('disables the composer for read-only windows', () => {
     const html = renderToStaticMarkup(
       <Composer busy={false} readOnly onSend={vi.fn()} onCancel={vi.fn()} />,
@@ -165,6 +270,55 @@ describe('viewer mode', () => {
 
     await act(async () => root.unmount())
     useNoxStore.setState({ currentPage: null })
+  })
+
+  it('submits only mentions still present in the editor', async () => {
+    const onSend = vi.fn()
+    useNoxStore.setState({ currentPage: { pageId: 'p1', url: 'https://www.notion.so/p1', title: 'Page' } })
+    const container = document.createElement('div')
+    const root = createRoot(container)
+    await act(async () => root.render(<Composer busy={false} onSend={onSend} onCancel={vi.fn()} />))
+    await act(async () => (container.querySelector('[data-testid=add-current-page]') as HTMLButtonElement).click())
+    const editor = container.querySelector('[data-testid=composer]') as HTMLDivElement
+    editor.innerHTML = 'summarize'
+    await act(async () => editor.dispatchEvent(new InputEvent('input', { bubbles: true })))
+    await act(async () => (container.querySelector('[data-testid=send]') as HTMLButtonElement).click())
+    expect(onSend.mock.calls[0][1]).toEqual([])
+    await act(async () => root.unmount())
+    useNoxStore.setState({ currentPage: null })
+  })
+
+  it('keeps a draft typed while the previous send is accepted', async () => {
+    let accept!: (accepted: boolean) => void
+    const onSend = vi.fn(() => new Promise<boolean>((resolve) => { accept = resolve }))
+    const container = document.createElement('div')
+    const root = createRoot(container)
+    await act(async () => root.render(<Composer busy={false} onSend={onSend} onCancel={vi.fn()} />))
+    const editor = container.querySelector('[data-testid=composer]') as HTMLDivElement
+    editor.textContent = 'first'
+    await act(async () => editor.dispatchEvent(new InputEvent('input', { bubbles: true })))
+    await act(async () => (container.querySelector('[data-testid=send]') as HTMLButtonElement).click())
+    editor.textContent = 'second'
+    await act(async () => editor.dispatchEvent(new InputEvent('input', { bubbles: true })))
+    await act(async () => accept(true))
+    expect(editor.textContent).toBe('second')
+    await act(async () => root.unmount())
+  })
+
+  it('clears editor text and consent on a new chat', async () => {
+    useNoxStore.setState({ mode: 'auto', currentPage: { pageId: 'p1', url: 'https://www.notion.so/p1', title: 'Page' } })
+    const container = document.createElement('div')
+    const root = createRoot(container)
+    await act(async () => root.render(<Composer busy={false} onSend={vi.fn()} onCancel={vi.fn()} />))
+    const editor = container.querySelector('[data-testid=composer]') as HTMLDivElement
+    editor.textContent = 'old draft'
+    await act(async () => editor.dispatchEvent(new InputEvent('input', { bubbles: true })))
+    await act(async () => (container.querySelector('[data-testid=allow-small-edits]') as HTMLInputElement).click())
+    await act(async () => useNoxStore.setState({ newChatTick: useNoxStore.getState().newChatTick + 1 }))
+    expect(editor.textContent).toBe('')
+    expect((container.querySelector('[data-testid=allow-small-edits]') as HTMLInputElement).checked).toBe(false)
+    await act(async () => root.unmount())
+    useNoxStore.setState({ currentPage: null, newChatTick: 0 })
   })
 
   it('uses the local page fallback for a current-page icon URL', async () => {
@@ -290,7 +444,7 @@ describe('viewer mode', () => {
     vi.useRealTimers()
   })
 
-  it('reuses cached MCP matches for later mentions', async () => {
+  it('refreshes remote matches for later mention queries', async () => {
     vi.useFakeTimers()
     vi.mocked(notion.scheduleCallTool).mockClear().mockResolvedValueOnce({
       content: [{
@@ -321,12 +475,47 @@ describe('viewer mode', () => {
     await type('@Proj')
     await act(async () => vi.advanceTimersByTimeAsync(200))
     await type('@Projects')
+    await act(async () => vi.advanceTimersByTimeAsync(200))
 
-    expect(notion.scheduleCallTool).toHaveBeenCalledTimes(1)
+    expect(notion.scheduleCallTool).toHaveBeenCalledTimes(2)
     expect(container.querySelector('[data-testid=mention-option-0]')?.textContent).toContain('Projects')
     await act(async () => root.unmount())
     container.remove()
     vi.useRealTimers()
+  })
+
+  it('does not show cached mentions after the Notion connection changes', async () => {
+    vi.useFakeTimers()
+    const mock = vi.mocked(notion.scheduleCallTool)
+    mock.mockReset().mockResolvedValueOnce({ content: [{ type: 'text', text: JSON.stringify({ results: [{ title: 'Projects', url: 'https://www.notion.so/Projects-a1b2c3d4e5f64789abcdef0123456789' }] }) }] }).mockResolvedValue({ content: [] })
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    await act(async () => root.render(<Composer busy={false} onSend={vi.fn()} onCancel={vi.fn()} />))
+    const editor = container.querySelector('[data-testid=composer]') as HTMLDivElement
+    const search = async () => {
+      editor.textContent = '@Proj'
+      const range = document.createRange()
+      range.selectNodeContents(editor)
+      range.collapse(false)
+      window.getSelection()?.removeAllRanges()
+      window.getSelection()?.addRange(range)
+      await act(async () => editor.dispatchEvent(new InputEvent('input', { bubbles: true })))
+      await act(async () => vi.advanceTimersByTimeAsync(200))
+    }
+    try {
+      await search()
+      expect(mock).toHaveBeenCalledWith('notion-search', { query: 'Proj' })
+      expect(container.querySelector('[data-testid=mention-option-0]')?.textContent).toContain('Projects')
+      ;(notion as unknown as { connectionGeneration: string }).connectionGeneration = 'b'
+      await search()
+      expect(container.querySelector('[data-testid=mention-option-0]')).toBeNull()
+    } finally {
+      await act(async () => root.unmount())
+      container.remove()
+      ;(notion as unknown as { connectionGeneration: string }).connectionGeneration = 'a'
+      vi.useRealTimers()
+    }
   })
 
   it('hides mutation approvals in read-only windows', async () => {
@@ -374,6 +563,7 @@ describe('viewer mode', () => {
   })
 
   it('restored viewer timelines explain unavailable undo and dispatch nothing', async () => {
+    useNoxStore.setState({ connectionStatus: 'connected' })
     browser.storageGet.mockImplementation(async (key) => key === 'nox_thread_id' ? { nox_thread_id: 'thread-viewer' } : {})
     chatMocks.getMessages.mockResolvedValueOnce([
       { id: 'u1', threadId: 'thread-viewer', role: 'user', text: 'rename the page', ts: 1 },
@@ -387,7 +577,7 @@ describe('viewer mode', () => {
         activity: [{ kind: 'tool', id: 'call-1', tool: 'notion-update-page', args: { page_id: 'p1' }, status: 'completed' }],
       },
     ])
-    chatMocks.getThread.mockResolvedValueOnce({ id: 'thread-viewer', codexThreadId: null, title: 'Viewer thread' })
+    chatMocks.getThread.mockResolvedValueOnce({ id: 'thread-viewer', codexThreadId: null, title: 'Viewer thread', workspaceId: 'a' })
     chatMocks.newestForThread.mockResolvedValueOnce([
       {
         id: 'journal-1',
@@ -398,6 +588,7 @@ describe('viewer mode', () => {
         tool: 'notion-update-page',
         args: {},
         kind: 'properties',
+        verification: 'verified',
         inverse: { tool: 'notion-update-page', args: {} },
         callId: 'call-1',
       },
@@ -419,6 +610,41 @@ describe('viewer mode', () => {
       await act(async () => root.unmount())
       container.remove()
       browser.storageGet.mockImplementation(async () => ({}))
+      useNoxStore.setState({ connectionStatus: 'disconnected' })
+    }
+  })
+
+  it('does not offer undo for a legacy applied row without readback verification', async () => {
+    useNoxStore.setState({ connectionStatus: 'connected' })
+    browser.storageGet.mockImplementation(async (key) => key === 'nox_thread_id' ? { nox_thread_id: 'thread-legacy' } : {})
+    chatMocks.getMessages.mockResolvedValueOnce([
+      { id: 'u1', threadId: 'thread-legacy', role: 'user', text: 'rename the page', ts: 1 },
+      { id: 'a1', threadId: 'thread-legacy', role: 'assistant', text: 'done', ts: 2, turnStatus: 'complete', activity: [
+        { kind: 'tool', id: 'call-legacy', tool: 'notion-update-page', args: { page_id: 'p1' }, status: 'completed' },
+      ] },
+    ])
+    chatMocks.getThread.mockResolvedValueOnce({ id: 'thread-legacy', codexThreadId: null, title: 'Legacy thread', workspaceId: 'a' })
+    chatMocks.newestForThread.mockResolvedValueOnce([{
+      id: 'journal-legacy', ts: 2, threadId: 'thread-legacy', turnId: 'turn-1', status: 'applied',
+      tool: 'notion-update-page', args: {}, kind: 'properties', targetPageId: 'p1',
+      inverse: { tool: 'notion-update-page', args: {} }, callId: 'call-legacy',
+    }])
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = createRoot(container)
+    try {
+      await act(async () => { root.render(<ChatPanel />) })
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)) })
+      const toggle = container.querySelector('[data-testid=activity-timeline] button')
+      expect(toggle).not.toBeNull()
+      await act(async () => { (toggle as HTMLButtonElement).click() })
+      expect(container.textContent).toContain('Applied, verification unavailable')
+      expect(container.textContent).not.toContain('Undo this change')
+    } finally {
+      await act(async () => root.unmount())
+      container.remove()
+      browser.storageGet.mockImplementation(async () => ({}))
+      useNoxStore.setState({ connectionStatus: 'disconnected' })
     }
   })
 })

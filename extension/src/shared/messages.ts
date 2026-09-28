@@ -157,8 +157,14 @@ export function isNoxMessage(value: unknown): value is NoxMessage {
 
 interface MessageSenderLike {
   id?: string
+  url?: string
   tab?: { id?: number; url?: string }
   frameId?: number
+}
+
+export function isExpectedPanelSender(sender: MessageSenderLike | undefined, extensionId: string): boolean {
+  return sender?.id === extensionId && sender.tab === undefined &&
+    sender.url === `chrome-extension://${extensionId}/src/sidepanel/index.html`
 }
 
 /**

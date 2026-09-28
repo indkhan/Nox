@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { classifyToolCall, detectRichPage, isSafePropertyType, requiresWorkspacePlan } from '../../src/lib/writes/classify'
 import { canonicalizeArgs, EffectValidationError, validateEffect } from '../../src/lib/writes/effects'
+import { buildInverse } from '../../src/lib/writes/inverse'
 
 describe('classifyToolCall', () => {
   it('treats the known read tools as reads', () => {
@@ -18,6 +19,9 @@ describe('classifyToolCall', () => {
   })
 
   it('distinguishes update-page sub-kinds from the args shape', () => {
+    expect(classifyToolCall('notion-update-page', { command: 'update_content' }).kind).toBe('content-update')
+    expect(classifyToolCall('notion-update-page', { command: 'replace_content' }).kind).toBe('content-replace')
+    expect(classifyToolCall('notion-update-page', { command: 'update_properties' }).kind).toBe('properties')
     expect(classifyToolCall('notion-update-page', { command: { type: 'replace_content' } }).kind).toBe('content-replace')
     expect(classifyToolCall('notion-update-page', { command: { type: 'update_content' } }).kind).toBe('content-update')
     expect(classifyToolCall('notion-update-page', { command: { type: 'update_properties' } }).kind).toBe('properties')
@@ -58,8 +62,10 @@ describe('classifyToolCall', () => {
     expect(requiresWorkspacePlan(classifyToolCall('notion-update-data-source'), 'notion-update-data-source', {})).toBe(true)
   })
 
-  it('keeps unverified meeting-note queries out of the read surface', () => {
-    expect(classifyToolCall('notion-query-meeting-notes')).toMatchObject({ mutates: true, kind: 'unknown' })
+  it('classifies currently documented search and meeting-note tools as reads', () => {
+    for (const name of ['notion-ai-search', 'notion-query-meeting-notes', 'notion-get-tool-access']) {
+      expect(classifyToolCall(name)).toMatchObject({ mutates: false, kind: 'read' })
+    }
   })
 })
 
@@ -74,6 +80,15 @@ describe('validateEffect', () => {
     expect(effect.kind).toBe('properties')
     expect(effect.args).toEqual(args)
     expect(effect.args).not.toBe(args)
+  })
+
+  it('accepts documented string commands and requires a recognized update shape', () => {
+    expect(validateEffect('notion-update-page', { page_id: PAGE, command: 'update_content', updates: [] }).kind).toBe('content-update')
+    expect(validateEffect('notion-update-page', { page_id: PAGE, command: 'replace_content', new_str: '' }).kind).toBe('content-replace')
+    expect(() => validateEffect('notion-update-page', { page_id: PAGE, command: 'replace_content' })).toThrow(/INVALID_ARGUMENTS/)
+    expect(() => validateEffect('notion-update-page', { page_id: PAGE, data: { page_id: PAGE }, command: 'replace_content', new_str: 'x' })).toThrow(/INVALID_ARGUMENTS/)
+    expect(() => validateEffect('notion-update-page', { page_id: PAGE, command: 'replace_content', new_str: 'x', content: 'y' })).toThrow(/INVALID_ARGUMENTS/)
+    expect(() => validateEffect('notion-update-page', { page_id: PAGE, command: 'unexpected' })).toThrow(/INVALID_ARGUMENTS/)
   })
 
   it('collects move targets and destinations without scanning every id-like string', () => {
@@ -134,6 +149,17 @@ describe('validateEffect', () => {
     expect(effect.parents).toEqual([PAGE, PAGE])
     expect(effect.count).toBe(2)
   })
+})
+
+it('serializes the documented string-command replacement inverse', () => {
+  expect(buildInverse({ kind: 'content-replace', pageId: 'page-1', markdown: '# Before', baselineComplete: true, commandShape: 'string' })).toMatchObject({
+    kind: 'execute-tool', tool: 'notion-update-page', args: { page_id: 'page-1', command: 'replace_content', new_str: '# Before' },
+  })
+})
+
+it('can restore a verified empty page', () => {
+  const inverse = buildInverse({ kind: 'content-replace', pageId: 'page-1', markdown: '', baselineComplete: true, commandShape: 'object' })
+  expect(inverse).toMatchObject({ kind: 'execute-tool', args: { command: { type: 'replace_content', content: '' } } })
 })
 
 describe('canonicalizeArgs', () => {
@@ -197,6 +223,8 @@ describe('detectRichPage', () => {
     ['a child database lives here', true],
     ['columns:', true],
     ['<empty-block/>', true],
+    ['<columns><column>left</column></columns>', true],
+    ['The word embed appears in this paragraph.', false],
     ['# Simple page\n\nJust text.', false],
     ['- [ ] todo\n- [x] done', false],
   ])('detects %j → %s', (markdown, expected) => {

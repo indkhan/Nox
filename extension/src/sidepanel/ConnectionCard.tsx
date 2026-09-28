@@ -21,6 +21,12 @@ export function ConnectionCard() {
     setBusy(true)
     logInfo('Notion connect: starting')
     try {
+      agentLoop.cancel()
+      planEngine.invalidateApproval()
+      planEngine.rejectPending()
+      writeGate.approvals.rejectAllPending()
+      writeGate.expireBaselines()
+      expireAgentGrants()
       // Load-bearing precondition (RESEARCH §2.1): the narrow origin-strip
       // rule must be installed. This is endpoint compatibility preparation,
       // not header observation: installed/unverified pre-OAuth, with
@@ -55,10 +61,11 @@ export function ConnectionCard() {
         info = await notion.connect(launchConsentFlow)
         // UI completion guard (F3/R5): a sign-out/wipe/delete-all landing
         // after the facade returned must not restore a Connected label.
-        if (!(await notion.tokens.hasRefreshToken())) {
-          throw new Error('[connect] STALE_LOGIN_ATTEMPT: authorization was cleared before completion')
+        if (!(await notion.tokens.isLoginAttemptCurrent(info.credentialGeneration))) {
+          throw new Error('[connect] STALE_LOGIN_ATTEMPT: authorization changed before completion')
         }
       } catch (e) {
+        if (e instanceof Error && e.message.includes('STALE_LOGIN_ATTEMPT')) throw e
         // Failed acceptance (including 401/403/429/5xx/redirect/malformed/
         // missing): clear the rule so retry reinstalls narrowly. No tokens sent.
         try {
@@ -76,6 +83,7 @@ export function ConnectionCard() {
         limitations: collectLimitations(notion),
       })
     } catch (e) {
+      if (e instanceof Error && e.message.includes('STALE_LOGIN_ATTEMPT')) return
       const raw = e instanceof Error ? e.message : String(e)
       logError(`Notion connect failed: ${safeErrorDetail(e)}`)
       const explained = notion.explain(e)

@@ -111,10 +111,12 @@ export function Composer({
   readOnly?: boolean
   /** Epoch 11 / L6: Send stays disabled until both transports are connected. */
   sendDisabledReason?: string | null
-  onSend: (text: string, mentions: MentionRef[], drafts: DraftAttachment[], allowSmallEdits?: boolean) => Promise<void> | void
+  onSend: (text: string, mentions: MentionRef[], drafts: DraftAttachment[], allowSmallEdits?: boolean) => Promise<boolean | void> | boolean | void
   onCancel: () => void
 }) {
   const editorRef = useRef<HTMLDivElement>(null)
+  const submittingRef = useRef(false)
+  const draftVersionRef = useRef(0)
   const [value, setValue] = useState('')
   const [mentions, setMentions] = useState<PickerItem[]>([])
   // Epoch 10 / M7: unsent files live only here in composer memory. Selecting
@@ -126,6 +128,8 @@ export function Composer({
   const [allowSmallEdits, setAllowSmallEdits] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const mentionCache = useRef(new Map<string, PickerItem>())
+  const mentionScope = useRef('')
+  const pickerGeneration = useRef(0)
   const mentionSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [picker, setPicker] = useState<{
     open: boolean
@@ -144,6 +148,12 @@ export function Composer({
   // nothing persisted to clean up.
   useEffect(() => {
     if (newChatTick === 0) return
+    draftVersionRef.current++
+    if (editorRef.current) editorRef.current.innerHTML = ''
+    setValue('')
+    setMentions([])
+    setAllowSmallEdits(false)
+    setPicker({ open: false, query: '', items: [], active: 0, tokenStart: -1, caretEnd: -1 })
     setDrafts([])
     setRejections([])
   }, [newChatTick])
@@ -165,15 +175,19 @@ export function Composer({
   }, [])
 
   const refreshPickerItems = useCallback(async (query: string): Promise<PickerItem[]> => {
+    const scope = `${notion.connectionGeneration}:${notion.identity?.workspaceId ?? ''}`
+    if (mentionScope.current !== scope) {
+      mentionCache.current.clear()
+      mentionScope.current = scope
+    }
     const trimmed = query.trim()
     const matchesCache = (item: PickerItem) => !trimmed || (item.title ?? '').toLocaleLowerCase().includes(trimmed.toLocaleLowerCase())
-    const cachedMatches = [...mentionCache.current.values()].filter(matchesCache)
     const recent = !trimmed
       ? chrome.runtime.sendMessage({ type: 'nox/get-recent-pages' })
           .then((response) => (response as { pages?: PickerItem[] })?.pages ?? [])
           .catch(() => [] as PickerItem[])
       : Promise.resolve([] as PickerItem[])
-    const remote = trimmed && cachedMatches.length === 0
+    const remote = trimmed
       ? notion.scheduleCallTool('notion-search', { query: trimmed })
       .then((result) => {
         const text = result.content
@@ -201,7 +215,12 @@ export function Composer({
       .catch(() => [] as PickerItem[])
       : Promise.resolve([] as PickerItem[])
     const [remoteItems, recentItems] = await Promise.all([remote, recent])
-    for (const item of [...remoteItems, ...recentItems]) mentionCache.current.set(item.pageId, item)
+    if (scope !== `${notion.connectionGeneration}:${notion.identity?.workspaceId ?? ''}`) return []
+    for (const item of [...remoteItems, ...recentItems]) {
+      mentionCache.current.delete(item.pageId)
+      mentionCache.current.set(item.pageId, item)
+      if (mentionCache.current.size > 64) mentionCache.current.delete(mentionCache.current.keys().next().value!)
+    }
     const found = new Map<string, PickerItem>()
     for (const item of [...remoteItems, ...mentionCache.current.values()].filter(matchesCache)) found.set(item.pageId, item)
     return [...found.values()].slice(0, 8)
@@ -211,6 +230,7 @@ export function Composer({
   const syncPicker = useCallback(() => {
     const el = editorRef.current
     if (!el || readOnly) return
+    const generation = ++pickerGeneration.current
     if (mentionSearchTimer.current) clearTimeout(mentionSearchTimer.current)
     const caret = caretOffset(el)
     if (caret < 0) {
@@ -233,19 +253,18 @@ export function Composer({
     const refresh = () => {
       mentionSearchTimer.current = null
       void refreshPickerItems(query).then((items) =>
-        setPicker((p) => (p.open && p.query === query ? { ...p, items, active: 0 } : p)),
+        setPicker((p) => (generation === pickerGeneration.current && p.open && p.query === query ? { ...p, items, active: 0 } : p)),
       )
     }
     const normalized = query.trim().toLocaleLowerCase()
-    const cached = normalized && [...mentionCache.current.values()]
-      .some((item) => (item.title ?? '').toLocaleLowerCase().includes(normalized))
-    if (normalized && !cached) mentionSearchTimer.current = setTimeout(refresh, 200)
+    if (normalized) mentionSearchTimer.current = setTimeout(refresh, 200)
     else refresh()
   }, [readOnly, refreshPickerItems])
 
   const insertChip = useCallback((item: PickerItem): void => {
     const el = editorRef.current
     if (!el) return
+    if ([...el.querySelectorAll<HTMLElement>('.composer-mention')].some((chip) => chip.dataset.mentionId === item.pageId)) return
     const p = pickerRef.current
 
     // Replace the @token (if the picker was open) with the pill.
@@ -278,6 +297,7 @@ export function Composer({
     remove.className = 'ml-0.5 cursor-pointer opacity-60 hover:opacity-100'
     remove.addEventListener('click', () => {
       chip.remove()
+      draftVersionRef.current++
       setMentions((list) => list.filter((m) => m.pageId !== item.pageId))
       setValue(editorText(el))
     })
@@ -299,7 +319,8 @@ export function Composer({
     }
     if (!inserted) el.appendChild(chip)
     chip.after(document.createTextNode('\u00a0'))
-    setMentions((list) => (list.some((m) => m.pageId === item.pageId) ? list : [...list, item]))
+    draftVersionRef.current++
+    setMentions((list) => [...list.filter((m) => m.pageId !== item.pageId), item])
     setValue(editorText(el))
     setPicker({ open: false, query: '', items: [], active: 0, tokenStart: -1, caretEnd: -1 })
     setCaretAtEnd(el)
@@ -309,24 +330,33 @@ export function Composer({
    * a persistence failure retains the text, mentions, and file drafts. */
   async function submit() {
     const el = editorRef.current
-    if (!el || busy || readOnly) return
+    if (!el || busy || readOnly || submittingRef.current) return
     const text = editorText(el).trim()
     if (!text && drafts.length === 0) return
     const outgoing = drafts
+    const originalVersion = draftVersionRef.current
+    const visibleIds = new Set([...el.querySelectorAll<HTMLElement>('.composer-mention')].map((chip) => chip.dataset.mentionId))
+    const visibleMentions = mentions.filter((mention) => visibleIds.has(mention.pageId))
+    submittingRef.current = true
     try {
-      await onSend(text || 'Files attached for local reference (upload into Notion is unavailable in this alpha).', mentions.map(({ pageId, title, iconEmoji, iconUrl }) => ({ pageId, title, iconEmoji, iconUrl })), outgoing, allowSmallEdits)
+      const accepted = await onSend(text || 'Files attached for local reference (upload into Notion is unavailable in this alpha).', visibleMentions.map(({ pageId, title, iconEmoji, iconUrl }) => ({ pageId, title, iconEmoji, iconUrl })), outgoing, allowSmallEdits)
+      if (accepted === false) return
     } catch (error) {
       // Atomic send failed before any Codex/upload request: keep the draft
       // and surface the reason so the user can retry Send.
       const message = error instanceof Error ? error.message : String(error)
       setRejections((all) => (all.includes(message) ? all : [...all, message]))
       return
+    } finally {
+      submittingRef.current = false
     }
-    el.innerHTML = ''
-    setMentions([])
-    setDrafts([])
+    if (draftVersionRef.current === originalVersion) {
+      el.innerHTML = ''
+      setMentions([])
+      setValue('')
+    }
+    setDrafts((all) => all.filter((draft) => !outgoing.some((sent) => sent.id === draft.id)))
     setRejections([])
-    setValue('')
     setAllowSmallEdits(false)
   }
 
@@ -391,8 +421,13 @@ export function Composer({
           data-placeholder="Do anything with AI..."
           className="min-h-[1.75rem] w-full resize-none overflow-y-auto whitespace-pre-wrap break-words bg-transparent px-0.5 text-sm leading-relaxed outline-none"
           onInput={() => {
+            draftVersionRef.current++
             const el = editorRef.current
             if (el && editorText(el) === '') el.innerHTML = ''
+            if (el) {
+              const ids = new Set([...el.querySelectorAll<HTMLElement>('.composer-mention')].map((chip) => chip.dataset.mentionId))
+              setMentions((list) => list.filter((mention) => ids.has(mention.pageId)))
+            }
             setValue(el ? editorText(el) : '')
             syncPicker()
           }}
@@ -451,7 +486,7 @@ export function Composer({
           <ModelControls disabled={readOnly} />
           <span className="flex-1" />
           {mode === 'auto' && !readOnly && (
-            <label className="mr-1 flex cursor-pointer items-center gap-1 text-[11px] text-zinc-500 hover:text-zinc-300" title="Allow up to five small property updates or text additions on the listed pages this turn. Replacements, moves, creations, uploads, and other pages still ask.">
+            <label className="mr-1 flex cursor-pointer items-center gap-1 text-[11px] text-zinc-500 hover:text-zinc-300" title="Allow up to five checkbox changes that set a value to true on the listed pages this turn. Other property changes, replacements, moves, creations, uploads, and other pages still ask.">
               <input
                 type="checkbox"
                 checked={allowSmallEdits}
@@ -504,7 +539,7 @@ export function Composer({
         {mode === 'auto' && !readOnly && grantTargets.length > 0 && (
           <p className="px-1 pb-1 text-[10px] leading-relaxed text-zinc-600" data-testid="small-edit-scope">
             Small edits apply to: {grantTargets.map((target) => target.title ?? target.pageId.slice(0, 8)).join(', ')}. Up to five
-            property updates or text additions — replacements, moves, creations, uploads, and other pages still ask.
+            checkbox changes that set a value to true — other property changes, replacements, moves, creations, uploads, and other pages still ask.
           </p>
         )}
       </div>

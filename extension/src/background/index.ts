@@ -5,6 +5,7 @@ import {
   MAX_ICON_URL_CHARS,
   MAX_TITLE_CHARS,
   isExpectedContentSender,
+  isExpectedPanelSender,
   isPageMetaMessage,
   isValidCurrentPage,
 } from '../shared/messages'
@@ -25,6 +26,7 @@ async function ensureStorageAccess(): Promise<void> {
     console.error('[nox] storage access restriction failed', storageAccessError)
   }
 }
+const storageReady = ensureStorageAccess()
 
 // ── DNR Origin strip (load-bearing; see docs/application.md) ────────────────
 // Installs the single narrow rule (own extension initiator, exact MCP
@@ -104,7 +106,10 @@ async function enrich(page: CurrentPage | null, tabId: number | undefined): Prom
   return validated
 }
 
-async function setActiveTab(tabId: number | undefined): Promise<void> {
+let activePageGeneration = 0
+let activePageWrite = Promise.resolve()
+
+async function setActiveTab(tabId: number | undefined, generation = ++activePageGeneration): Promise<void> {
   if (tabId !== undefined) {
     // Touch the tab's recency stamp so the @ picker can rank by last visit.
     const meta = await loadTabMeta()
@@ -122,8 +127,12 @@ async function setActiveTab(tabId: number | undefined): Promise<void> {
       page = null
     }
   }
-  await chrome.storage.session.set({ [STORAGE_KEY]: page })
-  void chrome.runtime.sendMessage({ type: 'nox/current-page-changed', page }).catch(() => {})
+  activePageWrite = activePageWrite.catch(() => {}).then(async () => {
+    if (generation !== activePageGeneration) return
+    await chrome.storage.session.set({ [STORAGE_KEY]: page })
+    void chrome.runtime.sendMessage({ type: 'nox/current-page-changed', page }).catch(() => {})
+  })
+  await activePageWrite
 }
 
 /** Recently seen Notion pages across tabs — the @ picker's no-query list. */
@@ -164,16 +173,18 @@ chrome.sidePanel
 
 chrome.tabs.onActivated.addListener(({ tabId }) => void setActiveTab(tabId))
 
-chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+chrome.tabs.onUpdated.addListener((_tabId, changeInfo) => {
   if (!changeInfo.url) return
+  const generation = ++activePageGeneration
   void (async () => {
-    if ((await getActiveTabId()) === tabId) await setActiveTab(tabId)
+    await setActiveTab(await getActiveTabId(), generation)
   })()
 })
 
 chrome.windows.onFocusChanged.addListener((windowId) => {
   if (windowId === chrome.windows.WINDOW_ID_NONE) return
-  void (async () => setActiveTab(await getActiveTabId()))()
+  const generation = ++activePageGeneration
+  void (async () => setActiveTab(await getActiveTabId(), generation))()
 })
 
 chrome.tabs.onRemoved.addListener((tabId) => {
@@ -210,6 +221,7 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
       const current = parseNotionUrl(senderUrl)?.pageId
       if (reported && current && reported !== current) return false
     }
+    const generation = ++activePageGeneration
     void (async () => {
       const meta: TabPageMeta = { url: raw.url }
       if (raw.title) meta.title = raw.title
@@ -219,16 +231,18 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
       all[String(tabId)] = meta
       await chrome.storage.session.set({ [META_KEY]: all })
       // The page may already be stored without meta — refresh the active page.
-      await setActiveTab(await getActiveTabId())
+      await setActiveTab(await getActiveTabId(), generation)
     })()
     return false
   }
+  if (!isExpectedPanelSender(sender, chrome.runtime.id)) return false
   if (
     typeof message === 'object' &&
     message !== null &&
     (message as { type?: string }).type === 'nox/get-recent-pages'
   ) {
     void (async () => {
+      await storageReady
       sendResponse({ pages: await getRecentPages() } satisfies { pages: CurrentPage[] })
     })()
     return true
@@ -239,6 +253,7 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
     (message as { type?: string }).type === 'nox/get-current-page'
   ) {
     void (async () => {
+      await storageReady
       const result = await chrome.storage.session.get(STORAGE_KEY)
       const page = (result[STORAGE_KEY] as CurrentPage | null | undefined) ?? null
       sendResponse({ page } satisfies { page: CurrentPage | null })
@@ -251,6 +266,7 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
     (message as { type?: string }).type === 'nox/get-dnr-status'
   ) {
     void (async () => {
+      await storageReady
       // Always re-verify installation: cheap when healthy, self-healing when
       // not. Reports installed/unverified pre-OAuth; carries no tokens.
       // Storage restriction failures surface here as a compatibility error
@@ -269,6 +285,7 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
     // missing/lookup): remove the rule so the next attempt reinstalls
     // narrowly instead of reusing a suspect installation. No tokens carried.
     void (async () => {
+      await storageReady
       try {
         await removeOriginStripRule()
       } catch (error) {
@@ -283,10 +300,11 @@ chrome.runtime.onMessage.addListener((message: unknown, sender, sendResponse) =>
 })
 
 void (async () => {
+  const generation = ++activePageGeneration
   // Restrict credential-bearing storage before any credential use (L3),
   // then ensure the narrow origin-strip rule exists before Notion traffic.
-  await ensureStorageAccess()
+  await storageReady
   await ensureOriginStrip()
   // Warm the session storage on startup.
-  await setActiveTab(await getActiveTabId())
+  await setActiveTab(await getActiveTabId(), generation)
 })()

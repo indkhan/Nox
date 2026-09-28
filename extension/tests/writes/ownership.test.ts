@@ -18,6 +18,7 @@ function makeGate(opts: {
   transport?: Transport
   mode?: Mode
   journal?: MutationJournal
+  markdown?: () => string
 } = {}) {
   let owner = opts.owner ?? true
   let ownerGen: string | null = opts.ownerGen ?? 'owner-gen-1'
@@ -32,7 +33,7 @@ function makeGate(opts: {
       calls.push({ name, args })
       return { content: [{ type: 'text', text: 'ok' }] }
     }),
-    fetchPageMarkdown: async () => '# Simple\noriginal text',
+    fetchPageMarkdown: async () => opts.markdown?.() ?? '# Simple\noriginal text',
     getMode: () => access.mode(),
     getContextSet: () => access.contextPages(),
     journal,
@@ -58,7 +59,7 @@ function propertiesWrite(rid: number) {
   return {
     rid,
     tool: 'notion-update-page',
-    args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: {} } },
+    args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: { Done: true } } },
     namespace: null,
   } as const
 }
@@ -190,7 +191,7 @@ describe('mutation ownership (Epoch 02.1)', () => {
     gate.endTurn()
     await gate.handleUndo('notion-update-page', {
       data: { page_id: PAGE },
-      command: { type: 'update_properties', properties: {} },
+      command: { type: 'update_properties', properties: { Done: true } },
     })
     expect(calls).toHaveLength(1)
   })
@@ -199,12 +200,7 @@ describe('mutation ownership (Epoch 02.1)', () => {
     const release = deferred<{ content: Array<{ type: string; text?: string }> }>()
     const journal = new MutationJournal()
     journal.setThread('thread-owner')
-    const entry = await journal.record({
-      tool: 'notion-update-page',
-      args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: {} } },
-      kind: 'properties',
-      inverse: { tool: 'notion-update-page', args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: {} } } },
-    })
+    const undoArgs = { data: { page_id: PAGE }, command: { type: 'update_properties', properties: { Done: true } } }
     const { gate, calls } = makeGate({
       journal,
       transport: async (name, args) => {
@@ -212,7 +208,7 @@ describe('mutation ownership (Epoch 02.1)', () => {
         return release.promise
       },
     })
-    const undo = gate.handleUndo(entry.inverse!.tool, entry.inverse!.args, { journalId: entry.id })
+    const undo = gate.handleUndo('notion-update-page', undoArgs)
     while (calls.length < 1) await new Promise((r) => setTimeout(r, 0))
     expect(gate.isUndoActive()).toBe(true)
     const blocked = await gate.handle(propertiesWrite(9)) as { isError?: boolean; content: Array<{ text?: string }> }
@@ -229,18 +225,24 @@ describe('mutation ownership (Epoch 02.1)', () => {
     journal.setThread('thread-owner')
     const entry = await journal.record({
       tool: 'notion-update-page',
-      args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: {} } },
-      kind: 'properties',
-      inverse: { tool: 'notion-update-page', args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: {} } } },
+      args: { data: { page_id: PAGE }, command: { type: 'replace_content', content: '# Agent edit' } },
+      kind: 'content-replace',
+      preImage: { kind: 'content-replace', pageId: PAGE, markdown: '# Simple\noriginal text', baselineComplete: true },
+      inverse: { tool: 'notion-update-page', args: { data: { page_id: PAGE }, command: { type: 'replace_content', content: '# Simple\noriginal text' } } },
+      scope: { threadId: 'thread-owner', turnId: 'turn-owner', workspaceId: 'workspace-1', connectionGeneration: 'conn-1', ownerGeneration: 'owner-gen-1' },
+      verification: 'verified',
     })
     let dispatches = 0
+    let markdown = '# Agent edit'
     const { gate } = makeGate({
       journal,
       transport: async () => {
         dispatches++
         await new Promise((r) => setTimeout(r, 5))
+        markdown = '# Simple\noriginal text'
         return { content: [{ type: 'text', text: 'ok' }] }
       },
+      markdown: () => JSON.stringify({ id: PAGE, content: markdown, truncated: false }),
     })
     const [first, second] = await Promise.all([
       requestRuntimeUndo(gate, entry.id),

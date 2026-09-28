@@ -13,6 +13,11 @@ import { WriteGate } from '../../src/lib/writes/gate'
 import { MutationJournal } from '../../src/lib/writes/journal'
 
 describe('toDynamicTools', () => {
+  it('advertises restricted parameters with the discovered tool', () => {
+    const gate = new CapabilityGate({ search: 'available' }, true, { search: { 'filters.title_only': 'Business plan required' } })
+    const [tool] = toDynamicTools([{ name: 'notion-search', description: 'Search pages', inputSchema: { type: 'object' } }], gate)
+    expect(tool.description).toMatch(/filters.title_only.*Business plan required/)
+  })
   const tools: McpTool[] = [
     { name: 'notion-search', description: 'Search', inputSchema: { type: 'object' } },
     { name: 'notion-query-meeting-notes', description: 'Meetings', inputSchema: {} },
@@ -47,8 +52,12 @@ describe('toDynamicTools', () => {
 
   it('defaults a missing inputSchema to an object schema', () => {
     const gate = new CapabilityGate()
-    const out = toDynamicTools([{ name: 'x' } as McpTool], gate)
+    const out = toDynamicTools([{ name: 'notion-search' } as McpTool], gate)
     expect(out[0].inputSchema).toEqual({ type: 'object', properties: {} })
+  })
+  it('does not advertise an unknown tool even when Notion marks it available', () => {
+    const gate = new CapabilityGate({ frobnicate: 'available' }, true)
+    expect(toDynamicTools([{ name: 'notion-frobnicate' } as McpTool], gate).map((tool) => tool.name)).not.toContain('notion-frobnicate')
   })
 })
 
@@ -220,6 +229,19 @@ describe('ToolExecutor', () => {
     expect(calls).toHaveLength(1)
   })
 
+  it('passes the Codex call id to the write dependency', async () => {
+    let received: string | undefined
+    const withId = new ToolExecutor({
+      callTool: async (_name, _args, _signal, _provenance, callId) => {
+        received = callId
+        return { content: [{ type: 'text', text: 'ok' }] }
+      },
+      assertToolAllowed: () => undefined,
+    })
+    await withId.execute({ rid: 1, tool: 'notion-update-page', args: {}, namespace: null, callId: 'call-42' })
+    expect(received).toBe('call-42')
+  })
+
   it('refuses after the step budget is exhausted', async () => {
     for (let i = 0; i < DEFAULT_STEP_LIMIT; i++) {
       await executor.execute({ rid: i, tool: 'notion-search', args: {}, namespace: null })
@@ -235,6 +257,18 @@ describe('ToolExecutor', () => {
     const out = await executor.execute({ rid: 2, tool: 'notion-query-meeting-notes', args: {}, namespace: null })
     expect(out.contentItems[0].text).toMatch(/TOOL_UNAVAILABLE/)
     expect(calls).toHaveLength(0)
+  })
+
+  it('passes arguments to the capability check before dispatch', async () => {
+    let checked: Record<string, unknown> | undefined
+    const guarded = new ToolExecutor({
+      callTool: async () => { throw new Error('must not dispatch') },
+      assertToolAllowed: (_name, args) => { checked = args; throw new Error('restricted parameter') },
+    })
+    const args = { filters: { title_only: true } }
+    const result = await guarded.execute({ rid: 3, tool: 'notion-search', args, namespace: null })
+    expect(checked).toEqual(args)
+    expect(result.success).toBe(false)
   })
 
   it('converts thrown errors into model-readable results', async () => {

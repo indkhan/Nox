@@ -9,7 +9,7 @@ import { McpClient, type McpCallResult, type McpTool } from '../mcp/client'
 import { Scheduler } from '../mcp/scheduler'
 import { classifyToolCall } from '../writes/classify'
 import { classifyError } from '../mcp/errors'
-import { CapabilityGate, parseSelfResult, type SelfInfo } from './capabilities'
+import { CapabilityGate, parseSelfResult, parseToolAccessResult, type SelfInfo } from './capabilities'
 
 /**
  * The one object the rest of the app talks to for everything Notion.
@@ -98,7 +98,7 @@ export class Notion {
   }
 
   /** Full browser flow: discovery → DCR → consent → token exchange. */
-  async connect(launchConsent: (authorizeUrl: string) => Promise<string>): Promise<SelfInfo> {
+  async connect(launchConsent: (authorizeUrl: string) => Promise<string>): Promise<SelfInfo & { credentialGeneration: string }> {
     // Start of a replacement login (Epoch 11 / M8, bound in F3 / R5): abort
     // any in-flight refresh and capture one login-attempt generation before
     // async discovery/consent. The eventual save and identity completion
@@ -121,6 +121,7 @@ export class Notion {
     url.searchParams.set('client_id', clientId)
     url.searchParams.set('redirect_uri', this.deps.redirectUri())
     url.searchParams.set('scope', 'default')
+    url.searchParams.set('resource', 'https://mcp.notion.com/mcp')
     url.searchParams.set('state', state)
     url.searchParams.set('code_challenge', challenge)
     url.searchParams.set('code_challenge_method', 'S256')
@@ -155,7 +156,7 @@ export class Notion {
     if (!(await this.tokenStore.isLoginAttemptCurrent(attempt))) {
       throw new Error('[connect] STALE_LOGIN_ATTEMPT: superseded during identity — refusing to report connected')
     }
-    return info
+    return { ...info, credentialGeneration: attempt }
   }
 
   /** Dev escape hatch: import a token JSON without the consent flow. */
@@ -185,11 +186,13 @@ export class Notion {
     const self = await this.scheduleCallTool('notion-fetch', { id: 'self' })
     const text = McpClient.resultText(self)
     const parsed = parseSelfResult(text)
+    const access = await this.loadToolAccess()
+    if (access) parsed.access = access.access
     if (!(await this.tokenStore.isLoginAttemptCurrent(attempt))) {
       throw new Error('[connect] STALE_LOGIN_ATTEMPT: superseded during identity — refusing to report connected')
     }
     this.selfInfo = parsed
-    this.gate = new CapabilityGate(parsed.access)
+    this.gate = new CapabilityGate(parsed.access, access !== null, access?.restrictedParameters ?? {})
     this.connectionGenerationValue = crypto.randomUUID()
     return parsed
   }
@@ -215,12 +218,18 @@ export class Notion {
    * authenticated acceptance probe above: success establishes acceptance,
    * any failure leaves the connection unverified.
    */
-  async refreshIdentity(): Promise<SelfInfo> {
+  async refreshIdentity(expectedGeneration?: string): Promise<SelfInfo> {
     await this.verifyEndpointAcceptance()
     const self = await this.scheduleCallTool('notion-fetch', { id: 'self' })
     const text = McpClient.resultText(self)
-    this.selfInfo = parseSelfResult(text)
-    this.gate = new CapabilityGate(this.selfInfo.access)
+    const info = parseSelfResult(text)
+    const access = await this.loadToolAccess()
+    if (access) info.access = access.access
+    if (expectedGeneration && !(await this.tokenStore.isLoginAttemptCurrent(expectedGeneration))) {
+      throw new Error('[connect] STALE_LOGIN_ATTEMPT: authorization changed during restore')
+    }
+    this.selfInfo = info
+    this.gate = new CapabilityGate(this.selfInfo.access, access !== null, access?.restrictedParameters ?? {})
     this.connectionGenerationValue = crypto.randomUUID()
     return this.selfInfo
   }
@@ -229,17 +238,26 @@ export class Notion {
     return this.scheduler.schedule('global', () => this.client.listTools(), undefined, { retryable: true })
   }
 
+  private async loadToolAccess(): Promise<SelfInfo | null> {
+    if (!(await this.listTools()).some((tool) => tool.name === 'notion-get-tool-access')) return null
+    const result = await this.scheduleCallTool('notion-get-tool-access', {})
+    if (result.isError) throw new Error('Notion tool access lookup failed')
+    return parseToolAccessResult(McpClient.resultText(result))
+  }
+
   /**
    * Scheduled tool call. Retry safety comes from the trusted local taxonomy,
    * never from a model-supplied argument: known reads may recover from
    * transient failures, while unknown effects and every mutation run once —
    * an ambiguous failure surfaces as an uncertain outcome, not a replay.
    */
-  scheduleCallTool(name: string, args: Record<string, unknown>, signal?: AbortSignal, opts?: { deadline?: number; beforeInvoke?: () => void }): Promise<McpCallResult> {
+  scheduleCallTool(name: string, args: Record<string, unknown>, signal?: AbortSignal, opts?: { deadline?: number; beforeInvoke?: () => void | Promise<void> }): Promise<McpCallResult> {
     // Search has its own slower bucket; everything else rides the global one.
     const bucket = name === 'notion-search' ? 'search' : 'global'
-    const retryable = !classifyToolCall(name, args).mutates
-    return this.scheduler.schedule(bucket, () => this.client.callTool(name, args, signal), signal, { retryable, deadline: opts?.deadline, beforeInvoke: opts?.beforeInvoke })
+    const classification = classifyToolCall(name, args)
+    const retryable = !classification.mutates
+    const preflight = !!opts?.beforeInvoke && (classification.kind === 'content-replace' || classification.kind === 'content-update')
+    return this.scheduler.schedule(bucket, () => this.client.callTool(name, args, signal, opts?.beforeInvoke), signal, { retryable, deadline: opts?.deadline, preflight })
   }
 
   /** Classified failure helper for UI surfaces that catch directly. */
@@ -267,6 +285,7 @@ async function exchangeCode(
 ): Promise<Parameters<TokenStore['saveFromTokenResponse']>[0]> {
   const res = await fetchImpl(metadata.token_endpoint, {
     method: 'POST',
+    redirect: 'error',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
       grant_type: 'authorization_code',
@@ -274,6 +293,7 @@ async function exchangeCode(
       redirect_uri: p.redirectUri,
       client_id: p.clientId,
       code_verifier: p.codeVerifier,
+      resource: 'https://mcp.notion.com/mcp',
     }),
   })
   if (!res.ok) throw new Error(`token endpoint ${res.status}: ${(await res.text()).slice(0, 200)}`)

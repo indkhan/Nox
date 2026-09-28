@@ -5,9 +5,12 @@ import { useNoxStore } from './store'
 /** Restores an existing Notion authorization without opening the OAuth UI. */
 export async function restoreNotionAction(): Promise<void> {
   const setConnection = useNoxStore.getState().setConnection
+  const generation = await notion.tokens.credentialGeneration()
+  if (!generation) return
 
   try {
     if (!(await notion.tokens.hasRefreshToken())) return
+    if (!(await notion.tokens.isLoginAttemptCurrent(generation))) return
 
     setConnection({ connectionStatus: 'connecting', connectionError: null })
     logInfo('Notion restore: starting')
@@ -40,8 +43,9 @@ export async function restoreNotionAction(): Promise<void> {
 
     let info: Awaited<ReturnType<typeof notion.refreshIdentity>>
     try {
-      info = await notion.refreshIdentity()
+      info = await notion.refreshIdentity(generation)
     } catch (error) {
+      if (!(await notion.tokens.isLoginAttemptCurrent(generation))) return
       // Authenticated acceptance failed (401/403/429/5xx/redirect/malformed/
       // missing/lookup): remove the rule so the next attempt reinstalls
       // narrowly, then surface an actionable retry. Sends no tokens.
@@ -54,9 +58,7 @@ export async function restoreNotionAction(): Promise<void> {
     }
     // UI completion guard (F3/R5): a sign-out/wipe landing after identity
     // must not restore a Connected label.
-    if (!(await notion.tokens.hasRefreshToken())) {
-      throw new Error('[connect] STALE_LOGIN_ATTEMPT: authorization was cleared before completion')
-    }
+    if (!(await notion.tokens.isLoginAttemptCurrent(generation))) return
     // Epoch 14 / L2: connection stage only — workspace/user names stay out of diagnostics.
     logInfo('Notion restored: connected')
     setConnection({
@@ -66,6 +68,7 @@ export async function restoreNotionAction(): Promise<void> {
       connectionError: null,
     })
   } catch (error) {
+    if (!(await notion.tokens.isLoginAttemptCurrent(generation))) return
     const raw = error instanceof Error ? error.message : String(error)
     const explained = notion.explain(error)
     const detail = explained.userMessage === raw ? raw : `${explained.userMessage} (${raw})`
@@ -156,7 +159,7 @@ export function watchCredentialSignout(): () => void {
   ) => {
     if (areaName !== 'local') return
     if (!('notion.refresh' in changes)) return
-    if (changes['notion.refresh']?.newValue !== undefined) return
+    if (typeof changes['notion.refresh']?.newValue === 'string' && changes['notion.refresh'].newValue) return
     // Durable credential cleared elsewhere — treat as sign-out.
     const state = useNoxStore.getState()
     if (state.connectionStatus === 'disconnected' && state.identity == null) return

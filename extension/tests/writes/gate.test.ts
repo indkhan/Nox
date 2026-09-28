@@ -1,9 +1,9 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { WriteGate } from '../../src/lib/writes/gate'
 import { UncertainDispatchError } from '../../src/lib/mcp/scheduler'
 import { McpUnauthenticatedError } from '../../src/lib/mcp/client'
 import { MutationJournal, type JournalEntry, type JournalStore } from '../../src/lib/writes/journal'
-import { GuardViolation } from '../../src/lib/writes/guard'
+import { GuardViolation, hashMarkdown } from '../../src/lib/writes/guard'
 import { requestRuntimeUndo, undoEntry, undoNewest } from '../../src/lib/writes/undo'
 import { buildInverse } from '../../src/lib/writes/inverse'
 import { normalizeId } from '../../src/shared/notion-page'
@@ -13,11 +13,13 @@ import type { PlanScope } from '../../src/lib/architect/plan-engine'
 import type { Mode } from '../../src/lib/writes/approvals'
 
 const PAGE = 'a'.repeat(32)
+const completePage = (markdown: string) => JSON.stringify({ id: PAGE, content: markdown, truncated: false })
+const rememberComplete = (gate: WriteGate, markdown: string) => gate.rememberNormalizedRead(PAGE, { structuredContent: { id: PAGE, content: markdown, truncated: false } })
 
 function makeGate(over: {
   mode?: Mode
   markdown?: () => string | Promise<string>
-  callTool?: (name: string, args: Record<string, unknown>) => Promise<{ content: Array<{ type: string; text?: string }>; isError?: boolean }>
+  callTool?: (name: string, args: Record<string, unknown>, signal?: AbortSignal, beforeDispatch?: () => void | Promise<void>) => Promise<{ content: Array<{ type: string; text?: string }>; isError?: boolean }>
   contextSet?: Set<string>
   grant?: { allowed: boolean; pages: string[] }
   authorizeStructuralChange?: (effect: ValidatedEffect, scope: PlanScope) => { allowed: boolean; reason?: string; reservationId?: string }
@@ -42,7 +44,10 @@ function makeGate(over: {
         if (command?.type === 'replace_content' && typeof command.content === 'string') simulatedMarkdown = command.content
         return { content: [{ type: 'text', text: `ran ${name}` }] }
       }),
-    fetchPageMarkdown: async () => over.markdown?.() ?? simulatedMarkdown,
+    fetchPageMarkdown: async () => {
+      const text = await over.markdown?.() ?? simulatedMarkdown
+      return text.trimStart().startsWith('{') || text.includes('…[truncated by Nox]') ? text : completePage(text)
+    },
     getMode: () => access.mode(),
     getContextSet: () => access.contextPages(),
     journal,
@@ -73,7 +78,7 @@ function autoProperties(rid: number, signal?: AbortSignal) {
   return {
     rid,
     tool: 'notion-update-page',
-    args: propertiesArgs(),
+    args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: { Done: true } } },
     namespace: null,
     signal,
   } as const
@@ -101,6 +106,76 @@ function hookJournal(hooks: { onAppend?: (entry: JournalEntry, count: number) =>
 }
 
 describe('WriteGate', () => {
+  it('counts individually approved writes toward the unplanned budget', async () => {
+    const { gate, calls } = makeGate({ mode: 'ask' })
+    for (let i = 0; i < 6; i++) {
+      const pending = gate.handle(autoProperties(i))
+      await vi.waitFor(() => expect(gate.approvals.pendingCount).toBe(1))
+      gate.approvals.answer(gate.approvals.pendingIds[0], 'approve')
+      const result = await pending as { content: Array<{ text: string }> }
+      if (i === 5) expect(result.content[0].text).toMatch(/PLAN_REQUIRED/)
+    }
+    expect(calls).toHaveLength(5)
+  })
+
+  it('keeps an unresolved page write blocking that page in a new chat', async () => {
+    const { gate, journal, calls } = makeGate({ mode: 'auto' })
+    const pending = await journal.beginIntent({
+      tool: 'notion-update-page', args: propertiesArgs(), kind: 'properties', targetPageId: PAGE,
+      scope: { threadId: 'thread-test', turnId: 'old-turn', workspaceId: 'workspace-1', connectionGeneration: 'old', ownerGeneration: 'old' },
+    })
+    await journal.settleIntent(pending.id, { status: 'unknown' })
+    journal.setThread('new-chat')
+    expect(await journal.unresolvedInScope('new-chat', new Set(), 'workspace-1', [PAGE])).toHaveLength(1)
+    const result = await gate.handle(autoProperties(50)) as { content: Array<{ text: string }> }
+    expect(result.content[0].text).toMatch(/CONFLICT_UNRESOLVED/)
+    expect(calls).toHaveLength(0)
+  })
+  it('refuses an undo after switching Notion workspaces', async () => {
+    const { gate, journal, calls } = makeGate({ workspaceId: 'workspace-2' })
+    const args = propertiesArgs()
+    const entry = await journal.record({
+      tool: 'notion-update-page', args, kind: 'properties', targetPageId: PAGE,
+      scope: { threadId: 'thread-test', turnId: 'old', workspaceId: 'workspace-1', connectionGeneration: 'old', ownerGeneration: 'old' },
+      verification: 'verified',
+      preImage: { kind: 'content-replace', pageId: PAGE, markdown: '# Simple\noriginal text', baselineComplete: true },
+      inverse: { tool: 'notion-update-page', args },
+    })
+    await expect(gate.handleUndo('notion-update-page', args, { journalId: entry.id })).rejects.toThrow(/WORKSPACE_CHANGED/)
+    expect(calls).toHaveLength(0)
+  })
+  it('refuses an applied but unverified undo even with a stored inverse', async () => {
+    const { gate, journal, calls } = makeGate()
+    const args = propertiesArgs()
+    const entry = await journal.record({
+      tool: 'notion-update-page', args, kind: 'properties', targetPageId: PAGE,
+      scope: { threadId: 'thread-test', turnId: 'old', workspaceId: 'workspace-1', connectionGeneration: 'old', ownerGeneration: 'old' },
+      verification: 'unverified', inverse: { tool: 'notion-update-page', args },
+    })
+    await expect(gate.handleUndo('notion-update-page', args, { journalId: entry.id })).rejects.toThrow(/NOT_UNDOABLE/)
+    expect(calls).toHaveLength(0)
+  })
+  it('refuses an inverse without a verifiable postcondition before dispatch', async () => {
+    const { gate, journal, calls } = makeGate()
+    const args = propertiesArgs()
+    const entry = await journal.record({
+      tool: 'notion-update-page', args, kind: 'properties', targetPageId: PAGE,
+      scope: { threadId: 'thread-test', turnId: 'old', workspaceId: 'workspace-1', connectionGeneration: 'old', ownerGeneration: 'old' },
+      verification: 'verified', inverse: { tool: 'notion-update-page', args },
+    })
+    await expect(gate.handleUndo('notion-update-page', args, { journalId: entry.id })).rejects.toThrow(/NOT_UNDOABLE/)
+    expect((await journal.getEntry(entry.id))?.status).toBe('applied')
+    expect(calls).toHaveLength(0)
+  })
+  it('refuses legacy undo entries without a recorded workspace', async () => {
+    const { gate, journal, calls } = makeGate()
+    const args = propertiesArgs()
+    const entry = await journal.record({ tool: 'notion-update-page', args, kind: 'properties', targetPageId: PAGE,
+      verification: 'verified', preImage: { kind: 'content-replace', pageId: PAGE, markdown: '# Simple\noriginal text', baselineComplete: true },
+      inverse: { tool: 'notion-update-page', args } })
+    await expect(gate.handleUndo('notion-update-page', args, { journalId: entry.id })).rejects.toThrow(/WORKSPACE_CHANGED/)
+    expect(calls).toHaveLength(0)
+  })
   it('refuses mutations without ownership wiring (deny by default)', async () => {
     let dispatched = false
     const gate = new WriteGate({
@@ -187,7 +262,7 @@ describe('WriteGate', () => {
   it('blocks a write until approved and journals the inverse', async () => {
     const { gate, journal } = makeGate({ mode: 'ask' })
     // Epoch 07: replacement needs a complete model-observed baseline first.
-    await gate.rememberPageRead(PAGE, '# Simple\noriginal text')
+    await rememberComplete(gate, '# Simple\noriginal text')
     const pending = gate.handle({
       rid: 2,
       tool: 'notion-update-page',
@@ -233,12 +308,7 @@ describe('WriteGate', () => {
 
   it('auto mode runs in-context non-escalated writes immediately', async () => {
     const { gate } = makeGate({ mode: 'auto', contextSet: new Set([PAGE]) })
-    const out = (await gate.handle({
-      rid: 4,
-      tool: 'notion-update-page',
-      args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: {} } },
-      namespace: null,
-    })) as { content: Array<{ text: string }> }
+    const out = (await gate.handle(autoProperties(4))) as { content: Array<{ text: string }> }
     expect(out.content[0].text).toContain('ran notion-update-page')
   })
 
@@ -250,7 +320,7 @@ describe('WriteGate', () => {
     })
     // Baseline observes v0; the guard snapshot then reads v0 while the
     // re-read sees v1 → violation with zero dispatches.
-    await gate.rememberPageRead(PAGE, '# v0')
+    await rememberComplete(gate, '# v0')
     // First handle() snapshots v0; assertUnchanged reads v1 → violation.
     const pending = gate.handle({
       rid: 5,
@@ -271,7 +341,7 @@ describe('WriteGate', () => {
     }) })
     // A baseline is required to reach dispatch; the provider rejection then
     // settles known failure.
-    await gate.rememberPageRead(PAGE, '# Simple\noriginal text')
+    await rememberComplete(gate, '# Simple\noriginal text')
     const pending = gate.handle({ rid: 20, tool: 'notion-update-page', args: { page_id: PAGE }, namespace: null })
     await new Promise((r) => setTimeout(r, 10))
     gate.approvals.answer(gate.approvals.pendingIds[0], 'approve')
@@ -291,7 +361,7 @@ describe('WriteGate', () => {
       contextSet: new Set([PAGE]),
       markdown: () => markdown,
       callTool: async (name) => {
-        if (name === 'notion-fetch') return { content: [{ type: 'text', text: markdown }] }
+        if (name === 'notion-fetch') return { content: [{ type: 'text', text: completePage(markdown) }] }
         writes++
         return { content: [{ type: 'text', text: 'written' }] }
       },
@@ -314,7 +384,7 @@ describe('WriteGate', () => {
 
   it('marks rich-page content replacements not-undoable with a reason', async () => {
     const { gate, journal } = makeGate({ mode: 'ask', markdown: () => '# Page\nsynced_block here' })
-    await gate.rememberPageRead(PAGE, '# Page\nsynced_block here')
+    await rememberComplete(gate, '# Page\nsynced_block here')
     const pending = gate.handle({
       rid: 6,
       tool: 'notion-update-page',
@@ -376,12 +446,7 @@ describe('WriteGate', () => {
       recordUnplannedEffects: () => true,
     })
     journal.setThread('thread-test')
-    const out = await gate.handle({
-      rid: 9,
-      tool: 'notion-update-page',
-      args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: {} } },
-      namespace: null,
-    }) as { isError?: boolean; content: Array<{ text?: string }> }
+    const out = await gate.handle(autoProperties(9)) as { isError?: boolean; content: Array<{ text?: string }> }
     expect(out.isError).toBe(true)
     expect(out.content[0].text).toMatch(/JOURNAL_STORAGE_ERROR/)
     expect(dispatched).toBe(false)
@@ -406,7 +471,7 @@ describe('WriteGate', () => {
       markdown: () => markdown,
       callTool: async () => { markdown = '# Nox edit'; return { content: [] } },
     })
-    await gate.rememberPageRead(PAGE, '# Original')
+    await rememberComplete(gate, '# Original')
     const pending = gate.handle({ rid: 21, tool: 'notion-update-page', args: {
       data: { page_id: PAGE }, command: { type: 'replace_content', content: '# Nox edit' },
     }, namespace: null })
@@ -431,12 +496,7 @@ describe('WriteGate', () => {
         throw uncertain
       },
     })
-    await expect(gate.handle({
-      rid: 30,
-      tool: 'notion-update-page',
-      args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: {} } },
-      namespace: null,
-    })).rejects.toBe(uncertain)
+    await expect(gate.handle(autoProperties(30))).rejects.toBe(uncertain)
     expect(dispatches).toBe(1)
     const entries = await journal.newestFirst()
     expect(entries).toHaveLength(1)
@@ -456,12 +516,7 @@ describe('WriteGate', () => {
     })
     // Pre-dispatch failures must surface as-is: no uncertainty wrapper from
     // the gate and no internal retry — but the known failure is recorded.
-    await expect(gate.handle({
-      rid: 31,
-      tool: 'notion-update-page',
-      args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: {} } },
-      namespace: null,
-    })).rejects.toBe(missingToken)
+    await expect(gate.handle(autoProperties(31))).rejects.toBe(missingToken)
     expect(dispatches).toBe(1)
     const entries = await journal.newestFirst()
     expect(entries).toHaveLength(1)
@@ -494,6 +549,122 @@ describe('WriteGate', () => {
 })
 
 describe('WriteGate durable intent (Epoch 04)', () => {
+  it('waits for an async page update before recording success', async () => {
+    const called: string[] = []
+    const signal = new AbortController().signal
+    const add = vi.spyOn(signal, 'addEventListener')
+    const remove = vi.spyOn(signal, 'removeEventListener')
+    const { gate, journal } = makeGate({ mode: 'auto', callTool: async (name) => {
+      called.push(name)
+      return { content: [{ type: 'text', text: JSON.stringify(name === 'notion-update-page'
+        ? { object: 'async_task', id: 'task-1', status: 'queued', poll_after_seconds: 0 }
+        : { object: 'async_task', id: 'task-1', status: 'succeeded', result: { page_id: PAGE } }) }] }
+    } })
+    await gate.handle(autoProperties(39, signal))
+    expect(called).toEqual(['notion-update-page', 'notion-get-async-task'])
+    expect((await journal.newestForThread('thread-test'))[0]?.status).toBe('applied')
+    expect(remove.mock.calls.filter(([name]) => name === 'abort')).toHaveLength(add.mock.calls.filter(([name]) => name === 'abort').length)
+  })
+  it('recognizes an async task carried in structured MCP content', async () => {
+    const { gate, journal } = makeGate({ mode: 'auto', callTool: async (name) => name === 'notion-update-page'
+      ? { content: [], structuredContent: { object: 'async_task', id: 'task-structured', status: 'queued', poll_after_seconds: 0 } }
+      : { content: [{ type: 'text', text: JSON.stringify({ object: 'async_task', id: 'task-structured', status: 'succeeded' }) }] },
+    })
+    await gate.handle(autoProperties(39))
+    expect((await journal.newestForThread('thread-test'))[0]?.remoteTaskId).toBe('task-structured')
+  })
+
+  it('rechecks content after scheduler admission delay, before provider dispatch', async () => {
+    let markdown = '# Original'
+    let admit!: () => void
+    const admission = new Promise<void>((resolve) => { admit = resolve })
+    let entered!: () => void
+    const waiting = new Promise<void>((resolve) => { entered = resolve })
+    let writes = 0
+    const { gate, journal } = makeGate({
+      mode: 'ask',
+      markdown: () => markdown,
+      callTool: async (_name, _args, _signal, beforeDispatch) => {
+        entered()
+        await admission
+        await beforeDispatch?.()
+        writes++
+        return { content: [{ type: 'text', text: 'written' }] }
+      },
+    })
+    await rememberComplete(gate, markdown)
+    const pending = gate.handle({
+      rid: 501,
+      tool: 'notion-update-page',
+      args: { data: { page_id: PAGE }, command: { type: 'replace_content', content: '# Agent edit' } },
+      namespace: null,
+    })
+    await vi.waitFor(() => expect(gate.approvals.pendingCount).toBe(1))
+    gate.approvals.answer(gate.approvals.pendingIds[0], 'approve')
+    await waiting
+    markdown = '# Human edit'
+    admit()
+    const result = await pending as { isError?: boolean; content: Array<{ text?: string }> }
+    expect(result.isError).toBe(true)
+    expect(result.content[0].text).toMatch(/PAGE_CHANGED_SINCE_READ/)
+    expect(writes).toBe(0)
+    expect((await journal.newestFirst())[0].status).toBe('failed')
+  })
+
+  it('restores a string-command content edit with the documented inverse arguments', async () => {
+    let markdown = '# Before'
+    const sent: Record<string, unknown>[] = []
+    const { gate, journal } = makeGate({
+      mode: 'ask',
+      markdown: () => markdown,
+      callTool: async (_name, args) => {
+        sent.push(args)
+        if (typeof args.new_str === 'string') markdown = args.new_str
+        return { content: [{ type: 'text', text: 'ok' }] }
+      },
+    })
+    await rememberComplete(gate, markdown)
+    const pending = gate.handle({
+      rid: 502,
+      tool: 'notion-update-page',
+      args: { page_id: PAGE, command: 'replace_content', new_str: '# After' },
+      namespace: null,
+    })
+    await vi.waitFor(() => expect(gate.approvals.pendingCount).toBe(1))
+    gate.approvals.answer(gate.approvals.pendingIds[0], 'approve')
+    await pending
+    const original = (await journal.newestFirst())[0]
+    expect(original).toMatchObject({ status: 'applied', verification: 'verified' })
+    expect(original.inverse?.args).toMatchObject({ page_id: normalizeId(PAGE), command: 'replace_content', new_str: '# Before' })
+    expect(sent[0]).toEqual({ page_id: PAGE, command: 'replace_content', new_str: '# After' })
+    expect(await requestRuntimeUndo(gate, original.id)).toBe(true)
+    expect(sent[1]).toEqual({ page_id: normalizeId(PAGE), command: 'replace_content', new_str: '# Before' })
+    expect(markdown).toBe('# Before')
+  })
+  it('persists a submitted task and resumes observation without resubmitting the write', async () => {
+    const journal = new MutationJournal()
+    const abort = new AbortController()
+    let writes = 0
+    const first = makeGate({ mode: 'auto', journal, callTool: async (name) => {
+      if (name === 'notion-update-page') {
+        writes++
+        return { content: [{ type: 'text', text: JSON.stringify({ object: 'async_task', id: 'task-1', status: 'queued', poll_after_seconds: 60 }) }] }
+      }
+      throw new Error('poll should be cancelled')
+    } })
+    const pending = first.gate.handle(autoProperties(39, abort.signal))
+    await vi.waitFor(async () => expect((await journal.newestForThread('thread-test'))[0]).toMatchObject({ status: 'submitted', remoteTaskId: 'task-1' }))
+    abort.abort()
+    await pending.catch(() => undefined)
+    expect((await journal.newestForThread('thread-test'))[0]?.status).toBe('submitted')
+    const second = makeGate({ mode: 'auto', journal, callTool: async (name) => {
+      expect(name).toBe('notion-get-async-task')
+      return { content: [{ type: 'text', text: JSON.stringify({ object: 'async_task', id: 'task-1', status: 'succeeded' }) }] }
+    } })
+    await second.gate.resumeSubmittedTasks()
+    expect((await journal.newestForThread('thread-test'))[0]).toMatchObject({ status: 'applied', verification: 'unverified' })
+    expect(writes).toBe(1)
+  })
   const SCOPE = {
     threadId: 'thread-test',
     turnId: 'turn-1',
@@ -597,11 +768,15 @@ describe('WriteGate durable intent (Epoch 04)', () => {
 
   it('links undo intents and marks the original undone only when applied', async () => {
     const { gate, journal } = makeGate({ mode: 'auto' })
+    const args = { data: { page_id: PAGE }, command: { type: 'replace_content', content: '# Simple\noriginal text' } }
     const original = await journal.record({
       tool: 'notion-update-page',
-      args: propertiesArgs(),
-      kind: 'properties',
-      inverse: { tool: 'notion-update-page', args: propertiesArgs() },
+      args,
+      kind: 'content-replace',
+      scope: SCOPE,
+      verification: 'verified',
+      preImage: { kind: 'content-replace', pageId: PAGE, markdown: '# Simple\noriginal text', baselineComplete: true },
+      inverse: { tool: 'notion-update-page', args },
     })
     await expect(requestRuntimeUndo(gate, original.id)).resolves.toBe(true)
     expect((await journal.getEntry(original.id))?.status).toBe('undone')
@@ -610,12 +785,34 @@ describe('WriteGate durable intent (Epoch 04)', () => {
     expect(undoIntents[0]).toMatchObject({ status: 'applied', kind: 'undo' })
   })
 
+  it('does not mark an undo complete when the restored content is absent', async () => {
+    const { gate, journal } = makeGate({
+      markdown: () => '# New',
+      callTool: async () => ({ content: [{ type: 'text', text: 'accepted' }] }),
+    })
+    const original = await journal.record({
+      tool: 'notion-update-page',
+      args: { data: { page_id: PAGE }, command: { type: 'replace_content', content: '# New' } },
+      kind: 'content-replace',
+      scope: SCOPE,
+      verification: 'verified',
+      preImage: { kind: 'content-replace', pageId: PAGE, markdown: '# Old', baselineComplete: true },
+      inverse: {
+        tool: 'notion-update-page',
+        args: { data: { page_id: PAGE }, command: { type: 'replace_content', content: '# Old' }, __nox_expected_hash: await hashMarkdown('# New') },
+      },
+    })
+    await expect(requestRuntimeUndo(gate, original.id)).rejects.toThrow(/verif|restor|match/i)
+    expect((await journal.getEntry(original.id))?.status).toBe('applied')
+  })
+
   it('keeps crashed undo reservations locked instead of clickable', async () => {
     const { gate, journal, calls } = makeGate({ mode: 'auto' })
     const original = await journal.record({
       tool: 'notion-update-page',
       args: propertiesArgs(),
       kind: 'properties',
+      verification: 'verified',
       inverse: { tool: 'notion-update-page', args: propertiesArgs() },
     })
     const reserved = await journal.beginUndoReservation(original.id, {
@@ -635,11 +832,15 @@ describe('WriteGate durable intent (Epoch 04)', () => {
       mode: 'auto',
       assertToolAllowed: (tool) => { throw new Error(`TOOL_UNAVAILABLE: "${tool}" is not available`) },
     })
+    const args = { data: { page_id: PAGE }, command: { type: 'replace_content', content: '# Simple\noriginal text' } }
     const original = await journal.record({
       tool: 'notion-update-page',
-      args: propertiesArgs(),
-      kind: 'properties',
-      inverse: { tool: 'notion-update-page', args: propertiesArgs() },
+      args,
+      kind: 'content-replace',
+      scope: SCOPE,
+      verification: 'verified',
+      preImage: { kind: 'content-replace', pageId: PAGE, markdown: '# Simple\noriginal text', baselineComplete: true },
+      inverse: { tool: 'notion-update-page', args },
     })
     await expect(requestRuntimeUndo(gate, original.id)).rejects.toThrow(/TOOL_UNAVAILABLE/)
     expect(calls).toHaveLength(0)
@@ -650,11 +851,15 @@ describe('WriteGate durable intent (Epoch 04)', () => {
     const controller = new AbortController()
     const { journal } = hookJournal({ onAppend: (entry) => { if (entry.kind === 'undo') controller.abort() } })
     const { gate, calls } = makeGate({ mode: 'auto', journal })
+    const args = { data: { page_id: PAGE }, command: { type: 'replace_content', content: '# Simple\noriginal text' } }
     const original = await journal.record({
       tool: 'notion-update-page',
-      args: propertiesArgs(),
-      kind: 'properties',
-      inverse: { tool: 'notion-update-page', args: propertiesArgs() },
+      args,
+      kind: 'content-replace',
+      scope: SCOPE,
+      verification: 'verified',
+      preImage: { kind: 'content-replace', pageId: PAGE, markdown: '# Simple\noriginal text', baselineComplete: true },
+      inverse: { tool: 'notion-update-page', args },
     })
     await expect(gate.handleUndo(original.inverse!.tool, original.inverse!.args, {
       journalId: original.id,
@@ -674,6 +879,7 @@ describe('WriteGate durable intent (Epoch 04)', () => {
       tool: 'notion-update-page',
       args: propertiesArgs(),
       kind: 'properties',
+      verification: 'verified',
       inverse: { tool: 'notion-update-page', args: propertiesArgs() },
     })
     await journal.beginIntent({ tool: 'notion-update-page', args: {}, kind: 'content-update', scope: SCOPE })
@@ -694,6 +900,29 @@ describe('WriteGate durable intent (Epoch 04)', () => {
     const evidence = await gate.readbackForReview(intent.id)
     expect(evidence).toMatchObject({ supported: true, match: true, targetPageId: PAGE })
     expect(evidence.detail).toMatch(/does not prove/)
+  })
+
+  it('checks a documented replacement from another thread in the same workspace', async () => {
+    const { gate, journal } = makeGate({ mode: 'auto', markdown: () => '# Exact' })
+    const intent = await journal.beginIntent({
+      tool: 'notion-update-page',
+      args: { page_id: PAGE, command: 'replace_content', new_str: '# Exact' },
+      kind: 'content-replace',
+      scope: { ...SCOPE, threadId: 'another-thread' },
+      targetPageId: PAGE,
+    })
+    await journal.settleIntent(intent.id, { status: 'unknown' })
+    expect(await gate.readbackForReview(intent.id)).toMatchObject({ supported: true, match: true })
+  })
+
+  it('does not read back a record from another workspace', async () => {
+    const { gate, journal } = makeGate({ mode: 'auto' })
+    const intent = await journal.beginIntent({
+      tool: 'notion-update-page', args: { page_id: PAGE, command: 'replace_content', new_str: '# Exact' },
+      kind: 'content-replace', scope: { ...SCOPE, workspaceId: 'another-workspace' }, targetPageId: PAGE,
+    })
+    await journal.settleIntent(intent.id, { status: 'unknown' })
+    await expect(gate.readbackForReview(intent.id)).rejects.toThrow(/NOT_UNDOABLE/)
   })
 
   it('reports readback mismatch and unsupported shapes honestly', async () => {
@@ -791,7 +1020,7 @@ describe('WriteGate effect validation (Epoch 05)', () => {
     await gate.handle({
       rid: 54,
       tool: 'notion-update-page',
-      args: { command: { properties: {}, type: 'update_properties' }, data: { page_id: PAGE } },
+      args: { command: { properties: { Done: true }, type: 'update_properties' }, data: { page_id: PAGE } },
       namespace: null,
     })
     const entries = await journal.newestFirst()
@@ -857,6 +1086,8 @@ describe('WriteGate Auto grant and material plans (Epoch 06)', () => {
     expect(out.content[0].text).toContain('ran notion-update-page')
     expect(calls).toHaveLength(1)
     expect(gate.approvals.pendingCount).toBe(0)
+    expect((await gate.journal.newestForThread('thread-test'))[0]?.verification).toBe('unverified')
+    expect(out.content.map((part) => part.text).join(' ')).toMatch(/readback.*not verified/i)
   })
 
   it('grant stays silent only inside its listed pages', async () => {
@@ -877,7 +1108,7 @@ describe('WriteGate Auto grant and material plans (Epoch 06)', () => {
     ]) {
       const { gate } = makeGate(granted)
       // Replacement needs an observed baseline before its card; moves do not.
-      if (req.rid === 73) await gate.rememberPageRead(PAGE, '# Simple\noriginal text')
+      if (req.rid === 73) await rememberComplete(gate, '# Simple\noriginal text')
       const pending = gate.handle(req)
       await new Promise((r) => setTimeout(r, 10))
       expect(gate.approvals.pendingCount).toBe(1)
@@ -1000,9 +1231,9 @@ describe('WriteGate Auto grant and material plans (Epoch 06)', () => {
 describe('MutationJournal undo ordering', () => {
   it('lists newest first and separates undoable from not-undoable', async () => {
     const journal = new MutationJournal()
-    await journal.record({ tool: 't1', args: {}, kind: 'move', inverse: { tool: 'notion-move-pages', args: {} } })
+    await journal.record({ tool: 't1', args: {}, kind: 'move', verification: 'verified', inverse: { tool: 'notion-move-pages', args: {} } })
     await journal.record({ tool: 't2', args: {}, kind: 'create-page', notUndoableReason: 'no delete tool' })
-    await journal.record({ tool: 't3', args: {}, kind: 'move', inverse: { tool: 'notion-move-pages', args: {} } })
+    await journal.record({ tool: 't3', args: {}, kind: 'move', verification: 'verified', inverse: { tool: 'notion-move-pages', args: {} } })
 
     const newestFirst = await journal.newestFirst()
     expect(newestFirst.map((e) => e.tool)).toEqual(['t3', 't2', 't1'])
@@ -1011,7 +1242,7 @@ describe('MutationJournal undo ordering', () => {
 
   it('keeps the journal entry when undo fails', async () => {
     const journal = new MutationJournal()
-    await journal.record({ tool: 'write', args: {}, kind: 'content-update', inverse: { tool: 'undo', args: {} } })
+    await journal.record({ tool: 'write', args: {}, kind: 'content-update', verification: 'verified', inverse: { tool: 'undo', args: {} } })
     await expect(undoNewest(journal, async () => { throw new Error('offline') })).rejects.toThrow('offline')
     expect((await journal.newestFirst())[0].status).toBe('applied')
     expect(await journal.undoable()).toHaveLength(1)
@@ -1019,7 +1250,7 @@ describe('MutationJournal undo ordering', () => {
 
   it('marks a successful undo without deleting its audit record', async () => {
     const journal = new MutationJournal()
-    await journal.record({ tool: 'write', args: {}, kind: 'content-update', inverse: { tool: 'undo', args: {} } })
+    await journal.record({ tool: 'write', args: {}, kind: 'content-update', verification: 'verified', inverse: { tool: 'undo', args: {} } })
     await expect(undoNewest(journal, async () => undefined)).resolves.toBe(true)
     expect((await journal.newestFirst())[0].status).toBe('undone')
     expect(await journal.undoable()).toHaveLength(0)
@@ -1027,8 +1258,8 @@ describe('MutationJournal undo ordering', () => {
 
   it('undoes a selected journal entry instead of only the newest', async () => {
     const journal = new MutationJournal()
-    const older = await journal.record({ tool: 'first', args: {}, kind: 'move', inverse: { tool: 'undo-first', args: {} } })
-    await journal.record({ tool: 'second', args: {}, kind: 'move', inverse: { tool: 'undo-second', args: {} } })
+    const older = await journal.record({ tool: 'first', args: {}, kind: 'move', verification: 'verified', inverse: { tool: 'undo-first', args: {} } })
+    await journal.record({ tool: 'second', args: {}, kind: 'move', verification: 'verified', inverse: { tool: 'undo-second', args: {} } })
     const calls: string[] = []
     await expect(undoEntry(journal, older.id, async (tool) => { calls.push(tool) })).resolves.toBe(true)
     expect(calls).toEqual(['undo-first'])
@@ -1036,7 +1267,7 @@ describe('MutationJournal undo ordering', () => {
 
   it('executes at most one undo while another undo is in flight', async () => {
     const journal = new MutationJournal()
-    const entry = await journal.record({ tool: 'write', args: {}, kind: 'content-update', inverse: { tool: 'undo', args: {} } })
+    const entry = await journal.record({ tool: 'write', args: {}, kind: 'content-update', verification: 'verified', inverse: { tool: 'undo', args: {} } })
     let calls = 0
     let release!: () => void
     const blocked = new Promise<void>((resolve) => { release = resolve })
@@ -1139,7 +1370,7 @@ describe('WriteGate read baselines (Epoch 07)', () => {
     expect(missing.content[0].text).toMatch(/BASELINE_REQUIRED/)
     // A valid baseline followed by a degraded guard read refuses precisely.
     const degraded = makeGate({ mode: 'ask', markdown: () => IDENTITY_TEXT })
-    await degraded.gate.rememberPageRead(PAGE, PLAIN)
+    await rememberComplete(degraded.gate, PLAIN)
     const approved = degraded.gate.handle(replaceReq(4))
     await new Promise((r) => setTimeout(r, 10))
     expect(degraded.gate.approvals.pendingCount).toBe(1)
@@ -1209,13 +1440,16 @@ describe('WriteGate read baselines (Epoch 07)', () => {
         return { content: [{ type: 'text', text: 'written' }] }
       },
     })
-    await gate.rememberPageRead(PAGE, '# Stable')
-    const out = (await gate.handle({
+    await rememberComplete(gate, '# Stable')
+    const pending = gate.handle({
       rid: 1,
       tool: 'notion-update-page',
       args: { data: { page_id: PAGE }, command: { type: 'update_content', content: 'new' } },
       namespace: null,
-    })) as { isError?: boolean; content: Array<{ text?: string }> }
+    })
+    await new Promise((r) => setTimeout(r, 10))
+    gate.approvals.answer(gate.approvals.pendingIds[0], 'approve')
+    const out = (await pending) as { isError?: boolean; content: Array<{ text?: string }> }
     expect(out.isError).toBe(true)
     expect(out.content[0].text).toMatch(/PAGE_CHANGED_SINCE_READ/)
     expect(out.content[0].text).toMatch(/older state/)
@@ -1238,14 +1472,18 @@ describe('WriteGate read baselines (Epoch 07)', () => {
         return { content: [{ type: 'text', text: 'written' }] }
       },
     })
-    await gate.rememberPageRead(PAGE, '# v0')
+    await rememberComplete(gate, '# v0')
     const update = (rid: number, content: string) => ({
       rid,
       tool: 'notion-update-page',
       args: { data: { page_id: PAGE }, command: { type: 'update_content', content } },
       namespace: null,
     }) as const
-    const [first, second] = await Promise.all([gate.handle(update(1, '# v1')), gate.handle(update(2, '# v2'))])
+    const firstPending = gate.handle(update(1, '# v1'))
+    const secondPending = gate.handle(update(2, '# v2'))
+    for (let i = 0; i < 200 && gate.approvals.pendingCount < 2; i++) await new Promise((r) => setTimeout(r, 0))
+    for (const id of gate.approvals.pendingIds) gate.approvals.answer(id, 'approve')
+    const [first, second] = await Promise.all([firstPending, secondPending])
     expect((first as { content: Array<{ text?: string }> }).content[0].text).toContain('written')
     expect((second as { isError?: boolean; content: Array<{ text?: string }> }).isError).toBe(true)
     expect((second as { content: Array<{ text?: string }> }).content[0].text).toMatch(/PAGE_CHANGED_SINCE_READ/)
@@ -1261,13 +1499,16 @@ describe('WriteGate read baselines (Epoch 07)', () => {
         return '# Stable page'
       },
     })
-    await gate.rememberPageRead(PAGE, '# Stable page')
-    const out = (await gate.handle({
+    await rememberComplete(gate, '# Stable page')
+    const pending = gate.handle({
       rid: 1,
       tool: 'notion-update-page',
       args: { data: { page_id: PAGE }, command: { type: 'update_content', content: 'new' } },
       namespace: null,
-    })) as { content: Array<{ text?: string }> }
+    })
+    for (let i = 0; i < 200 && gate.approvals.pendingCount === 0; i++) await new Promise((r) => setTimeout(r, 0))
+    gate.approvals.answer(gate.approvals.pendingIds[0], 'approve')
+    const out = (await pending) as { content: Array<{ text?: string }> }
     expect(out.content[0].text).toContain('ran notion-update-page')
     expect((await journal.newestFirst())[0].status).toBe('applied')
   })
@@ -1280,7 +1521,7 @@ describe('WriteGate read baselines (Epoch 07)', () => {
       markdown: () => current,
       callTool: async (name, args) => {
         dispatches.push(name)
-        if (name === 'notion-fetch') return { content: [{ type: 'text', text: JSON.stringify({ content: current, truncated: false }) }] }
+        if (name === 'notion-fetch') return { content: [{ type: 'text', text: completePage(current) }] }
         const command = args.command as { type?: string; content?: string } | undefined
         if (name === 'notion-update-page' && command?.type === 'replace_content' && typeof command.content === 'string') {
           current = command.content
@@ -1298,6 +1539,7 @@ describe('WriteGate read baselines (Epoch 07)', () => {
     expect(out.content[0].text).toBe('ok')
     expect(current).toBe('# Nox edit')
     const entry = (await journal.undoable())[0]
+    expect(entry.verification).toBe('verified')
     expect(entry.inverse?.tool).toBe('notion-update-page')
     // … a safe supported undo works once …
     await expect(requestRuntimeUndo(gate, entry.id)).resolves.toBe(true)
@@ -1309,7 +1551,7 @@ describe('WriteGate read baselines (Epoch 07)', () => {
 
   it('leaves rich replacements visibly not-undoable with their target', async () => {
     const { gate, journal } = makeGate({ mode: 'ask', markdown: () => '# Page\nsynced_block here' })
-    await gate.rememberPageRead(PAGE, '# Page\nsynced_block here')
+    await rememberComplete(gate, '# Page\nsynced_block here')
     const pending = gate.handle(replaceReq(5, 'x'))
     await new Promise((r) => setTimeout(r, 10))
     gate.approvals.answer([...gate.approvals['pending'].keys()][0]!, 'approve')

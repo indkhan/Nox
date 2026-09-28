@@ -26,6 +26,7 @@ describe('restoreTurns', () => {
     const turns = restoreTurns([row({ role: 'user', text: 'Update it', ts: 1 })], [{
       id: 'journal-1', ts: 2, threadId: 'thread-1', turnId: 'turn-latest', status: 'applied',
       tool: 'notion-update-page', args: { page_id: 'p1' }, kind: 'content-update',
+      verification: 'verified',
       inverse: { tool: 'notion-update-page', args: { page_id: 'p1', status: 'old' } },
     }])
     expect(turns[0].view.activity).toEqual([expect.objectContaining({
@@ -113,7 +114,7 @@ it('restores legacy rows without invented scope or inverses', () => {
     inverse: { tool: 'notion-update-page', args: { page_id: 'p1', status: 'old' } },
   }])
   expect(turns[0].view.activity).toEqual([expect.objectContaining({
-    journalId: 'journal-1', status: 'completed', undoable: true,
+    journalId: 'journal-1', status: 'completed', verification: 'unverified', undoable: false,
   })])
 })
 
@@ -127,6 +128,24 @@ it('keeps precise not-undoable reasons with the real target link on restore', ()
   expect(item).toMatchObject({ journalId: 'journal-2', status: 'completed', undoable: false })
   expect(item).toHaveProperty('notUndoableReason', expect.stringMatching(/round-trip/))
   expect(item).toHaveProperty('inspectUrl', expect.stringContaining('notion.so/p1'))
+})
+
+it('shows accepted remote tasks as unresolved after restart', () => {
+  const turns = restoreTurns([row({ role: 'user', text: 'Update it', ts: 1 })], [{
+    id: 'task-1', ts: 2, threadId: 'thread-1', turnId: 't1', status: 'submitted',
+    tool: 'notion-update-page', args: {}, kind: 'content-update', remoteTaskId: 'remote-1',
+  }])
+  expect(turns[0].view.activity).toContainEqual(expect.objectContaining({ journalId: 'task-1', status: 'unknown', undoable: false, reviewable: false }))
+})
+
+it('restores an applied but unverified change without offering undo', () => {
+  const turns = restoreTurns([row({ role: 'user', text: 'Update it', ts: 1 })], [{
+    id: 'unverified', ts: 2, threadId: 'thread-1', turnId: 'turn-latest', status: 'applied',
+    tool: 'notion-update-page', args: {}, kind: 'content-update', targetPageId: 'p1',
+    verification: 'unverified', inverse: { tool: 'notion-update-page', args: {} },
+  }])
+  const item = turns[0].view.activity.find((entry) => entry.kind === 'tool')
+  expect(item).toMatchObject({ verification: 'unverified', undoable: false, inspectUrl: 'https://www.notion.so/p1' })
 })
 
 it('marks reviewed unknowns as reviewed without changing their status', () => {

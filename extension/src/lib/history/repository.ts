@@ -13,7 +13,7 @@ export interface OwnedAttachmentInput {
 }
 
 export interface ThreadRepository {
-  createThread(title?: string): Promise<ThreadRow>
+  createThread(title?: string, workspaceId?: string): Promise<ThreadRow>
   /**
    * Atomically persist thread creation (when needed), the user message, and
    * the selected attachment bytes with thread ownership in one bounded
@@ -22,7 +22,7 @@ export interface ThreadRepository {
    * so an over-limit send fails with zero partial writes. Attachment rows
    * use `add`, never `put`: one row is never reused across threads.
    */
-  beginTurn(threadId: string | null, userText: string, attachments?: OwnedAttachmentInput[]): Promise<{ threadId: string; userMessage: MessageRow }>
+  beginTurn(threadId: string | null, userText: string, attachments?: OwnedAttachmentInput[], workspaceId?: string): Promise<{ threadId: string; userMessage: MessageRow }>
   getThread(id: string): Promise<ThreadRow | undefined>
   setCodexThreadId(id: string, codexThreadId: string): Promise<void>
   listThreads(): Promise<ThreadRow[]>
@@ -40,15 +40,15 @@ export function threadRepository(db: () => Promise<IDBPDatabase>): ThreadReposit
   let lastMessageTimestamp = 0
 
   return {
-    async createThread(title = 'New chat') {
+    async createThread(title = 'New chat', workspaceId) {
       const conn = await db()
       const now = Date.now()
-      const thread: ThreadRow = { id: uid(), title, createdAt: now, updatedAt: now, mode: 'auto', pinned: false }
+      const thread: ThreadRow = { id: uid(), title, createdAt: now, updatedAt: now, mode: 'auto', pinned: false, workspaceId }
       await conn.put('threads', thread)
       return thread
     },
 
-    async beginTurn(threadId, userText, attachments = []) {
+    async beginTurn(threadId, userText, attachments = [], workspaceId) {
       if (attachments.length > MAX_ATTACHMENT_FILES) {
         throw new Error(`too many attachments: at most ${MAX_ATTACHMENT_FILES} files per turn`)
       }
@@ -72,8 +72,6 @@ export function threadRepository(db: () => Promise<IDBPDatabase>): ThreadReposit
       lastMessageTimestamp = Math.max(now, lastMessageTimestamp + 1)
       const resolvedThreadId = threadId ?? uid()
       const userMessage: MessageRow = { id: uid(), threadId: resolvedThreadId, role: 'user', text: userText, ts: lastMessageTimestamp }
-      const existing = threadId ? ((await conn.get('threads', threadId)) as ThreadRow | undefined) : undefined
-      const thread: ThreadRow = existing ?? { id: resolvedThreadId, title: 'New chat', createdAt: now, updatedAt: now, mode: 'auto', pinned: false }
       const rows: AttachmentRow[] = attachments.map((item) => ({
         id: item.id,
         name: item.name,
@@ -84,6 +82,14 @@ export function threadRepository(db: () => Promise<IDBPDatabase>): ThreadReposit
         createdAt: now,
       }))
       const tx = conn.transaction(['threads', 'messages', 'attachments'], 'readwrite')
+      const existing = threadId ? ((await tx.objectStore('threads').get(threadId)) as ThreadRow | undefined) : undefined
+      if (threadId && !existing) {
+        throw new Error(`thread ${threadId} not found`)
+      }
+      if (existing && workspaceId !== undefined && existing.workspaceId !== workspaceId) {
+        throw new Error('WORKSPACE_MISMATCH: This chat belongs to another or unknown workspace. Start a new chat or reconnect its original workspace.')
+      }
+      const thread: ThreadRow = existing ?? { id: resolvedThreadId, title: 'New chat', createdAt: now, updatedAt: now, mode: 'auto', pinned: false, workspaceId }
       await Promise.all([
         tx.objectStore('threads').put({ ...thread, updatedAt: now }),
         tx.objectStore('messages').put(userMessage),
@@ -101,9 +107,11 @@ export function threadRepository(db: () => Promise<IDBPDatabase>): ThreadReposit
 
     async setCodexThreadId(id, codexThreadId) {
       const conn = await db()
-      const thread = await conn.get('threads', id) as ThreadRow | undefined
+      const tx = conn.transaction('threads', 'readwrite')
+      const thread = await tx.store.get(id) as ThreadRow | undefined
       if (!thread) throw new Error(`thread ${id} not found`)
-      await conn.put('threads', { ...thread, codexThreadId, updatedAt: Date.now() })
+      await tx.store.put({ ...thread, codexThreadId, updatedAt: Date.now() })
+      await tx.done
     },
 
     async listThreads() {
@@ -133,16 +141,20 @@ export function threadRepository(db: () => Promise<IDBPDatabase>): ThreadReposit
 
     async renameThread(id, title) {
       const conn = await db()
-      const thread = (await conn.get('threads', id)) as ThreadRow | undefined
+      const tx = conn.transaction('threads', 'readwrite')
+      const thread = (await tx.store.get(id)) as ThreadRow | undefined
       if (!thread) throw new Error(`thread ${id} not found`)
-      await conn.put('threads', { ...thread, title, updatedAt: Date.now() })
+      await tx.store.put({ ...thread, title, updatedAt: Date.now() })
+      await tx.done
     },
 
     async setPinned(id, pinned) {
       const conn = await db()
-      const thread = (await conn.get('threads', id)) as ThreadRow | undefined
+      const tx = conn.transaction('threads', 'readwrite')
+      const thread = (await tx.store.get(id)) as ThreadRow | undefined
       if (!thread) throw new Error(`thread ${id} not found`)
-      await conn.put('threads', { ...thread, pinned })
+      await tx.store.put({ ...thread, pinned })
+      await tx.done
     },
 
     async deleteThread(id) {
@@ -154,15 +166,19 @@ export function threadRepository(db: () => Promise<IDBPDatabase>): ThreadReposit
       // orphan cleanup handles the latter.
       const conn = await db()
       const tx = conn.transaction(['threads', 'messages', 'journal', 'attachments'], 'readwrite')
-      const [messageKeys, journalKeys, attachmentKeys] = await Promise.all([
+      const [messageKeys, journalRows, attachmentKeys] = await Promise.all([
         tx.objectStore('messages').index('by_thread').getAllKeys(id),
-        tx.objectStore('journal').index('by_thread').getAllKeys(id),
+        tx.objectStore('journal').index('by_thread').getAll(id),
         tx.objectStore('attachments').index('by_thread').getAllKeys(id),
       ])
+      if (journalRows.some((entry: { status?: string; scope?: { workspaceId?: string | null }; reviewedAt?: number }) =>
+        !['applied', 'failed', 'undone'].includes(entry.status ?? '') && !entry.scope?.workspaceId && entry.reviewedAt == null)) {
+        throw new Error('RECOVERY_REVIEW_REQUIRED: review unresolved legacy changes before deleting this chat.')
+      }
       await Promise.all([
         tx.objectStore('threads').delete(id),
         ...messageKeys.map((key) => tx.objectStore('messages').delete(key)),
-        ...journalKeys.map((key) => tx.objectStore('journal').delete(key)),
+        ...journalRows.filter((entry: { status?: string; reservedByUndoOpId?: string }) => ['applied', 'failed', 'undone'].includes(entry.status ?? '') && !entry.reservedByUndoOpId).map((entry: { id: string }) => tx.objectStore('journal').delete(entry.id)),
         ...attachmentKeys.map((key) => tx.objectStore('attachments').delete(key)),
         tx.done,
       ])
@@ -172,9 +188,14 @@ export function threadRepository(db: () => Promise<IDBPDatabase>): ThreadReposit
       const conn = await db()
       lastMessageTimestamp = Math.max(Date.now(), lastMessageTimestamp + 1)
       const row: MessageRow = { ...message, id: message.id ?? uid(), threadId, ts: lastMessageTimestamp }
-      await conn.put('messages', row)
-      const thread = (await conn.get('threads', threadId)) as ThreadRow | undefined
-      if (thread) await conn.put('threads', { ...thread, updatedAt: Date.now() })
+      const tx = conn.transaction(['threads', 'messages'], 'readwrite')
+      const thread = (await tx.objectStore('threads').get(threadId)) as ThreadRow | undefined
+      if (!thread) {
+        throw new Error(`thread ${threadId} not found`)
+      }
+      await tx.objectStore('messages').put(row)
+      await tx.objectStore('threads').put({ ...thread, updatedAt: Date.now() })
+      await tx.done
       return row
     },
 

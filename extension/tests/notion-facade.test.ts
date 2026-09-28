@@ -9,6 +9,8 @@ const AS = {
   authorization_endpoint: 'https://mcp.notion.com/authorize',
   token_endpoint: 'https://mcp.notion.com/token',
   registration_endpoint: 'https://mcp.notion.com/register',
+  code_challenge_methods_supported: ['S256'],
+  token_endpoint_auth_methods_supported: ['none'],
 }
 
 const SELF_TEXT = JSON.stringify({
@@ -67,7 +69,7 @@ describe('Notion facade', () => {
       if (url.endsWith('/token')) return jsonRes({ access_token: 'at-1', refresh_token: 'rt-1', expires_in: 3600 })
       if (url.endsWith('/authorize')) throw new Error('not fetched server-side')
       if (typeof body.method === 'string') {
-        if (body.method === 'initialize') return jsonRes({ jsonrpc: '2.0', id: body.id as number, result: {} }, 200, { 'mcp-session-id': 's1' })
+        if (body.method === 'initialize') return jsonRes({ jsonrpc: '2.0', id: body.id as number, result: { protocolVersion: '2025-06-18' } }, 200, { 'mcp-session-id': 's1' })
         if (body.method === 'tools/list') return rpcResult(body.id as number, { tools: [{ name: 'notion-fetch' }] })
         if (body.method === 'tools/call') {
           const params = body.params as { name: string }
@@ -117,6 +119,26 @@ describe('Notion facade', () => {
     expect(info.access['search']).toBe('available')
   })
 
+  it('uses the advertised tool-access response instead of stale self access', async () => {
+    scripted((_url, body) => {
+      if (body.method === 'initialize') return rpcResult(body.id as number, { protocolVersion: '2025-06-18' })
+      if (body.method === 'notifications/initialized') return new Response(null, { status: 202 })
+      if (body.method === 'tools/list') return rpcResult(body.id as number, { tools: [
+        { name: 'notion-fetch' }, { name: 'notion-get-tool-access' }, { name: 'notion-create-pages' },
+      ] })
+      if (body.method === 'tools/call') {
+        const name = (body.params as { name: string }).name
+        const text = name === 'notion-get-tool-access'
+          ? JSON.stringify({ current_tool_access: { fetch: { status: 'available' }, create_pages: { status: 'plan_required' } } })
+          : SELF_TEXT
+        return rpcResult(body.id as number, { content: [{ type: 'text', text }] })
+      }
+      throw new Error('unexpected request')
+    })
+    await notion.importToken({ access_token: 'at', refresh_token: 'rt', expires_in: 3600 })
+    expect(notion.capabilities.can('notion-create-pages').allowed).toBe(false)
+  })
+
   it('scheduleCallTool routes search through the search bucket and others globally', async () => {
     standardServer()
     await notion.importToken({ access_token: 'at', refresh_token: 'rt', expires_in: 3600 })
@@ -160,7 +182,8 @@ describe('Notion facade', () => {
       if (url === customTokenUrl) return jsonRes({ access_token: 'at-2', refresh_token: 'rt-2', expires_in: 3600 })
       if (url.endsWith('/token')) throw new Error(`hardcoded fallback hit: ${url}`)
       if (typeof body.method === 'string') {
-        if (body.method === 'initialize') return jsonRes({ jsonrpc: '2.0', id: body.id as number, result: {} }, 200, { 'mcp-session-id': 's1' })
+        if (body.method === 'initialize') return jsonRes({ jsonrpc: '2.0', id: body.id as number, result: { protocolVersion: '2025-06-18' } }, 200, { 'mcp-session-id': 's1' })
+        if (body.method === 'tools/list') return rpcResult(body.id as number, { tools: [{ name: 'notion-fetch' }] })
         if (body.method === 'tools/call') {
           return rpcResult(body.id as number, { content: [{ type: 'text', text: SELF_TEXT }] })
         }
@@ -183,7 +206,8 @@ describe('Notion facade', () => {
       if (url.endsWith('/register')) return jsonRes({ client_id: 'cid-1' }, 201)
       if (url.includes('/token')) return jsonRes({ access_token: 'at-1', refresh_token: 'rt-1', expires_in: 3600 })
       if (typeof body.method === 'string') {
-        if (body.method === 'initialize') return jsonRes({ jsonrpc: '2.0', id: body.id as number, result: {} }, 200, { 'mcp-session-id': 's1' })
+        if (body.method === 'initialize') return jsonRes({ jsonrpc: '2.0', id: body.id as number, result: { protocolVersion: '2025-06-18' } }, 200, { 'mcp-session-id': 's1' })
+        if (body.method === 'tools/list') return rpcResult(body.id as number, { tools: [{ name: 'notion-fetch' }] })
         if (body.method === 'tools/call') {
           return rpcResult(body.id as number, { content: [{ type: 'text', text: SELF_TEXT }] })
         }
@@ -192,7 +216,7 @@ describe('Notion facade', () => {
       throw new Error(`unexpected ${url}`)
     })
     await notion.importToken({ access_token: 'at', refresh_token: 'rt', expires_in: 3600 })
-    await expect(notion.tokens.refresh()).rejects.toThrow(/discovered token endpoint/i)
+    await expect(notion.tokens.refresh()).rejects.toThrow(/token_endpoint/i)
   })
 
   it('never retries a mutation after a transient 503: exactly one dispatch', async () => {
@@ -203,7 +227,8 @@ describe('Notion facade', () => {
       if (url.endsWith('/register')) return jsonRes({ client_id: 'cid-1' }, 201)
       if (url.endsWith('/token')) return jsonRes({ access_token: 'at-1', refresh_token: 'rt-1', expires_in: 3600 })
       if (typeof body.method === 'string') {
-        if (body.method === 'initialize') return jsonRes({ jsonrpc: '2.0', id: body.id as number, result: {} }, 200, { 'mcp-session-id': 's1' })
+        if (body.method === 'initialize') return jsonRes({ jsonrpc: '2.0', id: body.id as number, result: { protocolVersion: '2025-06-18' } }, 200, { 'mcp-session-id': 's1' })
+        if (body.method === 'tools/list') return rpcResult(body.id as number, { tools: [{ name: 'notion-fetch' }] })
         if (body.method === 'tools/call') {
           const params = body.params as { name: string }
           if (params.name === 'notion-fetch') {
@@ -229,7 +254,8 @@ describe('Notion facade', () => {
       if (url.endsWith('/register')) return jsonRes({ client_id: 'cid-1' }, 201)
       if (url.endsWith('/token')) return jsonRes({ access_token: 'at-1', refresh_token: 'rt-1', expires_in: 3600 })
       if (typeof body.method === 'string') {
-        if (body.method === 'initialize') return jsonRes({ jsonrpc: '2.0', id: body.id as number, result: {} }, 200, { 'mcp-session-id': 's1' })
+        if (body.method === 'initialize') return jsonRes({ jsonrpc: '2.0', id: body.id as number, result: { protocolVersion: '2025-06-18' } }, 200, { 'mcp-session-id': 's1' })
+        if (body.method === 'tools/list') return rpcResult(body.id as number, { tools: [{ name: 'notion-fetch' }] })
         if (body.method === 'tools/call') {
           const params = body.params as { name: string }
           if (params.name === 'notion-fetch') {
@@ -255,7 +281,8 @@ describe('Notion facade', () => {
       if (url.endsWith('/register')) return jsonRes({ client_id: 'cid-1' }, 201)
       if (url.endsWith('/token')) return jsonRes({ access_token: 'at-1', refresh_token: 'rt-1', expires_in: 3600 })
       if (typeof body.method === 'string') {
-        if (body.method === 'initialize') return jsonRes({ jsonrpc: '2.0', id: body.id as number, result: {} }, 200, { 'mcp-session-id': 's1' })
+        if (body.method === 'initialize') return jsonRes({ jsonrpc: '2.0', id: body.id as number, result: { protocolVersion: '2025-06-18' } }, 200, { 'mcp-session-id': 's1' })
+        if (body.method === 'tools/list') return rpcResult(body.id as number, { tools: [{ name: 'notion-fetch' }] })
         if (body.method === 'tools/call') {
           const params = body.params as { name: string }
           if (params.name === 'notion-fetch' && ++fetchCalls === 1) {

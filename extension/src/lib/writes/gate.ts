@@ -22,6 +22,7 @@ export type MutationRejectionCode =
   | 'NOT_UNDOABLE'
   | 'NO_PERSISTED_THREAD'
   | 'NO_WORKSPACE_SCOPE'
+  | 'WORKSPACE_CHANGED'
   | 'CONFLICT_UNRESOLVED'
   | 'JOURNAL_STORAGE_ERROR'
 
@@ -86,7 +87,7 @@ export interface ReadbackEvidence {
 }
 
 export interface WriteGateDeps {
-  callTool: (name: string, args: Record<string, unknown>, signal?: AbortSignal, beforeDispatch?: () => void) => Promise<{ content: Array<{ type: string; text?: string }>; isError?: boolean }>
+  callTool: (name: string, args: Record<string, unknown>, signal?: AbortSignal, beforeDispatch?: () => void | Promise<void>) => Promise<{ content: Array<{ type: string; text?: string }>; isError?: boolean }>
   fetchPageMarkdown: (pageId: string, signal?: AbortSignal) => Promise<string>
   getMode: () => Mode
   getContextSet: () => Set<string>
@@ -306,13 +307,13 @@ export class WriteGate {
     // Give the undo its own operation scope instead of demanding a new chat.
     this.journal.ensureUndoTurn()
     const scope = this.captureIntentScope(snapshot)
-    await this.requireNoConflict(scope.threadId)
+    await this.requireNoConflict(scope)
     return this.runExclusive(async () => {
       this.reassertMutation(snapshot, opts.signal)
       if (this.turnActive) {
         throw new MutationRejectedError('TURN_ACTIVE', 'a turn started while this undo was queued — the undo was refused. No changes were made.')
       }
-      await this.requireNoConflict(scope.threadId)
+      await this.requireNoConflict(scope)
       let original: JournalEntry | undefined
       if (opts.journalId) {
         original = await this.revalidateUndoEntry(opts.journalId, tool, args)
@@ -392,9 +393,12 @@ export class WriteGate {
           // Trusted internal fields (undo hashes) travel in the journal but
           // never reach the provider.
           result = await this.deps.callTool(tool, stripReservedArgs(frozenArgs), opts.signal, () => this.assertDispatchAuthority(snapshot, scope, opts.signal, tool))
+          result = await this.resolveAsyncWrite(result, opts.signal, undoOpId)
         } catch (e) {
           const [status, detail] = classifyDispatchOutcome(e)
-          await this.settleUndo(undoOpId, opts.journalId, status, detail)
+          if (!undoOpId || (await this.journal.getEntry(undoOpId))?.status !== 'submitted') {
+            await this.settleUndo(undoOpId, opts.journalId, status, detail)
+          }
           if (status === 'unknown') {
             const undoPage = trustedPageId(args)
             if (undoPage) this.retireBaseline(undoPage)
@@ -405,6 +409,17 @@ export class WriteGate {
           const detail = result.content.map((part) => part.text ?? '').join('\n')
           await this.settleUndo(undoOpId, opts.journalId, 'failed', detail)
           throw new Error(detail || 'the undo was rejected by the provider')
+        }
+        const prior = original?.preImage as PreImage | undefined
+        if (prior?.pageId && typeof prior.markdown === 'string') {
+          try {
+            const restored = await capturePageSnapshot((id) => this.deps.fetchPageMarkdown(id, opts.signal), prior.pageId)
+            requireCompleteBaseline(restored.record)
+            if (restored.hash !== await hashMarkdown(prior.markdown)) throw new Error('restored content does not match the prior page')
+          } catch (error) {
+            await this.settleUndo(undoOpId, opts.journalId, 'unknown', 'undo result could not be verified')
+            throw new Error(`UNDO_UNVERIFIED: ${error instanceof Error ? error.message : String(error)}`)
+          }
         }
         {
           const undoPage = trustedPageId(args)
@@ -471,10 +486,10 @@ export class WriteGate {
     }
     const snapshot = this.admitMutation(signal)
     const scope = this.captureIntentScope(snapshot)
-    await this.requireNoConflict(scope.threadId)
+    await this.requireNoConflict(scope, intent.targetPageId ? [intent.targetPageId] : [])
     return this.runExclusive(async () => {
       this.reassertMutation(snapshot, signal)
-      await this.requireNoConflict(scope.threadId)
+      await this.requireNoConflict(scope, intent.targetPageId ? [intent.targetPageId] : [])
       let op: JournalEntry
       try {
         op = await this.journal.beginIntent({
@@ -528,8 +543,8 @@ export class WriteGate {
    * what Nox attempted, nothing more.
    */
   async readbackForReview(journalId: string): Promise<ReadbackEvidence> {
-    const entry = (await this.journal.newestFirst()).find((candidate) => candidate.id === journalId)
-    if (!entry) {
+    const entry = await this.journal.getEntry(journalId)
+    if (!entry || !entry.scope?.workspaceId || entry.scope.workspaceId !== (this.deps.getWorkspaceId?.() ?? null)) {
       throw new MutationRejectedError('NOT_UNDOABLE', 'this change is no longer available to review.')
     }
     if (entry.status !== 'pending' && entry.status !== 'unknown') {
@@ -642,6 +657,16 @@ export class WriteGate {
     if (!entry || entry.status !== 'applied' || !entry.inverse) {
       throw new MutationRejectedError('NOT_UNDOABLE', 'this change is no longer available to undo.')
     }
+    if (entry.verification !== 'verified') {
+      throw new MutationRejectedError('NOT_UNDOABLE', 'the change was not verified after application. Inspect it in Notion before any manual repair.')
+    }
+    const preImage = entry.preImage as PreImage | undefined
+    if (!preImage?.pageId || typeof preImage.markdown !== 'string' || preImage.baselineComplete !== true) {
+      throw new MutationRejectedError('NOT_UNDOABLE', 'the prior state cannot be verified after undo. No changes were made.')
+    }
+    if (!entry.scope?.workspaceId || entry.scope.workspaceId !== (this.deps.getWorkspaceId?.() ?? null)) {
+      throw new MutationRejectedError('WORKSPACE_CHANGED', 'this change belongs to another or unknown Notion workspace. No changes were made.')
+    }
     if (entry.reservedByUndoOpId != null) {
       throw new MutationRejectedError('NOT_UNDOABLE', 'an undo is already recorded for this change — inspect it before retrying.')
     }
@@ -675,8 +700,8 @@ export class WriteGate {
   }
 
   /** Refuse new effects while another operation in scope is unresolved. Reads stay available. */
-  private async requireNoConflict(threadId: string): Promise<void> {
-    const blocking = await this.journal.unresolvedInScope(threadId, this.activeIntentIds)
+  private async requireNoConflict(scope: IntentScope, targets: string[] = []): Promise<void> {
+    const blocking = await this.journal.unresolvedInScope(scope.threadId, this.activeIntentIds, scope.workspaceId, targets)
     if (blocking.length > 0) {
       const kinds = [...new Set(blocking.map((entry) => entry.tool))].slice(0, 3).join(', ')
       throw new MutationRejectedError(
@@ -737,7 +762,7 @@ export class WriteGate {
       }
       snapshot = this.admitMutation(req.signal)
       scope = this.captureIntentScope(snapshot)
-      await this.requireNoConflict(scope.threadId)
+      await this.requireNoConflict(scope, [...effect.targets, ...effect.parents])
     } catch (e) {
       return textResult(e instanceof Error ? e.message : String(e))
     }
@@ -803,7 +828,6 @@ export class WriteGate {
     // Plan-covered operations skip only redundant ordinary consent: the plan
     // card was the consent step, and every other check still runs below.
     let frozenArgs = effect.args
-    let grantPath = false
     if (reservationId === undefined) {
       const approvalCall = {
         ...classification,
@@ -831,9 +855,6 @@ export class WriteGate {
           return textResult('REJECTED_BY_USER: the user declined this change. Do not retry it without asking.')
         }
         frozenArgs = decision.frozenArgs
-      } else {
-        // Silent only via the explicit grant path (Auto); Ask never allows.
-        grantPath = verdict.action === 'allow'
       }
     }
 
@@ -844,7 +865,7 @@ export class WriteGate {
         // earlier work settled. A queued call admitted while its predecessor
         // was still active must stop here when that predecessor is now
         // unknown/pending, even though the pre-queue check passed.
-        await this.requireNoConflict(scope.threadId)
+        await this.requireNoConflict(scope, [...effect.targets, ...effect.parents])
       } catch (e) {
         return textResult(e instanceof Error ? e.message : String(e))
       }
@@ -852,13 +873,13 @@ export class WriteGate {
       if (reservationId !== undefined && this.deps.checkPlanReservation && !this.deps.checkPlanReservation(reservationId, planScope)) {
         return textResult('PLAN_MISMATCH: the approved operation is no longer valid for this turn — request a fresh review. No changes were made.')
       }
-      if (grantPath) {
+      if (reservationId === undefined) {
         // Reserve the unplanned-effect budget synchronously before dispatch,
         // counted by objects. Past the cap, demand a workspace plan first.
         // Reservations are never released — not even after ambiguous dispatch.
         const reserved = this.deps.recordUnplannedEffects?.(effect.count) ?? true
         if (!reserved) {
-          return textResult('PLAN_REQUIRED: this turn already used its five unplanned small edits — propose a workspace plan for the remaining work. No changes were made.')
+          return textResult('PLAN_REQUIRED: this turn already used its five unplanned effects — propose a workspace plan for the remaining work. No changes were made.')
         }
       }
       return this.executeMutation(req, classification, scope, snapshot, effect, frozenArgs, reservationId, baselineHash)
@@ -954,13 +975,45 @@ export class WriteGate {
       }
 
       let result: unknown
+      let preflightFailed = false
       try {
-        result = await this.deps.callTool(req.tool, frozenArgs, req.signal, () => this.assertDispatchAuthority(snapshot, scope, req.signal, req.tool))
+        result = await this.deps.callTool(req.tool, frozenArgs, req.signal, async () => {
+          try {
+            this.assertDispatchAuthority(snapshot, scope, req.signal, req.tool)
+            if (reservationId !== undefined && this.deps.checkPlanReservation && !this.deps.checkPlanReservation(reservationId, {
+              workspaceId: scope.workspaceId,
+              connectionGeneration: scope.connectionGeneration,
+              threadId: scope.threadId,
+              turnId: scope.turnId,
+            })) throw new GuardViolation('PLAN_MISMATCH: the approved operation is no longer valid for this turn. No changes were made.')
+            if (guard.snapshot) {
+              let fresh: PageSnapshot
+              try {
+                fresh = await capturePageSnapshot((id) => this.deps.fetchPageMarkdown(id, req.signal), guard.snapshot.pageId)
+                requireCompleteBaseline(fresh.record)
+              } catch (e) {
+                if (isAbortError(e)) throw e
+                throw new GuardViolation(`Could not re-read the page before dispatch: ${e instanceof Error ? e.message : String(e)}`)
+              }
+              this.assertDispatchAuthority(snapshot, scope, req.signal, req.tool)
+              if (fresh.hash !== guard.snapshot.hash) throw new GuardViolation('PAGE_CHANGED_SINCE_READ: this page was edited in Notion after Nox read it. Re-read the page and request a fresh review. No changes were made.')
+            }
+          } catch (e) {
+            preflightFailed = true
+            throw e
+          }
+        })
+        result = await this.resolveAsyncWrite(result, req.signal, intent.id)
       } catch (e) {
-        const [status, detail] = classifyDispatchOutcome(e)
-        await this.settleProtected(intent.id, { status, outcomeDetail: detail })
+        const [status, detail] = preflightFailed
+          ? ['failed' as const, e instanceof Error ? e.message : String(e)]
+          : classifyDispatchOutcome(e)
+        if ((await this.journal.getEntry(intent.id))?.status !== 'submitted') {
+          await this.settleProtected(intent.id, { status, outcomeDetail: detail })
+        }
         if (status === 'unknown' && effect.targets[0]) this.retireBaseline(effect.targets[0])
         this.consumeReservation(reservationId)
+        if (preflightFailed) return textResult(`${detail} Write aborted before dispatch.`)
         throw e
       }
       if (isToolError(result)) {
@@ -975,21 +1028,25 @@ export class WriteGate {
       // optional verification reads. A success-record failure keeps the
       // pending row and surfaces a session-visible recovery warning.
       try {
-        await this.journal.settleIntent(intent.id, { status: 'applied' })
+        await this.journal.settleIntent(intent.id, { status: 'applied', verification: 'unverified' })
       } catch (e) {
         console.error('[nox] write succeeded but journal persistence failed', e)
         throw appliedRecoveryWarning(result)
       }
 
       const inverse = buildInverse(guard.preImage)
+      let verified = false
       if (inverse.kind === 'execute-tool' && guard.preImage.pageId) {
         try {
           const postWrite = await capturePageSnapshot((id) => this.deps.fetchPageMarkdown(id, req.signal), guard.preImage.pageId)
-          const command = frozenArgs.command as Record<string, unknown> | undefined
-          const intendedContent = command?.type === 'replace_content' && typeof command.content === 'string' ? command.content : null
+          const command = frozenArgs.command as Record<string, unknown> | string | undefined
+          const intendedContent = command === 'replace_content' && typeof frozenArgs.new_str === 'string'
+            ? frozenArgs.new_str
+            : typeof command === 'object' && command?.type === 'replace_content' && typeof command.content === 'string' ? command.content : null
           if (intendedContent == null || postWrite.hash !== await hashMarkdown(intendedContent)) {
             throw new Error('post-write state cannot be attributed safely')
           }
+          verified = true
           inverse.args = { ...inverse.args, __nox_expected_hash: postWrite.hash }
         } catch {
           inverse.kind = 'not-undoable'
@@ -1002,6 +1059,7 @@ export class WriteGate {
       try {
         await this.journal.settleIntent(intent.id, {
           status: 'applied',
+          verification: verified ? 'verified' : 'unverified',
           inverse: inverse.kind === 'execute-tool' ? { tool: inverse.tool!, args: inverse.args! } : undefined,
           notUndoableReason: inverse.kind === 'not-undoable' ? inverse.reason : undefined,
         })
@@ -1010,9 +1068,59 @@ export class WriteGate {
         throw appliedRecoveryWarning(result)
       }
       this.consumeReservation(reservationId, resultTextOf(result))
-      return result
+      return verified ? result : appendUnverifiedReceipt(result)
     } finally {
       this.activeIntentIds.delete(intent.id)
+    }
+  }
+
+  private async resolveAsyncWrite(result: unknown, signal?: AbortSignal, intentId?: string): Promise<unknown> {
+    const task = parseAsyncTask(result)
+    if (!task) return result
+    if (intentId) await this.journal.settleIntent(intentId, { status: 'submitted', remoteTaskId: task.id })
+    const until = Date.now() + 10 * 60_000
+    let current = task
+    for (let attempts = 0; attempts < 100 && Date.now() < until; attempts++) {
+      if (current.status === 'succeeded') {
+        return { content: [{ type: 'text', text: JSON.stringify(current.result ?? current) }] }
+      }
+      if (current.status === 'failed') {
+        return textResult(`Notion async task failed: ${JSON.stringify(current.error ?? current)}`)
+      }
+      if (!['queued', 'running', 'retrying'].includes(current.status)) break
+      await new Promise<void>((resolve, reject) => {
+        const cleanup = () => { clearTimeout(timer); signal?.removeEventListener('abort', aborted) }
+        const aborted = () => { cleanup(); reject(signal?.reason ?? new DOMException('Aborted', 'AbortError')) }
+        const timer = setTimeout(() => { cleanup(); resolve() }, Math.max(0, Math.min(current.poll_after_seconds ?? 2, 30)) * 1000)
+        signal?.addEventListener('abort', aborted, { once: true })
+        if (signal?.aborted) aborted()
+      })
+      signal?.throwIfAborted()
+      const polled = await this.deps.callTool('notion-get-async-task', { task_id: task.id }, signal)
+      if (polled.isError) throw new Error(`Notion async task status unavailable: ${textOfResult(polled)}`)
+      current = parseAsyncTask(polled) ?? { ...current, status: 'unknown' }
+    }
+    throw new Error(`Notion async task ${task.id} did not reach a known final status`)
+  }
+
+  /** After a panel restart, observe accepted tasks only; never replay their mutations. */
+  async resumeSubmittedTasks(signal?: AbortSignal): Promise<void> {
+    const workspaceId = this.deps.getWorkspaceId?.() ?? null
+    if (!workspaceId || !this.deps.ownership?.isOwner()) return
+    const entries = await this.journal.unresolvedInScope(null, new Set(), workspaceId)
+    for (const entry of entries.filter((row) => row.status === 'submitted' && row.remoteTaskId)) {
+      signal?.throwIfAborted()
+      try {
+        const task = { object: 'async_task', id: entry.remoteTaskId!, status: 'queued', poll_after_seconds: 0 }
+        const result = await this.resolveAsyncWrite({ content: [{ type: 'text', text: JSON.stringify(task) }] }, signal)
+        if (isToolError(result)) {
+          await this.journal.settleIntent(entry.id, { status: 'failed', outcomeDetail: textOfResult(result) })
+        } else {
+          await this.journal.settleIntent(entry.id, { status: 'applied', verification: 'unverified', notUndoableReason: 'The task completed after restart; inspect the result in Notion before undo.' })
+        }
+      } catch {
+        // Observation can resume later. The submitted row continues blocking conflicting writes.
+      }
     }
   }
 
@@ -1076,6 +1184,7 @@ export class WriteGate {
             markdown: snapshot.markdown,
             richPage: detectRichPage(snapshot.markdown),
             baselineComplete: true,
+            commandShape: typeof req.args.command === 'string' ? 'string' : 'object',
           }
         }
         if (snapshot) {
@@ -1178,6 +1287,27 @@ function resultTextOf(result: unknown): string | undefined {
     .join('\n')
 }
 
+function appendUnverifiedReceipt(result: unknown): unknown {
+  if (!result || typeof result !== 'object' || !Array.isArray((result as { content?: unknown }).content)) return result
+  const response = result as { content: unknown[] }
+  return { ...response, content: [...response.content, { type: 'text', text: 'Nox: the provider reported success, but readback was not verified. Inspect the change in Notion before relying on it.' }] }
+}
+
+function parseAsyncTask(result: unknown): { id: string; status: string; poll_after_seconds?: number; result?: unknown; error?: unknown } | null {
+  const structured = result && typeof result === 'object' ? (result as { structuredContent?: unknown }).structuredContent : undefined
+  let value: unknown = structured
+  if (value == null) {
+    const text = resultTextOf(result)
+    if (!text) return null
+    try { value = JSON.parse(text) } catch { return null }
+  }
+  if (!value || typeof value !== 'object') return null
+  const record = value as Record<string, unknown>
+  const task = record.async_task && typeof record.async_task === 'object' ? record.async_task as Record<string, unknown> : record
+  if (task.object !== 'async_task' || typeof task.id !== 'string' || typeof task.status !== 'string') return null
+  return task as { id: string; status: string; poll_after_seconds?: number; result?: unknown; error?: unknown }
+}
+
 /**
  * Outcome for a thrown dispatch failure. Pre-dispatch proof settles known
  * failure; the safe default after dispatch is unknown — no contract here
@@ -1216,7 +1346,11 @@ function appliedRecoveryWarning(result: unknown): Error {
 /** Exact intended post-content for a replace_content operation, if knowable. */
 function intendedReplaceContent(entry: JournalEntry): { pageId: string; content: string } | null {
   if (!entry.targetPageId) return null
-  const command = (entry.args as Record<string, unknown> | undefined)?.command as Record<string, unknown> | undefined
+  const args = entry.args as Record<string, unknown> | undefined
+  if (args?.command === 'replace_content' && typeof args.new_str === 'string') {
+    return { pageId: entry.targetPageId, content: args.new_str }
+  }
+  const command = args?.command as Record<string, unknown> | undefined
   if (command?.type !== 'replace_content' || typeof command.content !== 'string') return null
   return { pageId: entry.targetPageId, content: command.content }
 }

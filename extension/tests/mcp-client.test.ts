@@ -74,7 +74,7 @@ describe('McpClient', () => {
           },
         )
       }
-      return new Response(sseBody({ jsonrpc: '2.0', id: parsed.id, result: {} }), {
+      return new Response(sseBody({ jsonrpc: '2.0', id: parsed.id, result: parsed.method === 'tools/list' ? { tools: [] } : {} }), {
         status: 200,
         headers: { 'content-type': 'text/event-stream' },
       })
@@ -102,6 +102,24 @@ describe('McpClient', () => {
     await client.listTools()
     const headers = fetchCalls[1].init.headers as Record<string, string>
     expect(headers['mcp-session-id']).toBe('sess-7')
+    expect(headers['mcp-protocol-version']).toBe('2025-06-18')
+    expect((fetchCalls[0].init.headers as Record<string, string>)['mcp-protocol-version']).toBeUndefined()
+  })
+
+  it('rejects a protocol version it cannot speak before sending initialized', async () => {
+    const client = makeClient((_url, body) => {
+      const request = body as { id: number }
+      return new Response(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2025-11-25' } }))
+    })
+    await expect(client.initialize()).rejects.toThrow(/protocol version/i)
+    expect(fetchCalls).toHaveLength(1)
+  })
+
+  it('does not repeat the initialize handshake on an open connection', async () => {
+    const client = makeClient()
+    await client.initialize()
+    await client.initialize()
+    expect(fetchCalls).toHaveLength(2)
   })
 
   it('listTools returns the tools array', async () => {
@@ -120,6 +138,42 @@ describe('McpClient', () => {
     expect(tools.map((t) => t.name)).toEqual(['notion-search', 'notion-fetch'])
   })
 
+  it('lists all tool pages using nextCursor', async () => {
+    const seen: unknown[] = []
+    const client = makeClient((_url, body) => {
+      const request = body as { id: number; method: string; params: { cursor?: string } }
+      if (request.method === 'initialize') return new Response(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2025-06-18' } }))
+      if (request.method === 'notifications/initialized') return new Response(null, { status: 202 })
+      seen.push(request.params.cursor)
+      return new Response(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: request.params.cursor
+        ? { tools: [{ name: 'notion-update-page' }] }
+        : { tools: [{ name: 'notion-fetch' }], nextCursor: 'page-2' } }))
+    })
+    await client.initialize()
+    expect((await client.listTools()).map((tool) => tool.name)).toEqual(['notion-fetch', 'notion-update-page'])
+    expect(seen).toEqual([undefined, 'page-2'])
+  })
+
+  it('reinitializes a stale session without replaying a mutation', async () => {
+    let initializations = 0
+    let writes = 0
+    const client = makeClient((_url, body) => {
+      const request = body as { id: number; method: string; params?: { name?: string } }
+      if (request.method === 'initialize') {
+        initializations++
+        return new Response(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { protocolVersion: '2025-06-18' } }), { headers: { 'mcp-session-id': `sess-${initializations}` } })
+      }
+      if (request.method === 'notifications/initialized') return new Response(null, { status: 202 })
+      if (request.method === 'tools/call') { writes++; return new Response('expired', { status: 404 }) }
+      return new Response(JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { tools: [] } }))
+    })
+    await client.initialize()
+    await expect(client.callTool('notion-update-page', {})).rejects.toThrow(/404/)
+    expect(writes).toBe(1)
+    expect(initializations).toBe(2)
+    await expect(client.listTools()).resolves.toEqual([])
+  })
+
   it('callTool posts name+arguments and flattens text content', async () => {
     const client = makeClient((_url, body) => {
       const b = body as { method: string; id: number; params: Record<string, unknown> }
@@ -134,7 +188,7 @@ describe('McpClient', () => {
           { status: 200 },
         )
       }
-      return new Response(JSON.stringify({ jsonrpc: '2.0', id: b.id, result: {} }), { status: 200 })
+      return new Response(JSON.stringify({ jsonrpc: '2.0', id: b.id, result: { protocolVersion: '2025-06-18' } }), { status: 200 })
     })
     await client.initialize()
     const res = await client.callTool('notion-search', { query: 'roadmap' })
@@ -239,6 +293,42 @@ describe('McpClient', () => {
       const mine = JSON.stringify({ jsonrpc: '2.0', id: b.id, result: { tools: [] } })
       const sse = `event: message\ndata: ${other}\n\nevent: message\ndata: ${mine}\n\n`
       return new Response(sse, { status: 200, headers: { 'content-type': 'text/event-stream' } })
+    })
+    await expect(client.listTools()).resolves.toEqual([])
+  })
+
+  it('marks token acquisition failure as proven pre-dispatch', async () => {
+    const fetchSpy = vi.fn()
+    const client = new McpClient({ fetchImpl: fetchSpy, getAccessToken: async () => { throw new Error('refresh offline') } })
+    await expect(client.callTool('notion-update-page', {})).rejects.toMatchObject({ name: 'McpPreDispatchError', message: 'refresh offline' })
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('runs the final content check after delayed token acquisition and before mutation fetch', async () => {
+    let releaseToken!: (token: string) => void
+    const token = new Promise<string>((resolve) => { releaseToken = resolve })
+    const fetchSpy = vi.fn()
+    const client = new McpClient({ fetchImpl: fetchSpy, getAccessToken: () => token })
+    let current = '# Original'
+    const pending = client.callTool('notion-update-page', { page_id: 'p' }, undefined, async () => {
+      if (current !== '# Original') throw new Error('PAGE_CHANGED_SINCE_READ')
+    })
+    current = '# Human edit'
+    releaseToken('refreshed-token')
+    await expect(pending).rejects.toThrow(/PAGE_CHANGED_SINCE_READ/)
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('finds a matching SSE response across single-byte chunks', async () => {
+    const client = makeClient((_url, body) => {
+      const b = body as { id: number }
+      const raw = `data: ${JSON.stringify({ jsonrpc: '2.0', id: 999, result: {} })}\r\n\r\ndata: ${JSON.stringify({ jsonrpc: '2.0', id: b.id, result: { tools: [] } })}\r\n\r\n`
+      const bytes = new TextEncoder().encode(raw)
+      let next = 0
+      return new Response(new ReadableStream({ pull(controller) {
+        if (next < bytes.length) controller.enqueue(bytes.slice(next, ++next))
+        else controller.close()
+      } }), { headers: { 'content-type': 'text/event-stream' } })
     })
     await expect(client.listTools()).resolves.toEqual([])
   })

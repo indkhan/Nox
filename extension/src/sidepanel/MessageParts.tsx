@@ -48,20 +48,21 @@ function ActivityRow({ item, onUndo, undoUnavailableReason, onMarkReviewed, onCh
   </li>
   const completed = item.status === 'completed'
   const unresolved = item.kind === 'tool' && item.status === 'unknown'
+  const unverified = item.kind === 'tool' && item.verification === 'unverified'
   const base = toolActivityLabel(item.tool, item.args, completed)
-  const label = item.undone ? 'Change undone' : item.status === 'failed' ? failedToolActivityLabel(item.tool) : unresolved ? 'Needs review' : base
+  const label = item.undone ? 'Change undone' : item.status === 'failed' ? failedToolActivityLabel(item.tool) : unresolved ? 'Needs review' : unverified ? 'Applied, verification unavailable' : base
   return (
     <li className={`flex items-start gap-2 py-1 text-xs ${completed ? 'nox-resolve' : ''}`}>
       <span className={item.status === 'failed' ? 'nox-danger' : completed ? 'nox-success' : unresolved ? 'nox-warning' : 'nox-active'}>
         {item.status === 'failed' ? '×' : completed ? '✓' : unresolved ? '!' : '●'}
       </span>
       <div className="min-w-0 flex-1 text-zinc-300">
-        <span className={unresolved ? 'nox-warning font-medium' : undefined}>{label}</span>
+        <span className={unresolved || unverified ? 'nox-warning font-medium' : undefined}>{label}</span>
         {item.error && <span className="nox-danger ml-1">— {item.error}</span>}
         <ActivityResult item={item} />
         {unresolved && item.unresolvedDetail && <p className="mt-1 text-[11px] leading-relaxed text-zinc-400">{item.unresolvedDetail}</p>}
         {unresolved && item.inspectUrl && <a href={item.inspectUrl} target="_blank" rel="noreferrer" className="nox-active mt-1 inline-block text-[11px] underline-offset-2 hover:underline">Open in Notion</a>}
-        {unresolved && !item.reviewed && onMarkReviewed && item.journalId && (
+        {unresolved && !item.reviewed && item.reviewable !== false && onMarkReviewed && item.journalId && (
           <button onClick={() => onMarkReviewed(item.journalId!)} className="nox-active mt-1 block text-[11px] underline-offset-2 hover:underline">
             Mark reviewed
           </button>
@@ -76,18 +77,18 @@ function ActivityRow({ item, onUndo, undoUnavailableReason, onMarkReviewed, onCh
           <div className="mt-1 font-mono">{item.tool}</div>
           <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap">{safeStringify(item.args)}</pre>
         </details>
-        {(item.undoable || item.undone || item.undoError) && item.journalId && onUndo && (
+        {(item.undoable || item.undone || item.undoError) && item.journalId && onUndo && item.verification !== 'unverified' && (
           <button disabled={!item.undoable} onClick={() => onUndo(item.journalId!)} className="nox-active mt-1 text-[11px] underline-offset-2 hover:underline disabled:no-underline">
             {item.undone ? 'Undone' : 'Undo this change'}
           </button>
         )}
-        {item.undoable && item.journalId && !onUndo && undoUnavailableReason && (
+        {item.undoable && item.journalId && !onUndo && undoUnavailableReason && item.verification !== 'unverified' && (
           <span className="mt-1 block text-[11px] text-zinc-600">{undoUnavailableReason}</span>
         )}
-        {!item.undoable && !item.undone && item.notUndoableReason && (
+        {(!item.undoable || unverified) && !item.undone && item.notUndoableReason && (
           <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">Undo unavailable: {item.notUndoableReason}</p>
         )}
-        {!item.undoable && !item.undone && item.notUndoableReason && item.inspectUrl && (
+        {(!item.undoable || unverified) && !item.undone && item.inspectUrl && (
           <a href={item.inspectUrl} target="_blank" rel="noreferrer" className="nox-active mt-1 inline-block text-[11px] underline-offset-2 hover:underline">Open in Notion</a>
         )}
         {item.undoError && <p className="nox-danger mt-1 text-[11px]" role="alert">Undo failed: {item.undoError}</p>}
@@ -100,6 +101,7 @@ function ActivityRow({ item, onUndo, undoUnavailableReason, onMarkReviewed, onCh
 function ActivityResult({ item }: { item: Extract<ActivityItem, { kind: 'tool' }> }) {
   if (item.status !== 'completed') return null
   if (item.undone) return <div className="nox-success mt-1 text-[11px]" role="status">Change undone</div>
+  if (item.verification === 'unverified') return <div className="nox-warning mt-1 text-[11px]" role="status">Notion reported success, but Nox could not verify the final state. Inspect the target before retrying.</div>
   const category = toolResultCategory(item.tool)
   if (category === 'table' && item.resultText) {
     return <div className="mt-1"><ResultsTable table={toResultTable({ content: [{ type: 'text', text: item.resultText }] })} /></div>

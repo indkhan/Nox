@@ -9,8 +9,7 @@ export type Mode = 'ask' | 'auto'
 /**
  * Explicit per-turn small-edit grant captured from the composer at Send.
  * Available only in Auto, off by default, never set by model tools: silent
- * edits may only touch listed pages, and only for fixture-verified
- * non-destructive property updates and targeted text additions.
+ * edits may only touch listed pages, and only set one checkbox to true.
  */
 export interface SmallEditGrant {
   allowed: boolean
@@ -84,26 +83,46 @@ export function evaluateApproval(call: ApprovalCall, ctx: ApprovalContext): Appr
 }
 
 /**
- * Grant-eligible effects: fixture-verified non-destructive single-object
- * property updates and targeted text additions on listed pages only.
+ * Grant-eligible effects: setting one checkbox to true on a listed page.
  * Excludes replacement, deletion, creation, moves, schema/view changes,
  * upload, unknown effects, and out-of-grant targets.
  */
 function isGrantEligible(call: ApprovalCall): boolean {
   if (!call.grant.allowed) return false
-  if (call.kind !== 'properties' && call.kind !== 'content-update') return false
+  if (call.kind !== 'properties' || call.name !== 'notion-update-page' || !isSmallPropertyChange(call.args)) return false
   const pages = new Set(call.grant.pages.map((id) => normalizeId(id) ?? id))
   const scopeIds = [...call.targets, ...call.parents].map((id) => normalizeId(id) ?? id)
   if (scopeIds.length === 0) return false
   return scopeIds.every((id) => pages.has(id))
 }
 
+function isSmallPropertyChange(args: Record<string, unknown>): boolean {
+  let props: unknown
+  if (args.command === 'update_properties') {
+    if (typeof args.page_id !== 'string' || Object.keys(args).some((key) => !['page_id', 'command', 'properties'].includes(key))) return false
+    props = args.properties
+  } else {
+    if (Object.keys(args).some((key) => key !== 'data' && key !== 'command')) return false
+    const data = args.data
+    if (!data || typeof data !== 'object' || Array.isArray(data) || typeof (data as Record<string, unknown>).page_id !== 'string' || Object.keys(data).some((key) => key !== 'page_id')) return false
+    const command = args.command
+    if (!command || typeof command !== 'object' || Array.isArray(command)) return false
+    const parsed = command as Record<string, unknown>
+    if (parsed.type !== 'update_properties' || Object.keys(parsed).some((key) => key !== 'type' && key !== 'properties')) return false
+    props = parsed.properties
+  }
+  if (!props || typeof props !== 'object' || Array.isArray(props)) return false
+  const entries = Object.entries(props)
+  if (entries.length !== 1 || !entries[0][0]) return false
+  return entries[0][1] === true
+}
+
 function grantRefusalReason(call: ApprovalCall): string {
   if (!call.grant.allowed) {
     return 'Auto mode needs the “Allow small edits this turn” grant for silent edits — approve each change instead'
   }
-  if (call.kind !== 'properties' && call.kind !== 'content-update') {
-    return 'the small-edit grant covers only property updates and small text additions on the listed pages'
+  if (call.kind !== 'properties' || !isSmallPropertyChange(call.args)) {
+    return 'the small-edit grant only covers setting one checkbox to true on a listed page'
   }
   return 'the change targets pages outside the granted small-edit pages'
 }

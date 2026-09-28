@@ -74,16 +74,14 @@ if (isMain) {
   const codex = resolveCodex()
   if (!codex.path) {
     if (codex.error) {
-      console.log(`Codex override is invalid: ${codex.error}`)
-      console.log('Fix CODEX_BIN to point at an existing Codex binary, or unset it to use discovery.')
+      console.error(codex.error)
+      process.exit(1)
     } else {
       console.log('Codex is missing. Install it with: npm install -g @openai/codex')
       console.log('Then sign in with: codex login')
     }
   } else {
-    if (codex.testedCompatible === false) {
-      console.log(`Codex ${codex.version} at ${codex.path} is newer than the tested version; proceeding, but behavior is unverified.`)
-    }
+    if (codex.testedCompatible === false) console.log(`Using experimental Codex ${codex.version} at ${codex.path}.`)
     const command = codex.launcher ?? codex.path
     const args = codex.launcher ? [codex.path, 'login', 'status'] : ['login', 'status']
     if (run(command, args, 'pipe').status !== 0) {

@@ -24,7 +24,7 @@ const DB = '11111111-2222-3333-4444-555555555555'
 const DB_OTHER = '22222222-3333-4444-5555-666666666666'
 
 function propertiesArgs(page = PAGE): Record<string, unknown> {
-  return { data: { page_id: page }, command: { type: 'update_properties', properties: {} } }
+  return { data: { page_id: page }, command: { type: 'update_properties', properties: { Done: true } } }
 }
 
 function makeGate(over: {

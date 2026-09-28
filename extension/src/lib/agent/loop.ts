@@ -66,7 +66,13 @@ export class AgentLoop {
         displayText: outcome.displayText,
       }
     }
-    this.deps.codex.emit = (event) => this.listeners.forEach((l) => l(event))
+    this.deps.codex.emit = (event) => {
+      if (event.kind === 'web-search' || event.kind === 'web-search-completed') {
+        this.untrustedContextThisTurn = true
+        this.untrustedConversation = true
+      }
+      this.listeners.forEach((l) => l(event))
+    }
 
   }
 
@@ -178,7 +184,7 @@ export class AgentLoop {
     // preparation callback taints nothing by itself. Retained conversation
     // exposure carries over: turn two with no new mentions is still
     // untrusted when turn one saw workspace content (R3).
-    const initialMentionsTainted = opts.mentions?.some((mention) => mention.markdown != null) ?? false
+    const initialMentionsTainted = Boolean(opts.currentPage || opts.attachments?.length || opts.mentions?.length)
     this.untrustedContextThisTurn = this.untrustedConversation || initialMentionsTainted
     if (initialMentionsTainted) this.untrustedConversation = true
     const abort = new AbortController()
@@ -193,7 +199,7 @@ export class AgentLoop {
       if (opts.signal?.aborted) this.cancel()
       abort.signal.throwIfAborted()
       const mentions = opts.prepareContext ? await abortable(opts.prepareContext(abort.signal), abort.signal) : opts.mentions
-      if (mentions?.some((mention) => mention.markdown != null)) {
+      if (mentions?.length) {
         this.untrustedContextThisTurn = true
         this.untrustedConversation = true
       }

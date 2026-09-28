@@ -15,6 +15,7 @@ export const DB_VERSION = 3
  */
 let cachedOpen: Promise<IDBPDatabase> | null = null
 let cachedConnection: IDBPDatabase | null = null
+let openGeneration = 0
 
 function resetCache(promise: Promise<IDBPDatabase> | null): void {
   if (cachedOpen === promise) {
@@ -24,6 +25,7 @@ function resetCache(promise: Promise<IDBPDatabase> | null): void {
 }
 
 function closeCachedConnection(): void {
+  openGeneration++
   const connection = cachedConnection
   cachedOpen = null
   cachedConnection = null
@@ -83,8 +85,10 @@ function migrations(db: IDBPDatabase, oldVersion: number): void {
   // v2 stores structured activity inside existing message records; no new store is required.
 }
 
-export async function openNoxDB(store: DeletionStore = defaultDeletionStore()): Promise<IDBPDatabase> {
+export function openNoxDB(store: DeletionStore = defaultDeletionStore()): Promise<IDBPDatabase> {
   if (cachedOpen) return cachedOpen
+  const generation = ++openGeneration
+  const promise = (async () => {
   // Refresh on miss only: the cached connection implies a recent check, and
   // close paths (explicit, blocking, terminated) reset the cache.
   let deleting = false
@@ -93,10 +97,10 @@ export async function openNoxDB(store: DeletionStore = defaultDeletionStore()): 
   } catch {
     deleting = isDeletionPending()
   }
-  if (deleting) {
+  if (deleting || generation !== openGeneration) {
     throw new Error('DELETION_PENDING: Nox data is being deleted — close other Nox windows to finish, then retry.')
   }
-  const promise = openDB(DB_NAME, DB_VERSION, {
+  const connection = await openDB(DB_NAME, DB_VERSION, {
     upgrade(db, oldVersion, _newVersion, transaction) {
       migrations(db, oldVersion)
       if (oldVersion < 3) {
@@ -108,20 +112,23 @@ export async function openNoxDB(store: DeletionStore = defaultDeletionStore()): 
       }
     },
     blocking: () => {
-      closeCachedConnection()
+      connection.close()
+      resetCache(promise)
     },
     terminated: () => {
       resetCache(promise)
     },
   })
-  cachedOpen = promise
-  try {
-    cachedConnection = await promise
-  } catch (error) {
-    resetCache(promise)
-    throw error
+  if (generation !== openGeneration || isDeletionPending()) {
+    connection.close()
+    throw new Error('DELETION_PENDING: Nox data is being deleted')
   }
-  return cachedConnection
+  cachedConnection = connection
+  return connection
+  })()
+  cachedOpen = promise
+  void promise.catch(() => resetCache(promise))
+  return promise
 }
 
 /** Close this panel's cached connection, if any. Other contexts are unaffected. */

@@ -52,9 +52,10 @@ async function legacyHeader(
   threadId: string | null,
   userText: string,
   attachments: OwnedAttachmentInput[],
+  workspaceId?: string,
 ): Promise<string> {
   if (attachments.length > 0) throw new Error('attachment ownership requires an atomic turn header')
-  const id = threadId ?? (await repo.createThread()).id
+  const id = threadId ?? (await repo.createThread('New chat', workspaceId)).id
   await repo.appendMessage(id, { role: 'user', text: userText })
   return id
 }
@@ -74,6 +75,7 @@ export async function startPersistedTurn(
   threadId: string | null,
   userText: string,
   attachments: OwnedAttachmentInput[] = [],
+  workspaceId?: string,
 ): Promise<PersistedTurn> {
   // Epoch 10 / M7: the turn header (thread creation when needed, user
   // message, attachment bytes with thread ownership) lands in one bounded
@@ -81,8 +83,8 @@ export async function startPersistedTurn(
   // caller can retain the local draft and send nothing.
   const beginTurn = (repo as Partial<ThreadRepository>).beginTurn
   const id = beginTurn
-    ? (await beginTurn.call(repo, threadId, userText, attachments)).threadId
-    : await legacyHeader(repo, threadId, userText, attachments)
+    ? (await beginTurn.call(repo, threadId, userText, attachments, workspaceId)).threadId
+    : await legacyHeader(repo, threadId, userText, attachments, workspaceId)
   // Captured once, up front: every save below lands under these identities.
   const assistantId = crypto.randomUUID()
   let inFlight: Promise<void> | null = null

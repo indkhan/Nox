@@ -242,6 +242,36 @@ describe('Scheduler', () => {
     expect(calls).toBe(0)
   })
 
+  it('awaits a final check and leaves capacity for its nested read', async () => {
+    const { scheduler } = makeScheduler({ globalRps: 100, maxConcurrent: 3 })
+    let checked = 0
+    const write = () => scheduler.schedule('global', async () => {
+      expect(checked).toBeGreaterThan(0)
+      return 'written'
+    }, undefined, {
+      preflight: true,
+      beforeInvoke: async () => {
+        await scheduler.schedule('global', async () => { checked++; return null })
+      },
+    })
+    await expect(Promise.race([
+      Promise.all([write(), write(), write()]),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('preflight deadlocked')), 500)),
+    ])).resolves.toEqual(['written', 'written', 'written'])
+    expect(checked).toBe(3)
+  })
+
+  it('releases a reserved permit when cancelled before invocation', async () => {
+    const { scheduler } = makeScheduler({ maxConcurrent: 1, globalRps: 100 })
+    const controller = new AbortController()
+    let calls = 0
+    const pending = scheduler.schedule('global', async () => { calls++; return 'unexpected' }, controller.signal)
+    controller.abort()
+    await expect(pending).rejects.toMatchObject({ name: 'AbortError' })
+    expect(calls).toBe(0)
+    expect((scheduler as unknown as { inFlight: number }).inFlight).toBe(0)
+  })
+
   it('aborts promptly during retry backoff', async () => {
     const controller = new AbortController()
     let calls = 0
@@ -289,6 +319,27 @@ describe('Scheduler', () => {
       calls++
       return ok()
     }, undefined, { deadline: clock.t + 100 })).rejects.toThrow(/DEADLINE_EXCEEDED/)
+    expect(calls).toBe(0)
+  })
+
+  it('stops a concurrency wait at its deadline', async () => {
+    const scheduler = new Scheduler({ maxConcurrent: 1, globalRps: 100 })
+    let release!: () => void
+    const first = scheduler.schedule('global', () => new Promise<string>((resolve) => { release = () => resolve('first') }))
+    await vi.waitFor(() => expect((scheduler as unknown as { inFlight: number }).inFlight).toBe(1))
+    let calls = 0
+    await expect(scheduler.schedule('global', async () => { calls++; return 'second' }, undefined, { deadline: Date.now() + 20 }))
+      .rejects.toThrow(/DEADLINE_EXCEEDED/)
+    expect(calls).toBe(0)
+    release()
+    await first
+  })
+
+  it('does not dispatch when the deadline has already passed', async () => {
+    const { clock, scheduler } = makeScheduler()
+    let calls = 0
+    await expect(scheduler.schedule('global', async () => { calls++; return 'late' }, undefined, { deadline: clock.t - 1 }))
+      .rejects.toThrow(/DEADLINE_EXCEEDED/)
     expect(calls).toBe(0)
   })
 

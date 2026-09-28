@@ -197,7 +197,7 @@ export class CodexClient {
     const research = await researchConfig(this.bridge, settings.webSearchEnabled !== false)
     signal?.throwIfAborted()
     this.researchLimitation = research.limitation
-    const { dynamicTools: _tools, ephemeral: _ephemeral, ...params } = this.threadParams(settings)
+    const { ephemeral: _ephemeral, ...params } = this.threadParams(settings)
     const result = (await this.bridge.rpc<Record<string, unknown>>('thread/resume', {
       threadId,
       ...params,

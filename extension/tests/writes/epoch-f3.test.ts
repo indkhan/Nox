@@ -181,7 +181,7 @@ describe('Epoch F3.2 — R5 cross-instance invalidation and preservation', () =>
     }
     await expect(s.saveFromTokenResponse(tokenResponse(), attempt)).rejects.toThrow(/disk full/)
     expect(await s.isLoginAttemptCurrent(attempt)).toBe(true)
-    expect((await local.get('notion.refresh'))['notion.refresh']).toBeUndefined()
+    expect((await local.get('notion.refresh'))['notion.refresh']).toBeNull()
   })
 })
 
@@ -192,6 +192,8 @@ describe('Epoch F3.3 — R5 facade and completion binding', () => {
     authorization_endpoint: 'https://mcp.notion.com/authorize',
     token_endpoint: 'https://mcp.notion.com/token',
     registration_endpoint: 'https://mcp.notion.com/register',
+    code_challenge_methods_supported: ['S256'],
+    token_endpoint_auth_methods_supported: ['none'],
   }
   const SELF_TEXT = JSON.stringify({
     title: 'Acme',
@@ -260,7 +262,8 @@ describe('Epoch F3.3 — R5 facade and completion binding', () => {
         return jsonRes({ access_token: 'at-r', refresh_token: 'rt-r', expires_in: 3600 })
       }
       if (typeof body.method === 'string') {
-        if (body.method === 'initialize') return jsonRes({ jsonrpc: '2.0', id: body.id as number, result: {} })
+        if (body.method === 'initialize') return jsonRes({ jsonrpc: '2.0', id: body.id as number, result: { protocolVersion: '2025-06-18' } })
+        if (body.method === 'tools/list') return rpcResult(body.id as number, { tools: [{ name: 'notion-fetch' }] })
         if (body.method === 'tools/call') {
           const params = body.params as { name?: string }
           if (params?.name === 'notion-fetch') {
@@ -410,7 +413,8 @@ describe('Epoch F3.3 — R5 facade and completion binding', () => {
           if (u.endsWith('/register')) return jsonRes({ client_id: 'cid-1' }, 201)
           if (u.endsWith('/token')) return jsonRes({ access_token: `at-${u.length}-${Math.random().toString(36).slice(2, 6)}`, refresh_token: 'rt-shared', expires_in: 3600 })
           if (typeof body.method === 'string') {
-            if (body.method === 'initialize') return jsonRes({ jsonrpc: '2.0', id: body.id as number, result: {} })
+            if (body.method === 'initialize') return jsonRes({ jsonrpc: '2.0', id: body.id as number, result: { protocolVersion: '2025-06-18' } })
+            if (body.method === 'tools/list') return rpcResult(body.id as number, { tools: [{ name: 'notion-fetch' }] })
             if (body.method === 'tools/call') return rpcResult(body.id as number, { content: [{ type: 'text', text: SELF_TEXT }] })
             if ((body.method as string).startsWith('notifications/')) return new Response(null, { status: 202 })
           }

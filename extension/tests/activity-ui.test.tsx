@@ -81,6 +81,16 @@ describe('ActivityTimeline', () => {
     expect(html).toContain('Undo this change')
   })
 
+  it('labels applied changes whose readback could not verify the result', () => {
+    const html = renderToStaticMarkup(<ActivityTimeline items={[{
+      kind: 'tool', id: 'u', tool: 'notion-update-page', args: {}, status: 'completed',
+      journalId: 'unverified', verification: 'unverified', undoable: false,
+      inspectUrl: 'https://www.notion.so/p1',
+    }]} initiallyExpanded onUndo={vi.fn()} />)
+    expect(html).toContain('Applied, verification unavailable')
+    expect(html).not.toContain('Undo this change')
+  })
+
   it('explains unavailable undo instead of rendering an enabled button', () => {
     const html = renderToStaticMarkup(<ActivityTimeline active items={[
       { kind: 'tool', id: 'u', tool: 'notion-update-page', args: {}, status: 'completed', journalId: 'journal-1', undoable: true },

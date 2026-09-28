@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { CapabilityGate, parseSelfResult } from '../src/lib/notion/capabilities'
+import { CapabilityGate, parseSelfResult, parseToolAccessResult } from '../src/lib/notion/capabilities'
 
 /** Fixture mirrors the VERIFIED production shape (2026-08-22), with synthetic identity. */
 const SELF_JSON = JSON.stringify({
@@ -59,10 +59,39 @@ describe('parseSelfResult', () => {
 })
 
 describe('CapabilityGate', () => {
-  it('fails open when the server sent no map', () => {
+  it('uses the dedicated access response and blocks plan and full-version requirements', () => {
+    const info = parseToolAccessResult(JSON.stringify({ current_tool_access: {
+      search: { status: 'available' },
+      create_pages: { status: 'plan_required', landing_page_url: 'https://notion.so/plans' },
+      update_page: { status: 'full_version_required', full_version_url: 'https://notion.so/full' },
+    } }))
+    const gate = new CapabilityGate(info.access)
+    expect(gate.can('notion-search').allowed).toBe(true)
+    expect(gate.can('notion-create-pages').allowed).toBe(false)
+    expect(gate.can('notion-update-page').allowed).toBe(false)
+  })
+
+  it('fails closed on missing dedicated-map entries while retaining AI search fallback', () => {
+    const gate = new CapabilityGate({ 'ai-search': 'upgrade_required', fetch: 'available' }, true)
+    expect(gate.can('notion-ai-search').allowed).toBe(true)
+    expect(gate.can('notion-create-pages').allowed).toBe(false)
+  })
+
+  it('refuses restricted search parameters that Notion would silently drop', () => {
+    const parsed = parseToolAccessResult(JSON.stringify({ current_tool_access: { search: {
+      status: 'available', restricted_parameters: { 'filters.title_only': 'Business plan required', sort: 'Date sort unavailable' },
+    } } }))
+    const gate = new CapabilityGate(parsed.access, true, parsed.restrictedParameters)
+    expect(gate.can('notion-search', { filters: { title_only: true } }).allowed).toBe(false)
+    expect(gate.can('notion-search', { filters: { title_only: false }, sort: 'relevance' }).allowed).toBe(true)
+    expect(gate.restrictionsFor('notion-search')).toMatch(/title_only/)
+  })
+  it('allows known reads but refuses writes when the server sent no access map', () => {
     const gate = new CapabilityGate()
     expect(gate.isEmpty).toBe(true)
-    expect(gate.can('anything').allowed).toBe(true)
+    expect(gate.can('notion-search').allowed).toBe(true)
+    expect(gate.can('notion-update-page').allowed).toBe(false)
+    expect(gate.can('anything').allowed).toBe(false)
   })
 
   it('normalizes prefix and separator variants on lookups', () => {
@@ -90,6 +119,6 @@ describe('CapabilityGate', () => {
 
   it('reports unknown state for tools absent from the map', () => {
     const gate = new CapabilityGate({ search: 'available' })
-    expect(gate.can('notion-move-pages')).toMatchObject({ allowed: true, state: 'unknown' })
+    expect(gate.can('notion-move-pages')).toMatchObject({ allowed: false, state: 'unknown' })
   })
 })

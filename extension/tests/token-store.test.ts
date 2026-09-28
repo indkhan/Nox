@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { PROACTIVE_FRACTION, TokenStore } from '../src/lib/oauth/tokens'
+import { PROACTIVE_FRACTION, REFRESH_TIMEOUT_MS, TokenStore } from '../src/lib/oauth/tokens'
 import type { TokenResponse } from '../src/lib/oauth/discovery'
 import { memoryStore } from '../src/lib/storage'
 
@@ -81,10 +81,28 @@ describe('TokenStore', () => {
     const s = makeStore()
     await s.saveFromTokenResponse(tokenResponse())
     expect(stores.local.data['notion.refresh']).toBe('rt-1')
-    expect(stores.local.data['notion.workspaceId']).toBeUndefined()
+    expect(stores.local.data['notion.workspaceId']).toBeNull()
     expect(stores.session.data['notion.access']).toBe('at-1')
     // refreshAt = issued + 80% lifetime
     expect(stores.session.data['notion.refreshAt']).toBe(nowMs + 3600 * 1000 * PROACTIVE_FRACTION)
+  })
+
+  it('replaces old durable credentials when a new login omits refresh and workspace', async () => {
+    const s = makeStore()
+    await s.saveFromTokenResponse(tokenResponse())
+    await stores.local.set({ 'notion.workspaceId': 'old-workspace' })
+    const attempt = await s.beginLogin()
+    await s.saveFromTokenResponse(tokenResponse({ access_token: 'new', refresh_token: undefined }), attempt)
+    expect(await s.hasRefreshToken()).toBe(false)
+    expect(await s.getWorkspaceId()).toBeNull()
+  })
+
+  it('does not expose old credentials during a replacement login', async () => {
+    const s = makeStore()
+    await s.saveFromTokenResponse(tokenResponse())
+    await s.beginLogin()
+    expect(await s.hasRefreshToken()).toBe(false)
+    expect(await s.getAccessToken()).toBeNull()
   })
 
   it('writes the durable credential before the volatile one', async () => {
@@ -174,6 +192,26 @@ describe('TokenStore', () => {
     await expect(s.refresh()).rejects.toThrow(/500/)
     expect(await s.getAccessToken()).toBe('at-1') // still fresh, untouched
     expect(await s.hasRefreshToken()).toBe(true)
+  })
+
+  it('aborts a refresh response whose body stalls', async () => {
+    fetchImpl = (async (_url, init) => ({
+      ok: true,
+      status: 200,
+      json: () => new Promise((_resolve, reject) => init?.signal?.addEventListener('abort', () => reject(new Error('aborted')))),
+    })) as typeof fetch
+    const s = makeStore()
+    await s.saveFromTokenResponse(tokenResponse())
+    vi.useFakeTimers()
+    try {
+      const pending = s.refresh()
+      const rejected = expect(pending).rejects.toThrow(/aborted/)
+      await vi.advanceTimersByTimeAsync(REFRESH_TIMEOUT_MS)
+      await rejected
+      expect(stores.local.data['notion.refresh']).toBe('rt-1')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('signOut revokes with the current refresh token then wipes everything', async () => {

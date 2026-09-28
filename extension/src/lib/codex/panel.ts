@@ -17,7 +17,8 @@ export interface CodexSession {
  */
 export async function connectCodex(): Promise<CodexSession> {
   // Ping proves the native host itself is installed and spawnable.
-  await bridge.ping()
+  const pong = await bridge.ping()
+  if (!pong.codex.found && pong.codex.error) throw new Error(pong.codex.error)
   const userAgent = await codex.initialize()
   const models = await codex.listModels(true)
   return { userAgent, models }
