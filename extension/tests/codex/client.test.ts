@@ -387,6 +387,17 @@ describe('CodexClient', () => {
     expect(h.bridge.rpc.mock.calls.find(c => c[0] === 'thread/resume')![1]).toMatchObject({ threadId: 'thr_9', config: { web_search: 'live' } })
   })
 
+  it('replaces persisted dynamic tools with the current connection tools on resume', async () => {
+    await startThreadFixture()
+    const tools = [{ type: 'function', name: 'notion-fetch', inputSchema: { type: 'object' } }]
+    const pending = client.resumeThread('thr_9', { dynamicTools: tools })
+    h.rpcHandlers.find(r => r.method === 'initialize')!.resolve({ userAgent: 'codex/0.153.4' })
+    await vi.waitFor(() => expect(h.rpcHandlers.some(r => r.method === 'thread/resume')).toBe(true))
+    h.rpcHandlers.find(r => r.method === 'thread/resume')!.resolve({ thread: { id: 'thr_9' } })
+    await pending
+    expect(h.bridge.rpc.mock.calls.find(c => c[0] === 'thread/resume')![1]).toMatchObject({ dynamicTools: tools })
+  })
+
 
 
   it('rejects a different resumed thread before appending instructions', async () => {

@@ -7,7 +7,7 @@ import {
   BaselineError,
 } from '../../src/lib/notion/page-content'
 
-const PAGE = 'a'.repeat(32)
+const PAGE = '11111111111141118111111111111111'
 
 /** Redacted synthetic provider shapes live under tests/fixtures/notion/. */
 function fixture(name: string): unknown {
@@ -29,12 +29,38 @@ describe('page-content normalization (Epoch 07)', () => {
     expect(() => requireCompleteBaseline(record)).not.toThrow()
   })
 
-  it('accepts plain-text payloads as complete while keeping rich completeness', () => {
+  it('does not treat unwrapped plain text as a complete baseline', () => {
     const plain = normalizePageText(PAGE, 'alpha\nbeta\ngamma')
-    expect(plain).toMatchObject({ status: 'complete', shape: 'plain-text' })
-    const rich = normalizePageFetch(PAGE, textResult(fixture('page-rich-complete.json')))
+    expect(plain).toMatchObject({ status: 'partial', shape: 'plain-text' })
+    expect(() => requireCompleteBaseline(plain)).toThrowError(/PARTIAL_BASELINE/)
+    const rich = normalizePageFetch('33333333333343338333333333333333', textResult(fixture('page-rich-complete.json')))
     expect(rich.status).toBe('complete')
     expect(rich.markdown).toContain('synced_block')
+  })
+
+  it('requires matching page identity and explicit complete metadata', () => {
+    expect(normalizePageFetch(PAGE, textResult({ id: PAGE, content: '' , truncated: false })).status).toBe('complete')
+    for (const payload of [
+      { id: '22222222222242228222222222222222', content: 'wrong', truncated: false },
+      { id: PAGE, page: { id: '22222222222242228222222222222222', content: 'wrong nested' }, truncated: false },
+      { id: PAGE, content: 'unknown' },
+      { id: PAGE, page: { content: 'nested', truncated: true }, truncated: false },
+      { id: PAGE, content: 'omitted', truncated: false, unknown_block_ids: ['x'] },
+    ]) {
+      const record = normalizePageFetch(PAGE, textResult(payload))
+      expect(record.status).toBe('partial')
+      expect(() => requireCompleteBaseline(record)).toThrowError(/PARTIAL_BASELINE/)
+    }
+  })
+
+  it('rejects malformed JSON-looking content as a baseline', () => {
+    expect(() => normalizePageText(PAGE, '{"content":"unfinished"')).toThrowError(/WRAPPER_MISMATCH/)
+  })
+
+  it('collects nested omitted blocks even when the outer list is empty', () => {
+    const record = normalizePageFetch(PAGE, textResult({ id: PAGE, page: { content: 'part', truncated: true, unknown_block_ids: ['nested-block'] }, truncated: false, unknown_block_ids: [] }))
+    expect(record.unknownBlockIds).toEqual(['nested-block'])
+    expect(record.status).toBe('partial')
   })
 
   it('marks the partial fixture partial with its omitted block ids', () => {

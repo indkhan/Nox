@@ -4,10 +4,9 @@ import { normalizeId } from '../../shared/notion-page'
  * Structured page-fetch normalization (Epoch 07 / M3).
  *
  * A concatenated text envelope is never treated as page Markdown on its own:
- * JSON provider payloads are parsed for an explicit content field plus
- * completeness metadata (`truncated`, `unknown_block_ids`), while plain-text
- * payloads are accepted as complete only when non-empty and free of explicit
- * partial markers. Anything else is refused as a destructive-replacement
+ * JSON provider payloads require matching target identity, an explicit
+ * content field, and affirmative completeness metadata. Plain-text payloads
+ * remain partial even without a truncation marker. Anything else is refused as a destructive-replacement
  * baseline — a partial read may still support analysis, but never a
  * whole-page replacement or a whole-page inverse.
  *
@@ -95,7 +94,7 @@ export function normalizePageFetch(pageId: string, result: PageFetchResult): Nor
       parsed = JSON.parse(trimmed)
       parsable = true
     } catch {
-      // Not actually JSON: fall through to plain-text handling below.
+      throw new BaselineError('WRAPPER_MISMATCH', 'the page read contained malformed JSON and cannot establish a replacement baseline')
     }
     // Provider refusals propagate; only a syntax failure falls through.
     if (parsable) return normalizeJsonPayload(normalized, parsed)
@@ -103,7 +102,7 @@ export function normalizePageFetch(pageId: string, result: PageFetchResult): Nor
   if (LOCAL_PARTIAL_MARKERS.some((marker) => trimmed.includes(marker))) {
     return { pageId: normalized, status: 'partial', markdown: text, truncated: true, unknownBlockIds: [], shape: 'plain-text' }
   }
-  return { pageId: normalized, status: 'complete', markdown: text, truncated: false, unknownBlockIds: [], shape: 'plain-text' }
+  return { pageId: normalized, status: 'partial', markdown: text, truncated: false, unknownBlockIds: [], shape: 'plain-text' }
 }
 
 /** Normalize a concatenated fetch string (guard/read-hash path). Same rules, no envelope. */
@@ -160,23 +159,31 @@ function normalizeJsonPayload(pageId: string, payload: unknown): NormalizedPageF
   let content: string | null = null
   for (const key of CONTENT_KEYS) {
     const direct = record[key]
-    if (typeof direct === 'string' && direct.trim()) {
+    if (typeof direct === 'string') {
       content = direct
       break
     }
     const inner = nested?.[key]
-    if (content == null && typeof inner === 'string' && inner.trim()) {
+    if (content == null && typeof inner === 'string') {
       content = inner
       break
     }
   }
   const unknownBlockIds = collectUnknownBlockIds(record, nested)
+  const unknownFields = [record.unknown_block_ids, record.unknownBlockIds, record.unknown_blocks, nested?.unknown_block_ids, nested?.unknownBlockIds]
+  const ids = [record.id, record.page_id, nested?.id, nested?.page_id].filter(value => value !== undefined)
+  const identityMatches = ids.length > 0 && ids.every(value => typeof value === 'string' && normalizeId(value) === pageId)
   const truncated =
     record.truncated === true ||
+    nested?.truncated === true ||
     record.has_more === true ||
+    nested?.has_more === true ||
     record.hasMore === true ||
+    nested?.hasMore === true ||
     record.omitted === true ||
-    unknownBlockIds.length > 0
+    nested?.omitted === true ||
+    unknownFields.some(value => value !== undefined && (!Array.isArray(value) || value.length > 0))
+  const complete = identityMatches && (record.truncated === false || nested?.truncated === false) && !truncated
   if (content == null) {
     const errorText =
       (typeof record.error === 'string' && record.error) ||
@@ -196,7 +203,7 @@ function normalizeJsonPayload(pageId: string, payload: unknown): NormalizedPageF
   }
   return {
     pageId,
-    status: truncated ? 'partial' : 'complete',
+    status: complete ? 'complete' : 'partial',
     markdown: content,
     truncated,
     unknownBlockIds,
@@ -205,10 +212,9 @@ function normalizeJsonPayload(pageId: string, payload: unknown): NormalizedPageF
 }
 
 function collectUnknownBlockIds(record: Record<string, unknown>, nested: Record<string, unknown> | null): string[] {
-  const raw =
-    record.unknown_block_ids ?? record.unknownBlockIds ?? record.unknown_blocks ?? nested?.unknown_block_ids ?? nested?.unknownBlockIds
-  if (!Array.isArray(raw)) return []
-  return raw.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0).slice(0, 100)
+  const values = [record.unknown_block_ids, record.unknownBlockIds, record.unknown_blocks, nested?.unknown_block_ids, nested?.unknownBlockIds]
+  return [...new Set(values.flatMap(value => Array.isArray(value) ? value : [])
+    .filter((entry): entry is string => typeof entry === 'string' && entry.length > 0))].slice(0, 100)
 }
 
 function textParts(result: PageFetchResult): string {

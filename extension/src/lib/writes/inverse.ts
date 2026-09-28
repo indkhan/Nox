@@ -19,6 +19,7 @@ export interface PreImage {
    * unrecognized reads never authorize a whole-page inverse.
    */
   baselineComplete?: boolean
+  commandShape?: 'string' | 'object'
 }
 
 /**
@@ -37,7 +38,8 @@ export function buildInverse(preImage: PreImage): InversePlan {
 
     case 'content-replace':
     case 'content-update': {
-      if (!preImage.markdown) return { kind: 'not-undoable', reason: 'the prior content was never captured' }
+      if (!preImage.pageId) return { kind: 'not-undoable', reason: 'the target page was not captured' }
+      if (preImage.markdown === undefined) return { kind: 'not-undoable', reason: 'the prior content was never captured' }
       if (preImage.baselineComplete !== true) {
         return {
           kind: 'not-undoable',
@@ -48,6 +50,12 @@ export function buildInverse(preImage: PreImage): InversePlan {
         return {
           kind: 'not-undoable',
           reason: 'this page has structural blocks Notion cannot round-trip safely',
+        }
+      }
+      if (preImage.commandShape === 'string') {
+        return {
+          kind: 'execute-tool', tool: 'notion-update-page',
+          args: { page_id: preImage.pageId, command: 'replace_content', new_str: preImage.markdown },
         }
       }
       return {

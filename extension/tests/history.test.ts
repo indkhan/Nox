@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi, afterEach } from 'vitest'
 import { openNoxDB, closeNoxDBConnections, DB_VERSION, __resetConnectionCacheForTests } from '../src/lib/history/schema'
 import type { MessageRow } from '../src/lib/history/schema'
 import { __resetDeletionStateForTests, type DeletionMark, type DeletionStore } from '../src/lib/history/deletion'
-import { deleteAllData } from '../src/lib/history/panel'
+import { deleteAllData, claimWindowRole, getWindowRole, __resetWindowRoleForTests } from '../src/lib/history/panel'
 import { attachmentRepository } from '../src/lib/history/attachments'
 import { threadRepository, type ThreadRepository } from '../src/lib/history/repository'
 import { MutationJournal, idbJournalStore, type JournalEntry } from '../src/lib/writes/journal'
@@ -70,6 +70,28 @@ describe('IndexedDB schema', () => {
     const first = await openNoxDB()
     const second = await openNoxDB()
     expect(second).toBe(first)
+    closeNoxDBConnections()
+  })
+
+  it('shares one physical opening among simultaneous cold callers', async () => {
+    const connections = await Promise.all(Array.from({ length: 8 }, () => openNoxDB()))
+    expect(new Set(connections).size).toBe(1)
+    closeNoxDBConnections()
+  })
+
+  it('does not open after a pending attempt was closed for deletion', async () => {
+    let release!: () => void
+    const wait = new Promise<void>((resolve) => { release = resolve })
+    const store: DeletionStore = {
+      get: async () => { await wait; return null },
+      set: async () => {}, clear: async () => {}, onChange: () => () => {},
+    }
+    const opening = openNoxDB(store)
+    closeNoxDBConnections()
+    release()
+    await expect(opening).rejects.toThrow('DELETION_PENDING')
+    const db = await openNoxDB()
+    expect(db.version).toBe(DB_VERSION)
     closeNoxDBConnections()
   })
 
@@ -196,7 +218,7 @@ describe('persistent mutation journal', () => {
     journal.setThread('thread-a')
     const scope = { threadId: 'thread-a', turnId: 'turn-1', workspaceId: 'ws', connectionGeneration: 'c', ownerGeneration: 'o' }
     const original = await journal.record({
-      tool: 'write', args: {}, kind: 'content-update', inverse: { tool: 'undo', args: {} },
+      tool: 'write', args: {}, kind: 'content-update', verification: 'verified', inverse: { tool: 'undo', args: {} },
     })
     const first = await journal.beginUndoReservation(original.id, { tool: 'undo', args: {}, kind: 'undo', scope })
     expect(first).not.toBeNull()
@@ -216,6 +238,46 @@ describe('persistent mutation journal', () => {
     const entry = await journal.getEntry(intent.id)
     expect(entry?.status).toBe('pending')
     expect(entry?.reviewedAt).toBeGreaterThan(0)
+  })
+
+  it('preserves concurrent review and settlement of the same IndexedDB row', async () => {
+    const db = await openNoxDB()
+    await db.clear('journal')
+    const first = new MutationJournal(idbJournalStore(openNoxDB))
+    const second = new MutationJournal(idbJournalStore(openNoxDB))
+    const scope = { threadId: 'thread-a', turnId: 'turn-1', workspaceId: 'ws', connectionGeneration: 'c', ownerGeneration: 'o' }
+    const intent = await first.beginIntent({ tool: 'write', args: {}, kind: 'write', scope })
+    await Promise.all([
+      first.settleIntent(intent.id, { status: 'applied', outcomeDetail: 'confirmed' }),
+      second.markReviewed(intent.id, 'checked'),
+    ])
+    expect(await first.getEntry(intent.id)).toMatchObject({ status: 'applied', outcomeDetail: 'confirmed', reviewNote: 'checked' })
+    closeNoxDBConnections()
+  })
+
+  it('does not regress a settled outcome or release another undo reservation', async () => {
+    const journal = new MutationJournal()
+    const scope = { threadId: 'thread-a', turnId: 'turn-1', workspaceId: 'ws', connectionGeneration: 'c', ownerGeneration: 'o' }
+    const intent = await journal.beginIntent({ tool: 'write', args: {}, kind: 'write', scope })
+    await journal.settleIntent(intent.id, { status: 'applied', outcomeDetail: 'confirmed' })
+    await expect(journal.settleIntent(intent.id, { status: 'failed', outcomeDetail: 'stale failure' })).rejects.toThrow('INVALID_JOURNAL_TRANSITION')
+    expect(await journal.getEntry(intent.id)).toMatchObject({ status: 'applied', outcomeDetail: 'confirmed' })
+    await journal.setStatus(intent.id, 'pending')
+    expect((await journal.getEntry(intent.id))?.status).toBe('applied')
+    const original = await journal.record({ tool: 'write', args: {}, kind: 'write', verification: 'verified', inverse: { tool: 'undo', args: {} } })
+    const reserved = await journal.beginUndoReservation(original.id, { tool: 'undo', args: {}, kind: 'undo', scope })
+    await journal.releaseUndoReservation(original.id, 'other-undo')
+    expect((await journal.getEntry(original.id))?.reservedByUndoOpId).toBe(reserved?.undo.id)
+  })
+
+  it('blocks new conflicting work while a remote task is submitted', async () => {
+    const journal = new MutationJournal()
+    const scope = { threadId: 'thread-a', turnId: 'turn-1', workspaceId: 'ws', connectionGeneration: 'c', ownerGeneration: 'o' }
+    const intent = await journal.beginIntent({ tool: 'write', args: {}, kind: 'write', scope })
+    await journal.settleIntent(intent.id, { status: 'submitted', remoteTaskId: 'task-1' })
+    expect(await journal.unresolvedInScope('thread-a')).toMatchObject([{ id: intent.id, status: 'submitted', remoteTaskId: 'task-1' }])
+    await journal.settleIntent(intent.id, { status: 'applied' })
+    expect(await journal.unresolvedInScope('thread-a')).toEqual([])
   })
 
   it('serves thread-scoped journal reads without loading other threads', async () => {
@@ -240,7 +302,7 @@ describe('persistent mutation journal', () => {
     const first = new MutationJournal(idbJournalStore(openNoxDB))
     first.setThread('thread-a')
     const original = await first.record({
-      tool: 'write', args: {}, kind: 'content-update', inverse: { tool: 'undo', args: {} },
+      tool: 'write', args: {}, kind: 'content-update', verification: 'verified', inverse: { tool: 'undo', args: {} },
     })
     const second = new MutationJournal(idbJournalStore(openNoxDB))
     second.setThread('thread-a')
@@ -265,6 +327,7 @@ describe('persistent mutation journal', () => {
       tool: 'write',
       args: {},
       kind: 'content-update',
+      verification: 'verified' as const,
       inverse: { tool: 'undo', args: {} },
     }
     const journal = new MutationJournal({
@@ -322,6 +385,57 @@ describe('ThreadRepository', () => {
     await repo.setCodexThreadId(thread.id, 'codex-thread-1')
 
     expect(await repo.getThread(thread.id)).toMatchObject({ id: thread.id, codexThreadId: 'codex-thread-1' })
+  })
+
+  it('keeps concurrent thread metadata changes and prevents orphan messages', async () => {
+    const thread = await repo.createThread()
+    await Promise.all([
+      repo.renameThread(thread.id, 'Renamed'),
+      repo.setPinned(thread.id, true),
+      repo.setCodexThreadId(thread.id, 'codex-1'),
+    ])
+    expect(await repo.getThread(thread.id)).toMatchObject({ title: 'Renamed', pinned: true, codexThreadId: 'codex-1' })
+    await repo.deleteThread(thread.id)
+    await expect(repo.appendMessage(thread.id, { role: 'user', text: 'late' })).rejects.toThrow()
+    expect(await repo.getMessages(thread.id)).toEqual([])
+  })
+
+  it('binds new turns to their workspace and refuses cross-workspace or legacy resume', async () => {
+    const first = await repo.beginTurn(null, 'first', [], 'workspace-a')
+    expect(await repo.getThread(first.threadId)).toMatchObject({ workspaceId: 'workspace-a' })
+    await expect(repo.beginTurn(first.threadId, 'wrong account', [], 'workspace-b')).rejects.toThrow('WORKSPACE_MISMATCH')
+    expect((await repo.getMessages(first.threadId)).map((message) => message.text)).toEqual(['first'])
+    const legacy = await repo.createThread('legacy')
+    await expect(repo.beginTurn(legacy.id, 'unknown account', [], 'workspace-a')).rejects.toThrow('WORKSPACE_MISMATCH')
+  })
+
+  it('passes workspace identity through persisted turn creation', async () => {
+    const turn = await startPersistedTurn(repo, null, 'question', [], 'workspace-a')
+    expect((await repo.getThread(turn.threadId))?.workspaceId).toBe('workspace-a')
+    await expect(startPersistedTurn(repo, turn.threadId, 'other workspace', [], 'workspace-b')).rejects.toThrow('WORKSPACE_MISMATCH')
+  })
+
+  it('keeps unresolved journal evidence when deleting a conversation', async () => {
+    const thread = await repo.createThread('recovery')
+    const db = await openNoxDB()
+    const entry = (id: string, status: 'pending' | 'unknown' | 'applied') => ({ id, threadId: thread.id, turnId: 'turn', status, ts: 1, tool: 'notion-update-page', args: {}, kind: 'write', scope: { threadId: thread.id, turnId: 'turn', workspaceId: 'workspace-a', connectionGeneration: 'c', ownerGeneration: 'o' } })
+    await db.put('journal', entry('pending', 'pending'))
+    await db.put('journal', entry('unknown', 'unknown'))
+    await db.put('journal', entry('settled', 'applied'))
+    await repo.deleteThread(thread.id)
+    expect(await repo.getThread(thread.id)).toBeUndefined()
+    expect(await db.get('journal', 'pending')).toBeDefined()
+    expect(await db.get('journal', 'unknown')).toBeDefined()
+    expect(await db.get('journal', 'settled')).toBeUndefined()
+  })
+
+  it('refuses deletion when legacy unscoped recovery would become invisible', async () => {
+    const thread = await repo.createThread('legacy recovery')
+    const db = await openNoxDB()
+    await db.put('journal', { id: 'legacy', threadId: thread.id, turnId: 'old', status: 'unknown', ts: 0, tool: 'old-write', args: {}, kind: 'write' })
+    await expect(repo.deleteThread(thread.id)).rejects.toThrow('RECOVERY_REVIEW_REQUIRED')
+    expect(await repo.getThread(thread.id)).toBeDefined()
+    expect(await db.get('journal', 'legacy')).toBeDefined()
   })
 
   it('persists structured assistant activity', async () => {
@@ -632,10 +746,10 @@ describe('journal change notifications (Epoch 09)', () => {  it('notifies observ
   it('counts scoped undoables without loading other threads', async () => {
     const journal = new MutationJournal()
     journal.setThread('thread-a')
-    await journal.record({ tool: 'a-write', args: {}, kind: 'move', inverse: { tool: 'u', args: {} } })
+    await journal.record({ tool: 'a-write', args: {}, kind: 'move', verification: 'verified', inverse: { tool: 'u', args: {} } })
     await journal.record({ tool: 'a-plain', args: {}, kind: 'move' })
     journal.setThread('thread-b')
-    await journal.record({ tool: 'b-write', args: {}, kind: 'move', inverse: { tool: 'u', args: {} } })
+    await journal.record({ tool: 'b-write', args: {}, kind: 'move', verification: 'verified', inverse: { tool: 'u', args: {} } })
     journal.scopeThread('thread-a')
     expect(await journal.undoableCount()).toBe(1)
     journal.scopeThread('thread-b')
@@ -807,5 +921,27 @@ describe('persisted turn queue (Epoch 09)', () => {
     unsubscribe()
     await expect(turn.persistAssistant('final-2', undefined, undefined, 'failed', 'x')).rejects.toThrow()
     expect(notices).toBe(1)
+  })
+})
+
+describe('window ownership', () => {
+  it('keeps one owner lease for concurrent claims', async () => {
+    __resetWindowRoleForTests()
+    let held = false
+    const request = vi.fn(async (_name: string, _options: unknown, callback: (lock: object | null) => Promise<void>) => {
+      if (held) return callback(null)
+      held = true
+      try { await callback({}) } finally { held = false }
+    })
+    Object.defineProperty(navigator, 'locks', { configurable: true, value: { request } })
+    try {
+      expect(await Promise.all([claimWindowRole(), claimWindowRole()])).toEqual(['owner', 'owner'])
+      expect(getWindowRole()).toBe('owner')
+      expect(request).toHaveBeenCalledTimes(1)
+    } finally {
+      window.dispatchEvent(new Event('pagehide'))
+      __resetWindowRoleForTests()
+      Object.defineProperty(navigator, 'locks', { configurable: true, value: undefined })
+    }
   })
 })

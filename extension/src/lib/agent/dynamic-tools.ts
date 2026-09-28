@@ -1,5 +1,7 @@
 import type { McpTool } from '../mcp/client'
 import type { CapabilityGate } from '../notion/capabilities'
+import { classifyToolCall } from '../writes/classify'
+import { supportsEffectTool } from '../writes/effects'
 import { WORKSPACE_PLAN_TOOL } from '../architect/tool'
 import { UPLOAD_FILE_TOOL, isRawUploadTicketTool, isUploadWorkflowSupported } from '../attachments/upload-tool'
 
@@ -22,12 +24,14 @@ export function toDynamicTools(tools: McpTool[], gate: CapabilityGate): DynamicT
     // ticket creation is only ever an internal step of the supported upload
     // workflow, never a model-callable tool.
     if (isRawUploadTicketTool(tool.name)) continue
+    if (classifyToolCall(tool.name).kind !== 'read' && !supportsEffectTool(tool.name)) continue
     if (!gate.can(tool.name).allowed) continue
     if (typeof tool.name !== 'string' || !tool.name) continue
+    const restricted = gate.restrictionsFor?.(tool.name)
     out.push({
       type: 'function',
       name: tool.name,
-      description: typeof tool.description === 'string' ? tool.description : undefined,
+      description: [typeof tool.description === 'string' ? tool.description : '', restricted && `Unavailable parameters on this plan: ${restricted}`].filter(Boolean).join('\n'),
       inputSchema: tool.inputSchema ?? { type: 'object', properties: {} },
     })
   }

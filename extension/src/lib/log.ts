@@ -157,8 +157,9 @@ export function describeToolNames(tools: unknown[]): string {
  * category, it shows what actually failed. Review before sharing: the
  * message can name workspace content.
  */
-export function detailedErrorText(error: unknown): string {
+export function detailedErrorText(error: unknown, includePrivateDetails = false): string {
   const category = safeErrorDetail(error)
+  if (!includePrivateDetails) return category
   const raw = error instanceof Error ? error.message : typeof error === 'string' ? error : ''
   if (!raw || !raw.trim()) return category
   const clean = sanitizeLogMessage(raw.trim())

@@ -24,13 +24,16 @@ export interface CallClassification {
 
 const READ_TOOLS = new Set([
   'notion-search',
+  'notion-ai-search',
   'notion-fetch',
   'notion-list-recent-pages',
   'notion-query-data-sources',
+  'notion-query-meeting-notes',
   'notion-get-users',
   'notion-get-teams',
   'notion-get-comments',
   'notion-get-async-task',
+  'notion-get-tool-access',
   'notion-download-attachment',
   'notion-check-mcp-next-steps',
 ])
@@ -54,7 +57,7 @@ export function classifyToolCall(name: string, args: Record<string, unknown> = {
 
   if (name === 'notion-update-page') {
     const command = (args.command ?? args) as Record<string, unknown>
-    const type = typeof command.type === 'string' ? command.type : ''
+    const type = typeof args.command === 'string' ? args.command : typeof command.type === 'string' ? command.type : ''
     if (/replace_content/i.test(type) || 'replace_content' in args || 'content' in args && type === '') {
       return classified(true, 'content-replace', 'medium')
     }
@@ -110,8 +113,8 @@ const RICH_MARKERS: RegExp[] = [
   /synced[_\s-]?block/i,
   /child\s+database/i,
   /\bcolumns?\s*:/i,
+  /<\/?(?:columns?|synced[_-]?block|child[_-]?database|embed)(?:\s|>|\/)/i,
   /<empty-block\s*\/>/i,
-  /embed/i,
 ]
 
 export function detectRichPage(markdown: string): boolean {

@@ -6,6 +6,7 @@ import {
   isCurrentPageChangedMessage,
   isExpectedBackgroundSender,
   isExpectedContentSender,
+  isExpectedPanelSender,
   isNoxMessage,
   isPageMetaMessage,
   isValidCurrentPage,
@@ -114,6 +115,11 @@ describe('isPageMetaMessage / isCurrentPageChangedMessage (Epoch 13 / L3)', () =
 })
 
 describe('sender validation (Epoch 13 / L3)', () => {
+  it('allows control requests only from the owning side panel', () => {
+    expect(isExpectedPanelSender({ id: 'ext-1', url: 'chrome-extension://ext-1/src/sidepanel/index.html' }, 'ext-1')).toBe(true)
+    expect(isExpectedPanelSender({ id: 'ext-1', tab: { id: 7 }, url: 'https://notion.so' }, 'ext-1')).toBe(false)
+    expect(isExpectedPanelSender({ id: 'ext-1', url: 'chrome-extension://ext-1/other.html' }, 'ext-1')).toBe(false)
+  })
   it('accepts content senders only from the owning extension tab context', () => {
     expect(isExpectedContentSender({ id: 'ext-1', tab: { id: 7, url: PAGE_URL } }, 'ext-1')).toBe(true)
     // Foreign extension id.

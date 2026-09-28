@@ -7,9 +7,9 @@ export const DEFAULT_RESULT_BUDGET_CHARS = 24_000
 
 export interface ExecutorDeps {
   /** Runs one tool call through the scheduler (the Notion facade). */
-  callTool: (name: string, args: Record<string, unknown>, signal?: AbortSignal, provenance?: ToolCallRequest['provenance']) => Promise<{ content: Array<{ type: string; text?: string }> }>
+  callTool: (name: string, args: Record<string, unknown>, signal?: AbortSignal, provenance?: ToolCallRequest['provenance'], callId?: string) => Promise<{ content: Array<{ type: string; text?: string }> }>
   /** Throws when the tool is plan-gated. */
-  assertToolAllowed: (name: string) => void
+  assertToolAllowed: (name: string, args?: Record<string, unknown>) => void
   /**
    * Reports local truncation before Codex (Epoch F2 / R2). The provider
    * fetch may be complete, but only `deliveredChars` of `totalChars`
@@ -99,7 +99,7 @@ export class ToolExecutor {
       )
     }
     try {
-      if (req.tool !== 'nox-read-continuation') this.deps.assertToolAllowed(req.tool)
+      if (req.tool !== 'nox-read-continuation') this.deps.assertToolAllowed(req.tool, req.args)
     } catch {
       return refusal(`TOOL_UNAVAILABLE: "${req.tool}" is not available on this Notion plan or connection.`)
     }
@@ -110,7 +110,7 @@ export class ToolExecutor {
       const signal = this.signal
       const result = req.tool === 'nox-read-continuation'
         ? { content: [{ type: 'text', text: this.continuation(req.args) }] }
-        : await this.deps.callTool(req.tool, req.args, signal, req.provenance)
+        : await this.deps.callTool(req.tool, req.args, signal, req.provenance, req.callId)
       signal?.throwIfAborted()
       const text = result.content
         .filter((c) => c.type === 'text' && typeof c.text === 'string')

@@ -154,6 +154,14 @@ const ADAPTERS: Record<string, Adapter> = {
   'notion-update-page': (args) => {
     const page = idString((args.data as Record<string, unknown> | undefined)?.page_id ?? args.page_id)
     if (!page) throw new EffectValidationError('INVALID_ARGUMENTS', '"notion-update-page" requires a page target')
+    if (typeof args.command === 'string' && !['replace_content', 'update_content', 'update_properties'].includes(args.command)) {
+      throw new EffectValidationError('INVALID_ARGUMENTS', '"notion-update-page" has an unrecognized command')
+    }
+    if (args.command === 'replace_content' && (
+      typeof args.page_id !== 'string' || typeof args.new_str !== 'string' ||
+      Object.keys(args).some((key) => !['page_id', 'command', 'new_str', 'allow_async'].includes(key)) ||
+      args.allow_async !== undefined && typeof args.allow_async !== 'boolean'
+    )) throw new EffectValidationError('INVALID_ARGUMENTS', '"replace_content" requires the documented page_id, command, and new_str shape')
     return { targets: [page], parents: [], count: 1 }
   },
   'notion-move-pages': (args) => {
@@ -218,6 +226,11 @@ const ADAPTERS: Record<string, Adapter> = {
     }
     return { targets: [], parents, count: 1 }
   },
+}
+
+/** Only these mutation tools have a local target/effect adapter. */
+export function supportsEffectTool(tool: string): boolean {
+  return Object.hasOwn(ADAPTERS, tool)
 }
 
 /** Normalize a verified identifier, passing through other non-empty strings untouched. */

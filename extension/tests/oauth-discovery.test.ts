@@ -4,6 +4,7 @@ import {
   fetchAuthorizationServerMetadata,
   fetchProtectedResourceMetadata,
   registerClient,
+  DISCOVERY_TIMEOUT_MS,
 } from '../src/lib/oauth/discovery'
 import { ClientRegistrar } from '../src/lib/oauth/dcr'
 import { memoryStore } from '../src/lib/storage'
@@ -32,7 +33,23 @@ describe('fetchProtectedResourceMetadata', () => {
   it('hits the well-known endpoint', async () => {
     const f = vi.fn().mockResolvedValue(jsonRes(PRM))
     expect(await fetchProtectedResourceMetadata(f)).toEqual(PRM)
-    expect(f).toHaveBeenCalledWith('https://mcp.notion.com/.well-known/oauth-protected-resource/mcp', undefined)
+    expect(f).toHaveBeenCalledWith('https://mcp.notion.com/.well-known/oauth-protected-resource/mcp', { redirect: 'error', signal: expect.any(AbortSignal) })
+  })
+
+  it('aborts a metadata response whose body stalls', async () => {
+    vi.useFakeTimers()
+    try {
+      const f = vi.fn().mockImplementation((_url: string, init: RequestInit) => Promise.resolve({
+        ok: true,
+        json: () => new Promise((_resolve, reject) => init.signal?.addEventListener('abort', () => reject(new Error('aborted')))),
+      }))
+      const pending = fetchProtectedResourceMetadata(f)
+      const rejected = expect(pending).rejects.toThrow(/aborted/)
+      await vi.advanceTimersByTimeAsync(DISCOVERY_TIMEOUT_MS)
+      await rejected
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('throws with status and body snippet on failure', async () => {
@@ -42,6 +59,32 @@ describe('fetchProtectedResourceMetadata', () => {
 })
 
 describe('fetchAuthorizationServerMetadata', () => {
+  it('rejects contradictory resource metadata instead of falling back', async () => {
+    const f = vi.fn().mockImplementation((url: string) => Promise.resolve(jsonRes(url.includes('protected-resource') ? { ...PRM, resource: 'https://evil.example/mcp' } : AS)))
+    await expect(fetchAuthorizationServerMetadata(f)).rejects.toThrow(/resource/)
+    expect(f).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects unexpected endpoint origins and missing S256 support', async () => {
+    const f = vi.fn().mockImplementation((url: string) => Promise.resolve(jsonRes(url.includes('protected-resource') ? PRM : { ...AS, token_endpoint: 'https://evil.example/token' })))
+    await expect(fetchAuthorizationServerMetadata(f)).rejects.toThrow(/token_endpoint/)
+    const g = vi.fn().mockImplementation((url: string) => Promise.resolve(jsonRes(url.includes('protected-resource') ? PRM : { ...AS, code_challenge_methods_supported: ['plain'] })))
+    await expect(fetchAuthorizationServerMetadata(g)).rejects.toThrow(/S256/)
+  })
+
+  it('rejects malformed auth-method metadata and a mismatched issuer', async () => {
+    const f = vi.fn().mockImplementation((url: string) => Promise.resolve(jsonRes(url.includes('protected-resource') ? PRM : { ...AS, token_endpoint_auth_methods_supported: 'none' })))
+    await expect(fetchAuthorizationServerMetadata(f)).rejects.toThrow(/public client/)
+    const g = vi.fn().mockImplementation((url: string) => Promise.resolve(jsonRes(url.includes('protected-resource') ? PRM : { ...AS, issuer: 'https://evil.example' })))
+    await expect(fetchAuthorizationServerMetadata(g)).rejects.toThrow(/issuer/)
+  })
+
+  it('resolves a path-bearing issuer at the RFC well-known path', async () => {
+    const server = 'https://mcp.notion.com/tenant'
+    const f = vi.fn().mockImplementation((url: string) => Promise.resolve(jsonRes(url.includes('protected-resource') ? { ...PRM, authorization_servers: [server] } : { ...AS, issuer: server })))
+    expect((await fetchAuthorizationServerMetadata(f)).issuer).toBe(server)
+    expect(f.mock.calls[1][0]).toBe('https://mcp.notion.com/.well-known/oauth-authorization-server/tenant')
+  })
   it('follows the protected-resource pointer to the server metadata', async () => {
     const f = vi.fn().mockImplementation((url: string) =>
       Promise.resolve(url.includes('protected-resource') ? jsonRes(PRM) : jsonRes(AS)),

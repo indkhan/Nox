@@ -43,19 +43,26 @@ export interface RegistrationResponse {
 }
 
 const MCP_ORIGIN = 'https://mcp.notion.com'
+export const DISCOVERY_TIMEOUT_MS = 15_000
 
 async function fetchJson<T>(fetchImpl: typeof fetch, url: string, init?: RequestInit): Promise<T> {
-  const res = await fetchImpl(url, init)
-  if (!res.ok) {
-    let detail = ''
-    try {
-      detail = (await res.text()).slice(0, 300)
-    } catch {
-      /* body unreadable */
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), DISCOVERY_TIMEOUT_MS)
+  try {
+    const res = await fetchImpl(url, { ...init, signal: ctrl.signal, redirect: 'error' })
+    if (!res.ok) {
+      let detail = ''
+      try {
+        detail = (await res.text()).slice(0, 300)
+      } catch {
+        /* body unreadable */
+      }
+      throw new Error(`GET ${url} → ${res.status}${detail ? `: ${detail}` : ''}`)
     }
-    throw new Error(`GET ${url} → ${res.status}${detail ? `: ${detail}` : ''}`)
+    return (await res.json()) as T
+  } finally {
+    clearTimeout(timer)
   }
-  return (await res.json()) as T
 }
 
 /** RFC 9728 §4 + Notion's verified shape (RESEARCH §2.2). */
@@ -63,7 +70,12 @@ export function fetchProtectedResourceMetadata(
   fetchImpl: typeof fetch,
   mcpOrigin: string = MCP_ORIGIN,
 ): Promise<ProtectedResourceMetadata> {
-  return fetchJson(fetchImpl, `${mcpOrigin}/.well-known/oauth-protected-resource/mcp`)
+  return fetchJson<ProtectedResourceMetadata>(fetchImpl, `${mcpOrigin}/.well-known/oauth-protected-resource/mcp`).then(prm => {
+    if (prm?.resource !== `${mcpOrigin}/mcp` || !Array.isArray(prm.authorization_servers) || !prm.authorization_servers.length) {
+      throw new Error('invalid protected resource metadata: resource or authorization_servers')
+    }
+    return prm
+  })
 }
 
 /**
@@ -74,15 +86,35 @@ export async function fetchAuthorizationServerMetadata(
   fetchImpl: typeof fetch,
   mcpOrigin: string = MCP_ORIGIN,
 ): Promise<AuthorizationServerMetadata> {
+  let server = mcpOrigin
   try {
     const prm = await fetchProtectedResourceMetadata(fetchImpl, mcpOrigin)
-    const server = prm.authorization_servers[0]
-    if (!server) throw new Error('no authorization_servers in protected-resource metadata')
-    return await fetchJson(fetchImpl, `${server}/.well-known/oauth-authorization-server`)
-  } catch (e) {
-    // Direct fallback keeps us working if the PRM hop ever changes shape.
-    return await fetchJson(fetchImpl, `${mcpOrigin}/.well-known/oauth-authorization-server`)
+    server = prm.authorization_servers[0]
+  } catch (error) {
+    // Only absence permits legacy direct discovery; contradictory metadata fails closed.
+    if (!(error instanceof Error) || !/→ 404/.test(error.message)) throw error
   }
+  const issuer = new URL(server)
+  if (issuer.origin !== mcpOrigin || issuer.username || issuer.password || issuer.search || issuer.hash) throw new Error('invalid authorization server issuer')
+  const wellKnown = `${issuer.origin}/.well-known/oauth-authorization-server${issuer.pathname.replace(/\/$/, '')}`
+  const meta = await fetchJson<AuthorizationServerMetadata>(fetchImpl, wellKnown)
+  if (!meta || meta.issuer !== server || !Array.isArray(meta.code_challenge_methods_supported) ||
+      !meta.code_challenge_methods_supported.includes('S256') ||
+      !Array.isArray(meta.token_endpoint_auth_methods_supported) ||
+      !meta.token_endpoint_auth_methods_supported.includes('none')) {
+    throw new Error('invalid authorization server metadata: issuer, S256, or public client support')
+  }
+  for (const key of ['authorization_endpoint', 'token_endpoint', 'registration_endpoint', 'revocation_endpoint'] as const) {
+    const value = meta[key]
+    if (!value) continue
+    let endpoint: URL
+    try { endpoint = new URL(value) } catch { throw new Error(`invalid ${key}`) }
+    if (endpoint.origin !== issuer.origin || endpoint.protocol !== 'https:' || endpoint.username || endpoint.password || endpoint.hash) {
+      throw new Error(`invalid ${key}`)
+    }
+  }
+  if (!meta.authorization_endpoint || !meta.token_endpoint || !meta.registration_endpoint) throw new Error('missing OAuth endpoint')
+  return meta
 }
 
 export function buildRegistrationRequest(redirectUri: string): RegistrationRequest {

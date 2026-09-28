@@ -5,12 +5,13 @@ import { requestRuntimeUndo } from '../../src/lib/writes/undo'
 import { createTurnAccessState } from '../../src/lib/agent/turn-access'
 
 const PAGE = 'f'.repeat(32)
+const completePage = (markdown: string) => JSON.stringify({ id: PAGE, content: markdown, truncated: false })
 
 function propertiesReq(rid: number) {
   return {
     rid,
     tool: 'notion-update-page',
-    args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: {} } },
+    args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: { Title: 'Short title' } } },
     namespace: null,
   } as const
 }
@@ -82,7 +83,7 @@ function makeHarness(opts: {
     fetchPageMarkdown: async (pageId) => {
       fetches.push(pageId)
       if (opts.fetchImpl) return opts.fetchImpl(pageId)
-      return '# Simple\noriginal text'
+      return completePage('# Simple\noriginal text')
     },
     getMode: () => access.mode(),
     getContextSet: () => access.contextPages(),
@@ -165,10 +166,10 @@ describe('Epoch F1.1 — R1 forward-write dispatch revalidation', () => {
       mode: 'ask',
       fetchImpl: async () => {
         harness.setOwner(false)
-        return '# Simple\noriginal text'
+        return completePage('# Simple\noriginal text')
       },
     })
-    await harness.gate.rememberPageRead(PAGE, '# Simple\noriginal text')
+    await harness.gate.rememberPageRead(PAGE, completePage('# Simple\noriginal text'))
     const out = await handleWithApproval(harness.gate, replaceReq(4)) as { isError?: boolean; content: Array<{ text?: string }> }
     expect(out.isError).toBe(true)
     expect(out.content[0].text).toMatch(/NOT_OWNER|LEASE_EXPIRED|owner/i)
@@ -184,10 +185,10 @@ describe('Epoch F1.1 — R1 forward-write dispatch revalidation', () => {
         fetchCount++
         // Guard uses 2 fetches (snapshot + assertUnchanged); final recheck is #3.
         if (fetchCount >= 3) harness.setOwner(false)
-        return '# Simple\noriginal text'
+        return completePage('# Simple\noriginal text')
       },
     })
-    await harness.gate.rememberPageRead(PAGE, '# Simple\noriginal text')
+    await harness.gate.rememberPageRead(PAGE, completePage('# Simple\noriginal text'))
     const out = await handleWithApproval(harness.gate, replaceReq(5)) as { isError?: boolean; content: Array<{ text?: string }> }
     expect(fetchCount).toBeGreaterThanOrEqual(3)
     expect(out.isError).toBe(true)
@@ -200,16 +201,16 @@ describe('Epoch F1.1 — R1 forward-write dispatch revalidation', () => {
 })
 
 describe('Epoch F1.2 — R1 undo and shared-effect dispatch revalidation', () => {
-  function propertiesArgs() {
-    return { data: { page_id: PAGE }, command: { type: 'update_properties', properties: {} } }
-  }
-
   async function seedApplied(h: GateHarness) {
+    const args = { data: { page_id: PAGE }, command: { type: 'replace_content', content: '# Simple\noriginal text' } }
     return h.journal.record({
       tool: 'notion-update-page',
-      args: propertiesArgs(),
-      kind: 'properties',
-      inverse: { tool: 'notion-update-page', args: propertiesArgs() },
+      args,
+      kind: 'content-replace',
+      preImage: { kind: 'content-replace', pageId: PAGE, markdown: '# Simple\noriginal text', baselineComplete: true },
+      inverse: { tool: 'notion-update-page', args },
+      scope: { threadId: 'thread-f1', turnId: 'turn-f1', workspaceId: 'workspace-1', connectionGeneration: 'conn-1', ownerGeneration: 'owner-gen-1' },
+      verification: 'verified',
     })
   }
 
@@ -252,7 +253,7 @@ describe('Epoch F1.2 — R1 undo and shared-effect dispatch revalidation', () =>
     harness = makeHarness({
       fetchImpl: async () => {
         harness.setOwner(false)
-        return '# Simple\noriginal text'
+        return completePage('# Simple\noriginal text')
       },
     })
     const contentArgs = { data: { page_id: PAGE }, command: { type: 'replace_content', content: '# Undo content' } }
@@ -260,7 +261,10 @@ describe('Epoch F1.2 — R1 undo and shared-effect dispatch revalidation', () =>
       tool: 'notion-update-page',
       args: { data: { page_id: PAGE }, command: { type: 'replace_content', content: '# Before' } },
       kind: 'content-replace',
+      preImage: { kind: 'content-replace', pageId: PAGE, markdown: '# Simple\noriginal text', baselineComplete: true },
       inverse: { tool: 'notion-update-page', args: contentArgs },
+      scope: { threadId: 'thread-f1', turnId: 'turn-f1', workspaceId: 'workspace-1', connectionGeneration: 'conn-1', ownerGeneration: 'owner-gen-1' },
+      verification: 'verified',
     })
     await expect(
       harness.gate.handleUndo(entry.inverse!.tool, entry.inverse!.args, { journalId: entry.id }),
@@ -479,9 +483,11 @@ describe('Epoch F1.3 — R4 queued work stops behind unknown outcomes', () => {
     })
     const applied = await journal.record({
       tool: 'notion-update-page',
-      args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: {} } },
+      args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: { Title: 'Short title' } } },
       kind: 'properties',
-      inverse: { tool: 'notion-update-page', args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: {} } } },
+      inverse: { tool: 'notion-update-page', args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: { Title: 'Short title' } } } },
+      scope: { threadId: 'thread-f1', turnId: 'turn-f1', workspaceId: 'workspace-1', connectionGeneration: 'conn-1', ownerGeneration: 'owner-gen-1' },
+      verification: 'verified',
     })
     const p1 = gate.handle(propertiesReq(41))
     for (let i = 0; i < 500 && calls.length < 1; i++) await new Promise((r) => setTimeout(r, 0))
@@ -550,14 +556,17 @@ describe('Epoch F1.4 — R6 restored undo without a new turn', () => {
     // Fresh panel reopen: scopeThread only, no model turn yet.
     journal.scopeThread('persisted-thread')
     const calls: Array<{ name: string; args: Record<string, unknown> }> = []
+    let markdown = '# Agent edit'
     const access = createTurnAccessState()
     access.begin('auto', [PAGE], [], { allowed: true, pages: [PAGE] })
     const gate = new WriteGate({
       callTool: async (name, args) => {
         calls.push({ name, args })
+        const command = args.command as { content?: string } | undefined
+        if (command?.content) markdown = command.content
         return { content: [{ type: 'text', text: 'ok' }] }
       },
-      fetchPageMarkdown: async () => '# Simple\noriginal text',
+      fetchPageMarkdown: async () => completePage(markdown),
       getMode: () => access.mode(),
       getContextSet: () => access.contextPages(),
       journal,
@@ -577,12 +586,15 @@ describe('Epoch F1.4 — R6 restored undo without a new turn', () => {
     const store = memoryJournalStore()
     const seeder = new MutationJournal(store)
     seeder.setThread('persisted-thread')
-    const args = { data: { page_id: PAGE }, command: { type: 'update_properties', properties: {} } }
+    const args = { data: { page_id: PAGE }, command: { type: 'replace_content', content: '# Simple\noriginal text' } }
     const entry = await seeder.record({
       tool: 'notion-update-page',
       args,
-      kind: 'properties',
+      kind: 'content-replace',
+      preImage: { kind: 'content-replace', pageId: PAGE, markdown: '# Simple\noriginal text', baselineComplete: true },
       inverse: { tool: 'notion-update-page', args },
+      scope: { threadId: 'persisted-thread', turnId: 'turn-f1', workspaceId: 'workspace-1', connectionGeneration: 'conn-1', ownerGeneration: 'owner-gen-1' },
+      verification: 'verified',
     })
     const { gate, journal, calls } = restoredGate(store)
     expect(gate.journal.captureScope()).toMatchObject({ threadId: 'persisted-thread', turnId: null })
@@ -600,12 +612,15 @@ describe('Epoch F1.4 — R6 restored undo without a new turn', () => {
     const store = memoryJournalStore()
     const seeder = new MutationJournal(store)
     seeder.setThread('persisted-thread')
-    const args = { data: { page_id: PAGE }, command: { type: 'update_properties', properties: {} } }
+    const args = { data: { page_id: PAGE }, command: { type: 'replace_content', content: '# Simple\noriginal text' } }
     const entry = await seeder.record({
       tool: 'notion-update-page',
       args,
-      kind: 'properties',
+      kind: 'content-replace',
+      preImage: { kind: 'content-replace', pageId: PAGE, markdown: '# Simple\noriginal text', baselineComplete: true },
       inverse: { tool: 'notion-update-page', args },
+      scope: { threadId: 'persisted-thread', turnId: 'turn-f1', workspaceId: 'workspace-1', connectionGeneration: 'conn-1', ownerGeneration: 'owner-gen-1' },
+      verification: 'verified',
     })
     const { gate, calls } = restoredGate(store, { owner: false })
     await expect(requestRuntimeUndo(gate, entry.id)).rejects.toThrow(/NOT_OWNER/)
@@ -616,7 +631,7 @@ describe('Epoch F1.4 — R6 restored undo without a new turn', () => {
     const store = memoryJournalStore()
     const seeder = new MutationJournal(store)
     seeder.setThread('persisted-thread')
-    const args = { data: { page_id: PAGE }, command: { type: 'update_properties', properties: {} } }
+    const args = { data: { page_id: PAGE }, command: { type: 'update_properties', properties: { Title: 'Short title' } } }
     const noInverse = await seeder.record({
       tool: 'notion-update-page',
       args,

@@ -18,10 +18,12 @@ export const PROACTIVE_FRACTION = 0.8
 
 /** Best-effort revocation must never hold local sign-out hostage (M8). */
 export const REVOCATION_TIMEOUT_MS = 5000
+export const REFRESH_TIMEOUT_MS = 15_000
 
 /** Fallback token endpoint for direct (non-facade) use; production refresh
  * always goes through the validated discovered endpoint (Epoch 11 / M8). */
 const DEFAULT_TOKEN_ENDPOINT = 'https://mcp.notion.com/token'
+const NOTION_RESOURCE = 'https://mcp.notion.com/mcp'
 
 /**
  * Mutual exclusion for credential state. Production uses a shared browser
@@ -126,7 +128,8 @@ export class TokenStore {
     this.refreshAbort?.abort()
     const attempt = crypto.randomUUID()
     await this.lock.runExclusive(WRITE_LOCK, async () => {
-      await this.deps.local.set({ [K_GEN]: attempt })
+      await this.deps.session.remove([K_ACCESS, K_REFRESH_AT])
+      await this.deps.local.set({ [K_GEN]: attempt, [K_REFRESH]: null, [K_WORKSPACE]: null })
     })
     return attempt
   }
@@ -152,7 +155,7 @@ export class TokenStore {
             '[login] STALE_LOGIN_ATTEMPT: superseded by sign-out, wipe, or a newer login — refusing to restore credentials',
           )
         }
-        await this.writeTokens(token)
+        await this.writeTokens(token, true)
       })
       return
     }
@@ -161,7 +164,7 @@ export class TokenStore {
       // New generation first: a concurrent stale refresh re-checks inside
       // the same lock and loses instead of overwriting the new login.
       await this.deps.local.set({ [K_GEN]: generation })
-      await this.writeTokens(token)
+      await this.writeTokens(token, true)
     })
   }
 
@@ -175,6 +178,11 @@ export class TokenStore {
       const current = (await this.deps.local.get(K_GEN))[K_GEN]
       return current === attempt
     })
+  }
+
+  async credentialGeneration(): Promise<string | null> {
+    const value = (await this.deps.local.get(K_GEN))[K_GEN]
+    return typeof value === 'string' ? value : null
   }
 
   /**
@@ -260,6 +268,9 @@ export class TokenStore {
 
       const refreshAbort = new AbortController()
       this.refreshAbort = refreshAbort
+      let timedOut = false
+      const timer = setTimeout(() => { timedOut = true; refreshAbort.abort() }, REFRESH_TIMEOUT_MS)
+      try {
       let response: Response
       try {
         response = await this.deps.fetchImpl((await this.tokenEndpoint()).toString(), {
@@ -269,14 +280,14 @@ export class TokenStore {
             grant_type: 'refresh_token',
             refresh_token: refreshToken,
             client_id: await this.deps.getClientId(),
+            resource: NOTION_RESOURCE,
           }),
           signal: refreshAbort.signal,
+          redirect: 'error',
         })
       } catch (e) {
-        if (refreshAbort.signal.aborted) return 'no-token'
+        if (refreshAbort.signal.aborted && !timedOut) return 'no-token'
         throw new Error(`[token-refresh] network failure: ${String(e)}`)
-      } finally {
-        if (this.refreshAbort === refreshAbort) this.refreshAbort = null
       }
 
       if (response.status === 400 || response.status === 401) {
@@ -320,6 +331,10 @@ export class TokenStore {
         return 'reauth-required'
       }
       return 'refreshed'
+      } finally {
+        clearTimeout(timer)
+        if (this.refreshAbort === refreshAbort) this.refreshAbort = null
+      }
     })
   }
 
@@ -329,12 +344,14 @@ export class TokenStore {
    * session storage. A crash between the two writes still leaves us able to
    * refresh; the reverse order would not.
    */
-  private async writeTokens(token: TokenResponse): Promise<void> {
+  private async writeTokens(token: TokenResponse, replace = false): Promise<void> {
     const issuedAt = this.now
     const lifetimeMs = Math.max(1, token.expires_in) * 1000
-    if (token.refresh_token) {
+    const workspaceId = extractWorkspaceId(token)
+    if (replace) {
+      await this.deps.local.set({ [K_REFRESH]: token.refresh_token ?? null, [K_WORKSPACE]: workspaceId ?? null })
+    } else if (token.refresh_token) {
       const items: Record<string, unknown> = { [K_REFRESH]: token.refresh_token }
-      const workspaceId = extractWorkspaceId(token)
       if (workspaceId) items[K_WORKSPACE] = workspaceId
       await this.deps.local.set(items)
     }
@@ -379,6 +396,7 @@ export class TokenStore {
             headers: { 'content-type': 'application/x-www-form-urlencoded' },
             body: new URLSearchParams({ token: revocationToken, client_id: clientId }),
             signal: ctrl.signal,
+            redirect: 'error',
           })
         } catch {
           /* best effort — local sign-out already completed */
@@ -427,7 +445,7 @@ export class TokenStore {
       } catch {
         throw new Error('[token-refresh] invalid discovered token endpoint')
       }
-      if (url.protocol !== 'https:') throw new Error('[token-refresh] invalid discovered token endpoint')
+      if (url.origin !== 'https://mcp.notion.com' || url.username || url.password || url.hash) throw new Error('[token-refresh] invalid discovered token endpoint')
       this.tokenEndpointCache = url
       return url
     }

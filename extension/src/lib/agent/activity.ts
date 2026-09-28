@@ -13,6 +13,7 @@ export type ActivityItem =
       resultText?: string
       journalId?: string
       undoable?: boolean
+      verification?: 'verified' | 'unverified' | 'not-applicable'
       undoError?: string
       undone?: boolean
       /** Precise reason an applied change cannot be undone (with inspectUrl). */
@@ -23,6 +24,7 @@ export type ActivityItem =
       inspectUrl?: string
       /** The user marked this unresolved entry reviewed (outcome unchanged). */
       reviewed?: boolean
+      reviewable?: boolean
     }
 
 export type ActivityEvent =
@@ -117,10 +119,12 @@ export function deriveActivitySummary(items: ActivityItem[], state: { active: bo
   const failed = [...tools].reverse().find((item) => item.status === 'failed')
   const running = [...actions].reverse().find((item) => item.status === 'running')
   const unknown = [...tools].reverse().find((item) => item.status === 'unknown')
+  const unverified = tools.some((item) => item.verification === 'unverified')
 
   if (state.outcome) return { label: state.outcome === 'failed' ? 'Response failed' : 'Response stopped', actionCount: actions.length, durationMs, status: 'failed' }
   if (failed) return { label: failedToolActivityLabel(failed.tool), actionCount: actions.length, durationMs, status: 'failed' }
   if (unknown) return { label: 'Needs review', actionCount: actions.length, durationMs, status: 'failed' }
+  if (unverified) return { label: 'Applied, verification unavailable', actionCount: actions.length, durationMs, status: 'failed' }
   if (!state.active) return { label: 'Answer ready', actionCount: actions.length, durationMs, status: 'completed' }
   if (state.answerStarted) return { label: 'Writing the answer…', actionCount: actions.length, durationMs, status: 'active' }
   if (running?.kind === 'search') return { label: 'Searching the web…', actionCount: actions.length, durationMs, status: 'active' }
@@ -181,6 +185,9 @@ export function describeUnresolvedEntry(entry: {
   if (entry.status === 'pending') {
     return 'Nox stopped before this change was confirmed — it may or may not have applied. Do not retry it; inspect it in Notion, then mark it reviewed to allow new work. Undo is unavailable while the outcome is unresolved.'
   }
+  if (entry.status === 'submitted') {
+    return 'Notion accepted this task, but its final result is pending. Nox will check the task again. Do not retry the change; undo is unavailable until the result is known.'
+  }
   const extra = entry.outcomeDetail ? ` Last recorded detail: ${entry.outcomeDetail}.` : ''
   const reviewed = entry.reviewedAt != null ? ' Reviewed by user.' : ''
   return `Outcome unknown — it may or may not have applied. Do not retry it; inspect it in Notion, then mark it reviewed to allow new work. Undo is unavailable while the outcome is unresolved.${extra}${reviewed}`
@@ -189,7 +196,7 @@ export function describeUnresolvedEntry(entry: {
 /** Journal-driven display state for one restored or live tool row. */
 export function markUnresolved(
   item: Extract<ActivityItem, { kind: 'tool' }>,
-  update: { journalId: string; detail: string; inspectUrl?: string; reviewed?: boolean },
+  update: { journalId: string; detail: string; inspectUrl?: string; reviewed?: boolean; reviewable?: boolean },
 ): Extract<ActivityItem, { kind: 'tool' }> {
   return {
     ...item,
@@ -199,6 +206,7 @@ export function markUnresolved(
     unresolvedDetail: update.detail,
     inspectUrl: update.inspectUrl,
     reviewed: update.reviewed,
+    reviewable: update.reviewable,
   }
 }
 

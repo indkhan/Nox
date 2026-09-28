@@ -78,13 +78,18 @@ describe('verbose turn trace', () => {
     expect(formatLogs()).toMatch(/Plan rejected/)
   })
 
-  it('error detail carries the message behind the safe category', () => {
-    const text = detailedErrorText(new Error('STEP_LIMIT_REACHED: 12 tool calls were made'))
+  it('error detail is private by default', () => {
+    const text = detailedErrorText(new Error('Workspace title: Private Project X'))
+    expect(text).not.toContain('Private Project X')
+  })
+
+  it('explicit error detail carries the message behind the safe category', () => {
+    const text = detailedErrorText(new Error('STEP_LIMIT_REACHED: 12 tool calls were made'), true)
     expect(text).toMatch(/STEP_LIMIT_REACHED/)
   })
 
   it('error detail redacts credentials and stays bounded', () => {
-    const text = detailedErrorText(new Error(`boom Bearer ABCDEF123456 ${'x'.repeat(2000)}`))
+    const text = detailedErrorText(new Error(`boom Bearer ABCDEF123456 ${'x'.repeat(2000)}`), true)
     expect(text).not.toContain('ABCDEF123456')
     expect(text).toMatch(/Bearer \[redacted\]/)
     expect(text.length).toBeLessThan(500)

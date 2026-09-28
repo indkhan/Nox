@@ -22,6 +22,7 @@ const SAFE_CHUNK = 256 * 1024;
 // ~2-3 bytes per unit) while bounding memory before a newline arrives.
 const MAX_CODEX_LINE_CHARS = 8 * 1024 * 1024;
 const MAX_RESTARTS = 5;
+const MAX_PENDING = 256;
 const STABLE_RUN_MS = 60_000;
 
 let nextChunkId = 1;
@@ -45,8 +46,10 @@ function write(obj) {
   const body = Buffer.from(JSON.stringify(obj), 'utf8');
   const header = Buffer.alloc(4);
   header.writeUInt32LE(body.length, 0);
-  process.stdout.write(Buffer.concat([header, body]));
+  if (!process.stdout.write(Buffer.concat([header, body]))) state.proc?.stdout.pause();
 }
+process.stdout.on('drain', () => state.proc?.stdout.resume());
+process.stdout.on('error', () => { state.proc?.kill(); process.exit(1); });
 
 function sendToExtension(envelope) {
   const text = JSON.stringify(envelope);
@@ -73,7 +76,7 @@ function codexInfo() {
   const codex = resolveCodex();
   return codex.path
     ? { found: true, version: codex.version, path: codex.path, launcher: codex.launcher ?? null }
-    : { found: false, error: 'Codex not found' };
+    : { found: false, error: codex.error ?? 'Codex not found', incompatible: codex.testedCompatible === false };
 }
 
 // ── codex process lifecycle ──────────────────────────────────────────────────
@@ -88,7 +91,7 @@ export function startCodex({ force = false } = {}) {
 
   const info = codexInfo();
   if (!info.found) {
-    status('dead', { reason: 'codex-missing', error: info.error });
+    status('dead', { reason: info.incompatible ? 'codex-incompatible' : 'codex-missing', error: info.error });
     return state.spawnState;
   }
 
@@ -105,6 +108,15 @@ export function startCodex({ force = false } = {}) {
   const proc = spawn(cmd, args, { cwd: tmpdir(), stdio: ['pipe', 'pipe', 'pipe'] });
   state.proc = proc;
   state.startedAt = Date.now();
+  proc.on('error', (error) => noteStderr(`codex process error: ${error.message}`));
+  proc.stdin.on('error', (error) => {
+    noteStderr(`codex stdin error: ${error.message}`);
+    if (state.proc === proc) proc.kill();
+  });
+  proc.stdout.on('error', (error) => {
+    noteStderr(`codex stdout error: ${error.message}`);
+    if (state.proc === proc) proc.kill();
+  });
 
   proc.on('spawn', () => {
     state.spawnState = 'running';
@@ -121,48 +133,43 @@ export function startCodex({ force = false } = {}) {
   // per startCodex call); truncated bytes never carry into the next process.
   const decoder = new StringDecoder('utf8');
   let buf = '';
+  let discarding = false;
   proc.stdout.on('data', (chunk) => {
     // Chunk may arrive as Buffer (no setEncoding) or string; decode
     // incrementally so a 2/3/4-byte sequence split across writes survives.
     const text = typeof chunk === 'string' ? chunk : decoder.write(chunk);
-    if (text) {
-      if (buf.length + text.length > MAX_CODEX_LINE_CHARS) {
-        noteStderr(`codex line exceeded ${MAX_CODEX_LINE_CHARS} chars; discarding ${buf.length} buffered chars`);
-        buf = '';
-        // Drop this chunk's contribution to the overlong line and resync at
-        // the next newline it contains, if any.
-        const nlInChunk = text.indexOf('\n');
-        if (nlInChunk >= 0) buf = text.slice(nlInChunk + 1);
-        // Fall through to frame any complete lines in the resynced buffer.
-      } else {
-        buf += text;
+    for (let start = 0; start < text.length;) {
+      const nl = text.indexOf('\n', start);
+      const end = nl < 0 ? text.length : nl;
+      if (!discarding) {
+        const part = text.slice(start, end);
+        if (buf.length + part.length > MAX_CODEX_LINE_CHARS) {
+          noteStderr(`codex line exceeded ${MAX_CODEX_LINE_CHARS} chars; discarding`);
+          buf = '';
+          discarding = true;
+        } else {
+          buf += part;
+        }
       }
-    }
-    let nl;
-    while ((nl = buf.indexOf('\n')) >= 0) {
-      const line = buf.slice(0, nl).trim();
-      buf = buf.slice(nl + 1);
-      if (line) handleCodexLine(line);
-      // A single chunk could complete many lines; keep the bound tight.
-      if (buf.length > MAX_CODEX_LINE_CHARS) {
-        noteStderr(`codex line exceeded ${MAX_CODEX_LINE_CHARS} chars; discarding buffer`);
-        buf = '';
-        break;
+      if (nl < 0) break;
+      if (!discarding) {
+        const line = buf.trim();
+        if (line) handleCodexLine(line);
       }
-    }
-    // Bound the unterminated tail even when no newline arrived yet.
-    if (buf.length > MAX_CODEX_LINE_CHARS) {
-      noteStderr(`codex line exceeded ${MAX_CODEX_LINE_CHARS} chars without newline; discarding ${buf.length} chars`);
       buf = '';
+      discarding = false;
+      start = nl + 1;
     }
   });
 
   proc.stderr.on('data', (d) => noteStderr(d.toString()));
 
-  proc.on('exit', (code, signal) => {
+  proc.on('close', (code, signal) => {
     clearTimeout(state.stableTimer);
     state.stableTimer = null;
+    if (state.proc !== proc) return;
     state.proc = null;
+    process.stdin.resume();
     // Truncated final protocol data (a line without its newline, or an
     // incomplete UTF-8 sequence flushed here) is an explicit failure, never
     // silent corruption: pending work already fails below, and the leftover
@@ -210,6 +217,12 @@ function handleCodexLine(line) {
   }
 
   // A response to something we sent.
+  if (!m || typeof m !== 'object' || Array.isArray(m) ||
+      (m.id !== undefined && typeof m.id !== 'string' && typeof m.id !== 'number') ||
+      (m.method !== undefined && typeof m.method !== 'string')) {
+    noteStderr('codex invalid envelope discarded');
+    return;
+  }
   if (m.id !== undefined && (m.result !== undefined || m.error !== undefined)) {
     const pending = pendingOut.get(m.id);
     if (!pending) return;
@@ -225,6 +238,10 @@ function handleCodexLine(line) {
 
   // A server→client request (item/tool/call and friends).
   if (m.method && m.id !== undefined) {
+    if (pendingIn.size >= MAX_PENDING) {
+      toStdin({ id: m.id, result: { decision: 'decline' } });
+      return;
+    }
     pendingIn.add(m.id);
     sendToExtension({ t: 'req', rid: m.id, method: m.method, params: m.params });
     return;
@@ -245,7 +262,12 @@ function publicConfig(result) {
 }
 
 function toStdin(obj) {
-  state.proc?.stdin?.write(JSON.stringify(obj) + '\n');
+  if (!state.proc?.stdin || state.proc.stdin.destroyed) return false;
+  if (!state.proc.stdin.write(JSON.stringify(obj) + '\n')) {
+    process.stdin.pause();
+    state.proc.stdin.once('drain', () => process.stdin.resume());
+  }
+  return true;
 }
 
 function failAllPending(reason) {
@@ -297,6 +319,9 @@ function handle(msg) {
           cid: msg.cid,
           error: { code: -32099, message: `codex not running (state=${state.spawnState})` },
         });
+      }
+      if (pendingOut.size >= MAX_PENDING) {
+        return sendToExtension({ t: 'resp', cid: msg.cid, error: { code: -32096, message: 'bridge request limit reached' } });
       }
       const outId = nextOutId++;
       const timer = setTimeout(() => {

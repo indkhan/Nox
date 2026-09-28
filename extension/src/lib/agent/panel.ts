@@ -52,7 +52,9 @@ export const writeGate = new WriteGate({
     // A tool-declared failure is never page content: surface it so the guard
     // refuses instead of snapshotting error text as a baseline.
     if (result.isError) throw new Error(result.content.map((c) => c.text ?? '').join('\n') || 'the page read failed')
-    return result.content.filter((c) => c.type === 'text').map((c) => c.text ?? '').join('\n')
+    return result.structuredContent != null
+      ? JSON.stringify(result.structuredContent)
+      : result.content.filter((c) => c.type === 'text').map((c) => c.text ?? '').join('\n')
   },
   getMode: () => turnAccess.mode(),
   getContextSet: () => turnAccess.contextPages(),
@@ -80,7 +82,7 @@ export const agentLoop = new AgentLoop({
   bridge,
   codex,
   executor: new ToolExecutor({
-    callTool: async (name, args, signal, provenance) => {
+    callTool: async (name, args, signal, provenance, callId) => {
       if (name === WORKSPACE_PLAN_TOOL_NAME) {
         // Explicit human approval is required in both Ask and Auto modes:
         // a proposed plan never authorizes itself.
@@ -118,7 +120,7 @@ export const agentLoop = new AgentLoop({
         // boundary the enabled flow must use; nothing reaches them yet.
         throw new Error(uploadUnsupportedMessage())
       }
-      const result = (await writeGate.handle({ rid: 0, tool: name, args, namespace: null, signal, provenance })) as {
+      const result = (await writeGate.handle({ rid: 0, tool: name, args, namespace: null, signal, provenance, callId })) as {
         content?: Array<{ type: string; text?: string }>
         isError?: boolean
       }
@@ -128,8 +130,9 @@ export const agentLoop = new AgentLoop({
       }
       return { content: result.content ?? [] }
     },
-    assertToolAllowed: (name) => {
-      const verdict = notion.capabilities.can(name)
+    assertToolAllowed: (name, args) => {
+      if (name === WORKSPACE_PLAN_TOOL_NAME || name === UPLOAD_FILE_TOOL_NAME) return
+      const verdict = notion.capabilities.can(name, args)
       if (!verdict.allowed) throw new Error(`"${name}" ${verdict.reason ?? 'is unavailable'}`)
     },
     onModelTruncation: (pageId, delivered, total) => writeGate.noteModelTruncation(pageId, delivered, total),

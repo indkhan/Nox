@@ -5,15 +5,31 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import assert from 'node:assert';
-import { resolveCodex } from './resolve-codex.mjs';
+import { resolveCodex, selectCodexCandidate } from './resolve-codex.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+const candidates = [
+  { path: 'untested', version: '0.157.1' },
+  { path: 'tested', version: '0.153.4' },
+];
+assert.equal(selectCodexCandidate(candidates)?.path, 'tested');
+assert.equal(selectCodexCandidate([candidates[0]]), null);
+assert.equal(selectCodexCandidate([candidates[0]], true)?.path, 'untested');
+const originalBin = process.env.CODEX_BIN;
+const originalExperimental = process.env.NOX_EXPERIMENTAL_CODEX;
+process.env.CODEX_BIN = join(HERE, 'fixtures', 'fake-codex.mjs');
+delete process.env.NOX_EXPERIMENTAL_CODEX;
+assert.equal(resolveCodex().path, null, 'untested explicit binary must fail closed');
+process.env.NOX_EXPERIMENTAL_CODEX = '1';
+assert.equal(resolveCodex().version, '0.0.1', 'experimental override permits the fixture');
+if (originalBin === undefined) delete process.env.CODEX_BIN; else process.env.CODEX_BIN = originalBin;
+if (originalExperimental === undefined) delete process.env.NOX_EXPERIMENTAL_CODEX; else process.env.NOX_EXPERIMENTAL_CODEX = originalExperimental;
 const child = spawn(
   process.execPath,
   [join(HERE, 'nox-bridge.mjs')],
   {
     stdio: ['pipe', 'pipe', 'inherit'],
-    env: { ...process.env, CODEX_BIN: process.env.CODEX_BIN ?? join(HERE, 'fixtures', 'fake-codex.mjs') },
+    env: { ...process.env, CODEX_BIN: join(HERE, 'fixtures', 'fake-codex.mjs'), NOX_EXPERIMENTAL_CODEX: '1' },
   },
 );
 
@@ -161,11 +177,22 @@ for (const c of chunkFrames) {
 }
 console.log(`✔ large non-ASCII frame preserved (${(uLargeDelta.params.delta.length / 1024).toFixed(0)}K chars, ${chunkFrames.length} chunk frames under cap)`);
 
+// A slow Chrome reader must not strand Codex stdout or lose a pending reply.
+child.stdout.pause();
+send({ t: 'rpc', cid: 'slow-reader', method: 'test/unicode-large', params: {} });
+await new Promise(resolve => setTimeout(resolve, 100));
+child.stdout.resume();
+assert.equal((await waitFor(m => m.t === 'resp' && m.cid === 'slow-reader', 'slow-reader response', 30000)).result?.ok, true);
+
 // ── 4d. Overlong unterminated line is discarded, later lines work ──
 send({ t: 'rpc', cid: 'u-overlong', method: 'test/overlong-line', params: {} });
 const uOverlongResp = await waitFor((m) => m.t === 'resp' && m.cid === 'u-overlong', 'overlong response', 30000);
 assert.equal(uOverlongResp.result?.ok, true);
 await waitFor((m) => m.t === 'notif' && m.params?.itemId === 'u-after-overlong', 'post-overlong line', 15000);
+send({ t: 'rpc', cid: 'null-line', method: 'test/null-line', params: {} });
+assert.equal((await waitFor(m => m.t === 'resp' && m.cid === 'null-line', 'null line response')).result?.ok, true);
+send({ t: 'rpc', cid: 'overlong-tail', method: 'test/overlong-tail', params: {} });
+assert.equal((await waitFor(m => m.t === 'resp' && m.cid === 'overlong-tail', 'overlong tail response')).result?.ok, true);
 console.log('✔ overlong line discarded without stalling the bridge');
 
 // ── 4e. EOF midway through a sequence restarts cleanly ──

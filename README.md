@@ -12,6 +12,8 @@ See the [Privacy policy](PRIVACY.md) for exactly where data goes.
 
 > **Status: v0.1.0-alpha.** Nox is usable today by installing it directly from this repository.
 
+The [audit repair ledger](docs/audit/repair-status.md) links safety claims to local checks and lists the live integration limits of this alpha.
+
 ## Why Nox
 
 If you already use Codex, Nox lets you bring that AI access directly into Notion instead of adding another AI service in the middle.
@@ -28,7 +30,9 @@ If you already use Codex, Nox lets you bring that AI access directly into Notion
 ### Requirements
 
 - [Node.js 22+](https://nodejs.org/)
-- [Codex CLI](https://github.com/openai/codex), signed in with `codex login`
+- [Codex CLI](https://github.com/openai/codex) 0.153.4, signed in with `codex login`.
+  Other versions require an explicit `NOX_EXPERIMENTAL_CODEX=1` opt-in until
+  their tool isolation and app-server behavior are verified with Nox.
 - Chrome on Windows 10/11 or Ubuntu 22.04/24.04 (other Chromium browsers and
   macOS are unverified in this alpha — they may work but are not claimed as
   supported; see the [install notes](scripts/release/README.md))
@@ -84,8 +88,8 @@ That's it. Nox is ready in the Chrome side panel.
   five affected objects — with explicit approval in both Ask and Auto modes.
   A single cosmetic view rename or a single-page move uses one ordinary approval card.
 - **Auto needs your per-turn grant for silent edits** — “Allow small edits this turn”
-  (off by default, Auto only) permits property updates and small text additions on
-  the listed pages, up to five effects. Everything else asks.
+  (off by default, Auto only) permits one non-clearing property value of up to
+  256 bytes per change on listed pages, up to five effects. Everything else asks.
 - **Shows every action it takes, and undoes what can be undone**
 - **Optional web search** through Codex; file attachments stay local-only
   (PDF/image analysis is unavailable, and upload into Notion is unavailable in this alpha)
@@ -164,14 +168,14 @@ Two halves, both yours:
 
 | Capability | Automated cover | Live evidence | Status |
 |---|---|---|---|
-| Reads, small edits, scoped plans, owner-only execution, durable unknown outcomes | Full extension suite plus the bridge harness | Scratch-workspace runs in [smoke.md](docs/smoke.md) | Implemented; live acceptance pending |
+| Reads, small edits, scoped plans, owner-only execution, durable unknown outcomes | Full extension suite plus the bridge harness | Scratch-workspace runs in [smoke.md](docs/legacy/smoke.md) | Implemented; live acceptance pending |
 | Plain-page undo with a verified baseline | Deterministic gate/history suites | C10 | Supported within the stated limits; rich, property, schema, view, move, and creation undo unavailable |
 | File upload into Notion | Fail-closed refusal/validation matrix | No live ticket fixture | Explicitly unsupported — files stay local-only |
 | PDF/image analysis, bulk autofill, quota estimates | — | — | Not implemented and not claimed |
-| Native-tool isolation per Codex version and model | Fail-closed feature/MCP inspection tests | Per-model matrix in [answer-quality-verification.md](docs/answer-quality-verification.md); reference Codex 0.153.4 | Pending live runs; a newer-than-tested Codex runs with an unverified warning |
+| Native-tool isolation per Codex version and model | Fail-closed feature/MCP inspection tests | Per-model matrix in [answer-quality-verification.md](docs/legacy/answer-quality-verification.md); reference Codex 0.153.4 | Pending live runs; a newer-than-tested Codex runs with an unverified warning |
 
 Skipped opt-in cases are pending, never passed. No release is certified
-vulnerability-free; use the [smoke checklist](docs/smoke.md) for final live testing.
+vulnerability-free; use the [smoke checklist](docs/legacy/smoke.md) for final live testing.
 
 ## Documentation
 
@@ -181,9 +185,9 @@ vulnerability-free; use the [smoke checklist](docs/smoke.md) for final live test
 | [Privacy policy](PRIVACY.md) | Data processing, storage, sharing, and deletion |
 | [Support](SUPPORT.md) | Troubleshooting and getting help |
 | [Security](SECURITY.md) | Private vulnerability reporting |
-| [docs/THREAT-MODEL.md](docs/THREAT-MODEL.md) | Assets, threats (prompt injection first), and mitigations |
-| [docs/PERMISSIONS.md](docs/PERMISSIONS.md) | Why every manifest permission exists |
-| [docs/smoke.md](docs/smoke.md) | Manual per-release smoke checklist |
+| [docs/THREAT-MODEL.md](docs/legacy/THREAT-MODEL.md) | Assets, threats (prompt injection first), and mitigations |
+| [docs/PERMISSIONS.md](docs/legacy/PERMISSIONS.md) | Why every manifest permission exists |
+| [docs/smoke.md](docs/legacy/smoke.md) | Manual per-release smoke checklist |
 
 ## Contributing
 

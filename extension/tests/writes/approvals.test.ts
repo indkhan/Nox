@@ -6,7 +6,7 @@ const NO_GRANT = { allowed: false, pages: [] as string[] }
 const GRANT_P1 = { allowed: true, pages: ['p1'] }
 const READ_CALL = { name: 'notion-search', mutates: false, kind: 'read' as const, args: {}, targets: [] as string[], parents: [] as string[], affectedCount: 0, grant: NO_GRANT }
 const WRITE_CALL = { name: 'notion-update-page', mutates: true, kind: 'content-replace' as const, args: { data: { page_id: 'p1' } }, targets: ['p1'], parents: [] as string[], affectedCount: 1, grant: NO_GRANT }
-const PROPS_CALL = { name: 'notion-update-page', mutates: true, kind: 'properties' as const, args: { data: { page_id: 'p1' } }, targets: ['p1'], parents: [] as string[], affectedCount: 1, grant: GRANT_P1 }
+const PROPS_CALL = { name: 'notion-update-page', mutates: true, kind: 'properties' as const, args: { data: { page_id: 'p1' }, command: { type: 'update_properties', properties: { Title: 'Short title' } } }, targets: ['p1'], parents: [] as string[], affectedCount: 1, grant: GRANT_P1 }
 const MOVE_CALL = { name: 'notion-move-pages', mutates: true, kind: 'move' as const, args: {}, targets: ['p1'], parents: [] as string[], affectedCount: 1, grant: NO_GRANT }
 
 describe('evaluateApproval', () => {
@@ -22,6 +22,21 @@ describe('evaluateApproval', () => {
   it('auto mode allows in-context writes without escalation', () => {
     const verdict = evaluateApproval(PROPS_CALL, { mode: 'auto', contextSet: new Set(['p1']) })
     expect(verdict.action).toBe('allow')
+  })
+
+  it('only grants bounded single-field non-clearing property changes', () => {
+    const base = { mode: 'auto' as const, contextSet: new Set(['p1']) }
+    const withProps = (properties: Record<string, unknown>) => ({ ...PROPS_CALL, args: { data: { page_id: 'p1' }, command: { type: 'update_properties', properties } } })
+    for (const properties of [
+      { Title: 'x'.repeat(300) },
+      { Title: '' },
+      { Title: null },
+      { Title: 'A', Status: 'B' },
+      { Title: { delete: true } },
+      {},
+    ]) expect(evaluateApproval(withProps(properties), base).action).toBe('require-approval')
+    expect(evaluateApproval(withProps({ Title: 'A' }), base).action).toBe('allow')
+    expect(evaluateApproval({ ...PROPS_CALL, kind: 'content-update', args: { command: { type: 'update_content', content: 'new' } } }, base).action).toBe('require-approval')
   })
 
   it('auto without the small-edit grant requests ordinary consent', () => {
@@ -60,7 +75,7 @@ describe('evaluateApproval', () => {
     const undashed = 'A1B2C3D4E5F64789ABCDEF0123456789'
     const dashed = 'a1b2c3d4-e5f6-4789-abcd-ef0123456789'
     const verdict = evaluateApproval(
-      { ...PROPS_CALL, args: { data: { page_id: undashed } }, targets: [undashed], grant: { allowed: true, pages: [dashed] } },
+      { ...PROPS_CALL, args: { ...PROPS_CALL.args, data: { page_id: undashed } }, targets: [undashed], grant: { allowed: true, pages: [dashed] } },
       { mode: 'auto', contextSet: new Set([dashed]) },
     )
     expect(verdict.action).toBe('allow')
@@ -86,9 +101,9 @@ describe('evaluateApproval', () => {
     expect(bulk.action).toBe('require-approval')
   })
 
-  it('does not trust model-supplied provenance flags', () => {
+  it('does not silently approve unvalidated model-supplied fields', () => {
     const verdict = evaluateApproval({ ...PROPS_CALL, args: { ...PROPS_CALL.args, injected_request: true } }, { mode: 'auto', contextSet: new Set(['p1']) })
-    expect(verdict.action).toBe('allow')
+    expect(verdict.action).toBe('require-approval')
   })
 
   it('escalates writes when trusted code marks untrusted turn context', () => {

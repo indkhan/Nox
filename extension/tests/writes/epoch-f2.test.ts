@@ -195,6 +195,7 @@ describe('Epoch F2.2 — R2 mention truncation must not authorize replacement', 
 
 describe('Epoch F2.3 — R2 continuation delivery and provider completeness', () => {
   function continuationHarness(providerText: string) {
+    const completeRead = providerText.startsWith('{') ? providerText : JSON.stringify({ id: PAGE, content: providerText, truncated: false })
     const dispatches: Array<{ name: string; args: Record<string, unknown> }> = []
     const journal = new MutationJournal()
     journal.setThread('thread-f2')
@@ -202,11 +203,11 @@ describe('Epoch F2.3 — R2 continuation delivery and provider completeness', ()
     access.begin('ask', [PAGE], [], { allowed: false, pages: [] })
     const gate = new WriteGate({
       callTool: async (name, args) => {
-        if (name === 'notion-fetch') return { content: [{ type: 'text', text: providerText }] }
+        if (name === 'notion-fetch') return { content: [{ type: 'text', text: completeRead }] }
         dispatches.push({ name, args })
         return { content: [{ type: 'text', text: 'ok' }] }
       },
-      fetchPageMarkdown: async () => providerText,
+      fetchPageMarkdown: async () => completeRead,
       getMode: () => access.mode(),
       getContextSet: () => access.contextPages(),
       journal,

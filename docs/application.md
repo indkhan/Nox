@@ -4,7 +4,7 @@ Nox is a Chrome side-panel assistant for Notion. It uses the user's local Codex
 installation to decide what to do and Notion's hosted MCP service to read or change the
 workspace. Nox has no backend, account, or telemetry service.
 
-For the short visual version, open [how-it-works.html](how-it-works.html).
+For the short visual version, open [how-it-works.html](legacy/how-it-works.html).
 
 ## The whole system
 
@@ -187,11 +187,12 @@ side panel ⇄ com.nox.bridge ⇄ codex app-server
   JSON          framed JSON       newline JSON-RPC
 ```
 
-`bridge/nox-bridge.mjs` is a dependency-free Node host. It resolves the newest usable Codex
-binary to an absolute existing path (PATH names never stay bare), caches successful
-discovery for the host lifetime, honors an explicit `CODEX_BIN` absolute-path override
-that fails closed when invalid, and records the selected path/version (newest-selected
-is not equated with tested-compatible). It starts `codex app-server` in a temporary working directory, relays requests and
+`bridge/nox-bridge.mjs` is a dependency-free Node host. It prefers the newest installed
+Codex version tested with this Nox revision and resolves it to an absolute existing path
+(PATH names never stay bare). Untested versions fail closed unless the user explicitly
+sets `NOX_EXPERIMENTAL_CODEX=1`; `CODEX_BIN` pins a local binary but does not bypass
+this check. Successful discovery is cached for the host lifetime. The bridge records
+the selected path/version and starts `codex app-server` in a temporary working directory, relays requests and
 notifications, and reports health. It retries crashes up to five times. Codex stdout is
 decoded as a UTF-8 stream (split multibyte sequences survive) with one line capped at
 8 MiB characters; truncated or malformed lines are discarded with a bounded diagnostic
@@ -322,8 +323,8 @@ only by operation label until a second concrete plan supplies their ids.
 Reads never need plans or approval. A single cosmetic view rename or
 single-page move uses an ordinary approval card; anything structural needs a
 plan. In Auto, silent edits happen only under the user's explicit per-turn
-small-edit grant for listed pages — property updates and small text additions
-up to five effects — while analysis without the grant authorizes nothing. Approval cards show the complete canonical
+small-edit grant for listed pages — one non-clearing scalar property value
+within 256 bytes per change, up to five effects — while analysis without the grant authorizes nothing. Approval cards show the complete canonical
 payload with targets, object count, and destructive flags outside the
 collapsible details; approving dispatches the frozen snapshot, never the live
 request object, and there is no approve-all. Workspace plans validate every
@@ -366,9 +367,13 @@ afterwards, so a crash can never leave a dispatched effect without a durable
 identity. Mutations require a persisted thread and an established workspace;
 a success the store cannot record surfaces as an applied-with-recovery-warning
 instead of plain success. Unresolved operations restore as prominent
-Needs-review activity with inspect links and readback evidence, and block new
-writes and undo until marked reviewed. Undo reserves its original atomically
-and completes only when the inverse is known applied.
+Needs-review activity with inspect links and readback evidence, and block
+conflicting writes until marked reviewed. Conflicts are matched by workspace
+and affected page across chats. Accepted Notion tasks persist their remote id
+as `submitted`; an owner panel resumes status polling after reconnect without
+resubmitting the mutation. Provider-reported application and readback
+verification are recorded separately. Undo reserves its original atomically
+and completes only after a matching restoration readback.
 
 ```text
 change requested
@@ -424,17 +429,18 @@ IndexedDB database `nox` is currently version 3.
 
 | Store | Contains |
 |---|---|
-| `threads` | Conversation metadata and the Codex thread id. |
+| `threads` | Conversation metadata, workspace identity, and the Codex thread id. |
 | `messages` | User/assistant text, stream state, usage, and activity. |
-| `journal` | Applied changes, safe inverse calls, and undo state. |
+| `journal` | Pending, submitted, applied, failed, and unknown changes; verification, inverse, and undo state. |
 | `attachments` | Files attached to local conversations, owned by exactly one thread. |
 
 Version 3 removes unused page/mention cache stores and unused sort indexes while
 preserving threads, messages, attachments, and the change journal.
 
-Deleting a thread removes its messages, journal entries, and owned attachment
-bytes in the same transaction; other threads and unlinked legacy rows are
-untouched. Startup drops provably unreferenced legacy blobs (no thread, or a
+Deleting a thread removes its messages, settled journal entries, and owned attachment
+bytes in the same transaction. Unresolved workspace-bound entries remain visible
+in workspace recovery; an unreviewed legacy entry without workspace identity
+prevents ordinary deletion until reviewed. Startup drops provably unreferenced legacy blobs (no thread, or a
 thread that no longer exists) without guessing ownership by filename. Exports
 carry attachment metadata only — never file bytes, upload tickets, or tokens.
 
@@ -475,7 +481,7 @@ its own conversation data under its normal `~/.codex` storage.
 | Support-log disclosure | Diagnostics log event categories, hop/stage, safe status codes, operation IDs, turn-trace counts (context fill, tool names + arg keys, plan op counts, approval/plan decisions, answer length), and connection stages only — no prompt bodies, answers, page titles, tokens, provider bodies, upload URLs, arg values, or queries. Turn/tool error lines additionally carry the redacted, truncated error message (credentials still redacted; review before sharing). Console capture converts errors to safe metadata with credential redaction; Copy is user-initiated with a review reminder and no telemetry. |
 | Two active panels | One owner selected with Web Locks; other panels are viewers. |
 
-See [THREAT-MODEL.md](THREAT-MODEL.md) and [PERMISSIONS.md](PERMISSIONS.md) for the full
+See [THREAT-MODEL.md](legacy/THREAT-MODEL.md) and [PERMISSIONS.md](legacy/PERMISSIONS.md) for the full
 security and Chrome-permission rationale.
 
 ## Repository map
@@ -502,7 +508,8 @@ Nox/
 Nox requires Node.js 22+. The main installer uses an existing pnpm 10+ installation or
 downloads a pinned pnpm release through Node's Corepack, then checks whether Codex is
 installed and signed in and whether Chrome is present. Codex discovery resolves to an
-absolute path with an explicit `CODEX_BIN` override that fails closed; release archives
+absolute path with an explicit `CODEX_BIN` override and rejects untested versions unless
+`NOX_EXPERIMENTAL_CODEX=1`; release archives
 carry the root license plus assembled third-party notices, are staged in an isolated
 temporary directory, and share one version source (`extension/package.json`, display
 `v<version>-alpha`).
@@ -519,4 +526,4 @@ node ../bridge/test-bridge.mjs   # bridge + fake Codex integration test
 ```
 
 The bridge wire format is documented in [bridge/PROTOCOL.md](../bridge/PROTOCOL.md).
-Release checks are in [smoke.md](smoke.md).
+Release checks are in [smoke.md](legacy/smoke.md).

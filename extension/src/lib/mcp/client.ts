@@ -78,6 +78,7 @@ export class McpRpcError extends Error {
 export class McpClient {
   private sessionId: string | null = null
   private initialized = false
+  private initializeResult: Record<string, unknown> | null = null
 
   constructor(private readonly deps: McpClientDeps) {}
 
@@ -86,6 +87,7 @@ export class McpClient {
   }
 
   async initialize(): Promise<Record<string, unknown>> {
+    if (this.initialized && this.initializeResult) return this.initializeResult
     const result = (await this.rpc('initialize', {
       protocolVersion: MCP_PROTOCOL_VERSION,
       capabilities: {},
@@ -97,30 +99,42 @@ export class McpClient {
     if (typeof result !== 'object' || result === null) {
       throw new McpMalformedResponseError('initialize result is not an object')
     }
+    if (result.protocolVersion !== MCP_PROTOCOL_VERSION) {
+      throw new McpMalformedResponseError(`unsupported protocol version: ${String(result.protocolVersion)}`)
+    }
     await this.notify('notifications/initialized')
     this.initialized = true
+    this.initializeResult = result
     return result
   }
 
   async listTools(): Promise<McpTool[]> {
-    const result = (await this.rpc('tools/list', {})) as { tools?: unknown }
-    if (typeof result !== 'object' || result === null) {
-      throw new McpMalformedResponseError('tools/list result is not an object')
-    }
-    if (result.tools === undefined) return []
-    if (!Array.isArray(result.tools)) {
-      throw new McpMalformedResponseError('tools/list tools is not an array')
-    }
-    for (const tool of result.tools) {
-      if (typeof tool !== 'object' || tool === null || typeof (tool as { name?: unknown }).name !== 'string') {
-        throw new McpMalformedResponseError('tools/list tool entry is malformed')
+    const tools: McpTool[] = []
+    const seen = new Set<string>()
+    let cursor: string | undefined
+    do {
+      const result = (await this.rpc('tools/list', cursor ? { cursor } : {})) as { tools?: unknown; nextCursor?: unknown }
+      if (typeof result !== 'object' || result === null || !Array.isArray(result.tools)) {
+        throw new McpMalformedResponseError('tools/list tools is not an array')
       }
-    }
-    return result.tools as McpTool[]
+      for (const tool of result.tools) {
+        if (typeof tool !== 'object' || tool === null || typeof (tool as { name?: unknown }).name !== 'string') {
+          throw new McpMalformedResponseError('tools/list tool entry is malformed')
+        }
+        tools.push(tool as McpTool)
+      }
+      if (result.nextCursor == null) break
+      if (typeof result.nextCursor !== 'string' || !result.nextCursor || seen.has(result.nextCursor) || seen.size >= 100) {
+        throw new McpMalformedResponseError('tools/list pagination cursor is invalid')
+      }
+      cursor = result.nextCursor
+      seen.add(cursor)
+    } while (true)
+    return tools
   }
 
-  async callTool(name: string, args: Record<string, unknown> = {}, signal?: AbortSignal): Promise<McpCallResult> {
-    const result = (await this.rpc('tools/call', { name, arguments: args }, signal)) as McpCallResult
+  async callTool(name: string, args: Record<string, unknown> = {}, signal?: AbortSignal, beforeSend?: () => void | Promise<void>): Promise<McpCallResult> {
+    const result = (await this.rpc('tools/call', { name, arguments: args }, signal, beforeSend)) as McpCallResult
     if (typeof result !== 'object' || result === null || !Array.isArray((result as { content?: unknown }).content)) {
       throw new McpMalformedResponseError('tools/call result content is not an array')
     }
@@ -152,10 +166,21 @@ export class McpClient {
     }
   }
 
-  private async rpc(method: string, params: unknown, signal?: AbortSignal): Promise<unknown> {
+  private async rpc(method: string, params: unknown, signal?: AbortSignal, beforeSend?: () => void | Promise<void>): Promise<unknown> {
     const request = buildRequest(method, params)
     const body = JSON.stringify(request)
-    const response = await this.send(body, signal)
+    let response: Response
+    try {
+      response = await this.send(body, signal, beforeSend)
+    } catch (error) {
+      if (error instanceof McpHttpError && error.status === 404 && this.sessionId && method !== 'initialize') {
+        this.sessionId = null
+        this.initialized = false
+        this.initializeResult = null
+        await this.initialize()
+      }
+      throw error
+    }
     const contentType = response.headers.get('content-type') ?? ''
     const text = await readBoundedMcpBody(response, request.id, contentType.includes('text/event-stream'), signal)
     const payload = pickResponse(parseSseOrJson(text), request.id)
@@ -182,17 +207,29 @@ export class McpClient {
    * transport-level status codes (auth / origin / rate-limit are classified
    * by errors.ts upstream).
    */
-  private async send(body: string, signal?: AbortSignal): Promise<Response> {
-    const token = await this.deps.getAccessToken()
+  private async send(body: string, signal?: AbortSignal, beforeSend?: () => void | Promise<void>): Promise<Response> {
+    let token: string | null
+    try {
+      token = await this.deps.getAccessToken()
+    } catch (error) {
+      throw new McpPreDispatchError(error)
+    }
     if (!token) throw new McpUnauthenticatedError()
     // Final abort check after token acquisition: dispatch is counted at
     // actual fetch invocation below, never for a local missing-token error.
     signal?.throwIfAborted()
+    try {
+      await beforeSend?.()
+      signal?.throwIfAborted()
+    } catch (error) {
+      throw new McpPreDispatchError(error)
+    }
     const headers: Record<string, string> = {
       'content-type': 'application/json',
       accept: 'application/json, text/event-stream',
       authorization: `Bearer ${token}`,
     }
+    if (this.initialized || this.sessionId) headers['mcp-protocol-version'] = MCP_PROTOCOL_VERSION
     if (this.sessionId) headers['mcp-session-id'] = this.sessionId
     const res = await this.deps.fetchImpl(this.deps.endpoint ?? MCP_ENDPOINT, {
       method: 'POST',
@@ -245,15 +282,17 @@ export class McpUnauthenticatedError extends Error {
   }
 }
 
-/**
- * True for failures that provably happened before fetchImpl ran, so callers
- * can record them as clean non-dispatches instead of unknown outcomes.
- * Currently only the local missing-token error qualifies: it is thrown
- * after token acquisition is attempted and before the final abort check
- * and fetch invocation.
- */
+/** A failed local guard that ran after token acquisition but before fetchImpl. */
+export class McpPreDispatchError extends Error {
+  constructor(cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause })
+    this.name = 'McpPreDispatchError'
+  }
+}
+
+/** True only when fetchImpl was never invoked. */
 export function isPreDispatchFailure(error: unknown): boolean {
-  return error instanceof McpUnauthenticatedError
+  return error instanceof McpUnauthenticatedError || error instanceof McpPreDispatchError
 }
 
 function toRpcError(error: JsonRpcErrorObject): McpRpcError {
@@ -322,6 +361,7 @@ async function readBoundedMcpBody(
   }
   const reader = body.getReader()
   const decoder = new TextDecoder('utf-8')
+  const sseMatches = isSse && requestId >= 0 ? matchingSseScanner(requestId) : null
   let bytes = 0
   let text = ''
   const onAbort = () => {
@@ -346,8 +386,9 @@ async function readBoundedMcpBody(
         }
         throw new McpBodyTooLargeError(budgetBytes)
       }
-      text += decoder.decode(value as Uint8Array, { stream: true })
-      if (isSse && requestId >= 0 && hasMatchingSseEvent(text, requestId)) {
+      const decoded = decoder.decode(value as Uint8Array, { stream: true })
+      text += decoded
+      if (sseMatches?.(decoded)) {
         try {
           await reader.cancel()
         } catch {
@@ -389,30 +430,26 @@ function utf8ByteLengthOf(text: string): number {
  * partial data without its blank delimiter is ignored until more bytes
  * arrive, so split JSON tokens do not false-match.
  */
-function hasMatchingSseEvent(textSoFar: string, requestId: number): boolean {
-  const lines = textSoFar.split(/\r\n|\r|\n/)
+function matchingSseScanner(requestId: number): (chunk: string) => boolean {
+  let line = ''
   let block: string[] = []
-  const completeBlocks: string[][] = []
-  for (const line of lines) {
-    if (line === '') {
-      if (block.length > 0) completeBlocks.push(block)
-      block = []
-    } else {
-      block.push(line)
-    }
+  let afterCR = false
+  const finishLine = (): boolean => {
+    if (line) { block.push(line); line = ''; return false }
+    if (!block.length) return false
+    const data = sseBlockData(block.join('\n'))
+    block = []
+    if (data == null) return false
+    try { return (JSON.parse(data) as { id?: unknown }).id === requestId } catch { return false }
   }
-  // Trailing `block` without its blank delimiter is partial: ignore it.
-  for (const candidate of completeBlocks) {
-    const data = sseBlockData(candidate.join('\n'))
-    if (data == null) continue
-    try {
-      const parsed = JSON.parse(data) as { id?: unknown }
-      if (parsed?.id === requestId) return true
-    } catch {
-      // Incomplete or unrelated event; keep reading.
+  return (chunk) => {
+    for (const char of chunk) {
+      if (char === '\r') { if (finishLine()) return true; afterCR = true }
+      else if (char === '\n') { if (!afterCR && finishLine()) return true; afterCR = false }
+      else { afterCR = false; line += char }
     }
+    return false
   }
-  return false
 }
 
 function sseBlockData(block: string): string | null {

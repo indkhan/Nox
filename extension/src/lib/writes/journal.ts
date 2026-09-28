@@ -1,7 +1,8 @@
 import type { IDBPDatabase } from 'idb'
+import { normalizeId } from '../../shared/notion-page'
 
 /** Durable operation outcome. `pending` precedes dispatch; `unknown` means dispatch may have happened. */
-export type OperationStatus = 'pending' | 'applied' | 'failed' | 'unknown' | 'undone'
+export type OperationStatus = 'pending' | 'submitted' | 'applied' | 'failed' | 'unknown' | 'undone'
 
 /**
  * Runtime scope captured synchronously when an intent is enqueued — never
@@ -41,6 +42,8 @@ export interface JournalEntry {
   reviewNote?: string
   /** Cancel stage, error codes, verification notes — never a success promise the store could not save. */
   outcomeDetail?: string
+  verification?: 'verified' | 'unverified' | 'not-applicable'
+  remoteTaskId?: string
 }
 
 export interface JournalStore {
@@ -48,6 +51,8 @@ export interface JournalStore {
   list(): Promise<JournalEntry[]>
   get?(id: string): Promise<JournalEntry | undefined>
   listForThread?(threadId: string): Promise<JournalEntry[]>
+  /** Read and replace one row in a single storage transaction; null leaves it unchanged. */
+  update?(id: string, change: (entry: JournalEntry | undefined) => JournalEntry | null): Promise<JournalEntry | null>
   /**
    * Reserve an applied original for undo and persist the linked undo intent
    * atomically. Returns the original when reserved, null when it is no
@@ -57,7 +62,7 @@ export interface JournalStore {
 }
 
 function isReservable(original: JournalEntry | undefined): original is JournalEntry {
-  return !!original && original.status === 'applied' && original.inverse != null && original.reservedByUndoOpId == null
+  return !!original && original.status === 'applied' && original.verification === 'verified' && original.inverse != null && original.reservedByUndoOpId == null
 }
 
 export function memoryJournalStore(): JournalStore {
@@ -72,6 +77,11 @@ export function memoryJournalStore(): JournalStore {
     },
     async get(id) {
       return find(id)
+    },
+    async update(id, change) {
+      const next = change(find(id))
+      if (next) entries = [...entries.filter((e) => e.id !== id), next]
+      return next
     },
     async listForThread(threadId) {
       return entries.filter((e) => e.threadId === threadId)
@@ -96,6 +106,14 @@ export function idbJournalStore(db: () => Promise<IDBPDatabase>): JournalStore {
     },
     async get(id) {
       return await (await db()).get('journal', id) as JournalEntry | undefined
+    },
+    async update(id, change) {
+      const tx = (await db()).transaction('journal', 'readwrite')
+      const store = tx.objectStore('journal')
+      const next = change(await store.get(id) as JournalEntry | undefined)
+      if (next) await store.put(next)
+      await tx.done
+      return next
     },
     async listForThread(threadId) {
       return await (await db()).getAllFromIndex('journal', 'by_thread', threadId) as JournalEntry[]
@@ -134,7 +152,7 @@ export class MutationJournal {
 
   constructor(store: JournalStore = memoryJournalStore()) {
     const inner = store
-    // Every durable mutation flows through append or reserveUndo: wrap both
+    // Every durable mutation flows through append, update, or reserveUndo: wrap each
     // once so observers fire after success, never on storage failure.
     this.store = {
       ...inner,
@@ -143,6 +161,15 @@ export class MutationJournal {
         this.emitChange()
         return result
       },
+      ...(inner.update
+        ? {
+            update: async (id, change) => {
+              const result = await inner.update!(id, change)
+              if (result) this.emitChange()
+              return result
+            },
+          }
+        : {}),
       ...(inner.reserveUndo
         ? {
             reserveUndo: async (originalId, undoEntry) => {
@@ -264,27 +291,32 @@ export class MutationJournal {
    * durable information the store could not save.
    */
   async settleIntent(id: string, update: {
-    status: 'applied' | 'failed' | 'unknown' | 'undone'
+    status: 'submitted' | 'applied' | 'failed' | 'unknown' | 'undone'
     outcomeDetail?: string
     inverse?: { tool: string; args: Record<string, unknown> }
     notUndoableReason?: string
     reservedByUndoOpId?: string | null
+    verification?: JournalEntry['verification']
+    remoteTaskId?: string
   }): Promise<JournalEntry | null> {
-    const entry = await this.readEntry(id)
-    if (!entry) return null
-    const settled: JournalEntry = {
-      ...entry,
-      status: update.status,
-      outcomeDetail: update.outcomeDetail ?? entry.outcomeDetail,
-      inverse: update.inverse ?? entry.inverse,
-      notUndoableReason: update.notUndoableReason ?? entry.notUndoableReason,
-    }
-    if (update.reservedByUndoOpId !== undefined) {
-      if (update.reservedByUndoOpId == null) delete settled.reservedByUndoOpId
-      else settled.reservedByUndoOpId = update.reservedByUndoOpId
-    }
-    await this.store.append(settled)
-    return settled
+    return this.updateEntry(id, (entry) => {
+      if (!entry) return null
+      if (!canSettle(entry.status, update.status)) throw new Error(`INVALID_JOURNAL_TRANSITION: ${entry.status} -> ${update.status}`)
+      const settled: JournalEntry = {
+        ...entry,
+        status: update.status,
+        outcomeDetail: update.outcomeDetail ?? entry.outcomeDetail,
+        inverse: update.inverse ?? entry.inverse,
+        notUndoableReason: update.notUndoableReason ?? entry.notUndoableReason,
+        verification: update.verification ?? entry.verification,
+        remoteTaskId: update.remoteTaskId ?? entry.remoteTaskId,
+      }
+      if (update.reservedByUndoOpId !== undefined) {
+        if (update.reservedByUndoOpId == null) delete settled.reservedByUndoOpId
+        else settled.reservedByUndoOpId = update.reservedByUndoOpId
+      }
+      return settled
+    })
   }
 
   /**
@@ -328,28 +360,27 @@ export class MutationJournal {
 
   /** Release a reservation only when it still belongs to the given undo op. */
   async releaseUndoReservation(originalId: string, undoOpId: string): Promise<void> {
-    const entry = await this.readEntry(originalId)
-    if (entry?.reservedByUndoOpId === undoOpId) {
-      await this.store.append({ ...entry, reservedByUndoOpId: undefined })
-    }
+    await this.updateEntry(originalId, (entry) =>
+      entry?.reservedByUndoOpId === undoOpId ? { ...entry, reservedByUndoOpId: undefined } : null)
   }
 
   /** Durable human inspection: lifts the conflict block, never rewrites the outcome. */
   async markReviewed(id: string, note?: string): Promise<boolean> {
-    const entry = await this.readEntry(id)
-    if (!entry) return false
-    await this.store.append({ ...entry, reviewedAt: Date.now(), reviewNote: note })
-    return true
+    return (await this.updateEntry(id, (entry) =>
+      entry ? { ...entry, reviewedAt: Date.now(), reviewNote: note } : null)) != null
   }
 
   /** Unresolved, unreviewed operations in scope: blockers for new conflicting work. */
-  async unresolvedInScope(threadId: string | null, excludeIds: Set<string> = new Set()): Promise<JournalEntry[]> {
-    if (threadId == null) return []
-    const entries = await this.listScoped(threadId)
+  async unresolvedInScope(threadId: string | null, excludeIds: Set<string> = new Set(), workspaceId?: string | null, targets: string[] = []): Promise<JournalEntry[]> {
+    if (threadId == null && !workspaceId) return []
+    const entries = workspaceId ? await this.store.list() : await this.listScoped(threadId!)
+    const normalizedTargets = new Set(targets.map((id) => normalizeId(id) ?? id))
     return entries.filter((entry) =>
-      (entry.status === 'pending' || entry.status === 'unknown') &&
+      (entry.status === 'pending' || entry.status === 'submitted' || entry.status === 'unknown') &&
       entry.reviewedAt == null &&
-      !excludeIds.has(entry.id),
+      !excludeIds.has(entry.id) &&
+      (entry.threadId === threadId || entry.scope?.workspaceId === workspaceId) &&
+      (entry.threadId === threadId || normalizedTargets.size === 0 || !entry.targetPageId || normalizedTargets.has(normalizeId(entry.targetPageId) ?? entry.targetPageId)),
     )
   }
 
@@ -370,7 +401,7 @@ export class MutationJournal {
 
   /** Entries that carry a runnable inverse: applied, unreserved, unreviewed-agnostic. */
   async undoable(): Promise<JournalEntry[]> {
-    return (await this.newestFirst()).filter((e) => e.status === 'applied' && e.inverse != null && e.reservedByUndoOpId == null)
+    return (await this.newestFirst()).filter((e) => e.status === 'applied' && e.verification === 'verified' && e.inverse != null && e.reservedByUndoOpId == null)
   }
 
   /**
@@ -387,8 +418,9 @@ export class MutationJournal {
   }
 
   async setStatus(id: string, status: JournalEntry['status']): Promise<void> {
-    const entry = await this.readEntry(id)
-    if (entry) await this.store.append({ ...entry, status })
+    await this.updateEntry(id, (entry) =>
+      entry && (entry.status === status || (entry.status === 'applied' && status === 'undone'))
+        ? { ...entry, status } : null)
   }
 
   async claimUndo(id?: string): Promise<JournalEntry | null> {
@@ -414,10 +446,24 @@ export class MutationJournal {
     return (await this.store.list()).find((candidate) => candidate.id === id)
   }
 
+  private async updateEntry(id: string, change: (entry: JournalEntry | undefined) => JournalEntry | null): Promise<JournalEntry | null> {
+    if (this.store.update) return this.store.update(id, change)
+    // Legacy test stores lack transactions; production stores implement update.
+    const next = change(await this.readEntry(id))
+    if (next) await this.store.append(next)
+    return next
+  }
+
   private async listScoped(threadId: string): Promise<JournalEntry[]> {
     if (this.store.listForThread) return this.store.listForThread(threadId)
     return (await this.store.list()).filter((entry) => entry.threadId === threadId)
   }
+}
+
+function canSettle(current: OperationStatus, next: OperationStatus): boolean {
+  return current === 'pending' && next !== 'pending' && next !== 'undone'
+    || current === 'submitted' && (next === 'submitted' || next === 'applied' || next === 'failed' || next === 'unknown')
+    || current === 'applied' && (next === 'applied' || next === 'undone')
 }
 
 /** Deterministic newest-first order: timestamp, then id tie-breaker. */

@@ -23,6 +23,8 @@ const state = vi.hoisted(() => ({
   loadSettings: vi.fn(async () => ({})),
   setConnection: vi.fn((update: Record<string, unknown>) => Object.assign(state, update)),
   hasRefreshToken: vi.fn(async () => true),
+  credentialGeneration: vi.fn(async () => 'old'),
+  isLoginAttemptCurrent: vi.fn(async (attempt: string) => attempt === 'old'),
   refreshIdentity: vi.fn(async () => ({
     identity: { workspaceName: 'Acme', userName: 'Dana' },
     access: {},
@@ -60,7 +62,7 @@ vi.mock('../src/sidepanel/store', () => ({
 }))
 vi.mock('../src/lib/notion/panel', () => ({
   notion: {
-    tokens: { hasRefreshToken: state.hasRefreshToken, setReauthHandler: vi.fn() },
+    tokens: { hasRefreshToken: state.hasRefreshToken, credentialGeneration: state.credentialGeneration, isLoginAttemptCurrent: state.isLoginAttemptCurrent, setReauthHandler: vi.fn() },
     refreshIdentity: state.refreshIdentity,
     capabilities: { toolsWith: vi.fn(() => []) },
     explain: vi.fn((error: Error) => ({ userMessage: error.message })),
@@ -95,6 +97,7 @@ vi.mock('../src/lib/settings', () => ({
 
 import { App } from '../src/sidepanel/App'
 import { EmptyState } from '../src/sidepanel/EmptyState'
+import { restoreNotionAction, watchCredentialSignout } from '../src/sidepanel/notion-connect'
 
 describe('first-run setup', () => {
   beforeEach(() => {
@@ -112,6 +115,8 @@ describe('first-run setup', () => {
     state.setOverrides.mockClear()
     state.loadSettings.mockReset().mockResolvedValue({})
     state.hasRefreshToken.mockReset().mockResolvedValue(true)
+    state.credentialGeneration.mockReset().mockResolvedValue('old')
+    state.isLoginAttemptCurrent.mockReset().mockImplementation(async (attempt: string) => attempt === 'old')
     state.refreshIdentity.mockReset().mockResolvedValue({
       identity: { workspaceName: 'Acme', userName: 'Dana' },
       access: {},
@@ -119,6 +124,48 @@ describe('first-run setup', () => {
     })
     state.getDnrStatus.mockReset().mockResolvedValue({ installed: true, verified: false, active: true })
     state.clearDnr.mockReset().mockResolvedValue({ cleared: true })
+  })
+
+  it('does not let an old restore overwrite a newer authorization', async () => {
+    let release!: (value: Awaited<ReturnType<typeof state.refreshIdentity>>) => void
+    state.refreshIdentity.mockImplementationOnce(() => new Promise(resolve => { release = resolve }))
+    const restoring = restoreNotionAction()
+    await vi.waitFor(() => expect(state.refreshIdentity).toHaveBeenCalledOnce())
+    state.isLoginAttemptCurrent.mockResolvedValue(false)
+    state.connectionStatus = 'connected'
+    state.identity = { workspaceName: 'New', userName: 'New' }
+    release({ identity: { workspaceName: 'Old', userName: 'Old' }, access: {}, upgradeUrls: {} })
+    await restoring
+    expect(state.connectionStatus).toBe('connected')
+    expect(state.identity?.workspaceName).toBe('New')
+  })
+
+  it('does not let a failed old restore clear the newer connection', async () => {
+    let rejectOld!: (error: Error) => void
+    state.refreshIdentity.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectOld = reject }))
+    const restoring = restoreNotionAction()
+    await vi.waitFor(() => expect(state.refreshIdentity).toHaveBeenCalledOnce())
+    state.isLoginAttemptCurrent.mockResolvedValue(false)
+    state.connectionStatus = 'connected'
+    state.identity = { workspaceName: 'New', userName: 'New' }
+    rejectOld(new Error('old authorization failed'))
+    await restoring
+    expect(state.connectionStatus).toBe('connected')
+    expect(state.identity?.workspaceName).toBe('New')
+    expect(state.clearDnr).not.toHaveBeenCalled()
+  })
+
+  it('drops the old connection when replacement login clears its refresh credential', () => {
+    let listener!: (changes: Record<string, { newValue?: unknown }>, area: string) => void
+    const storage = chrome.storage as typeof chrome.storage & { onChanged: typeof chrome.storage.onChanged }
+    storage.onChanged = { addListener: (fn: typeof listener) => { listener = fn }, removeListener: vi.fn() } as unknown as typeof chrome.storage.onChanged
+    state.connectionStatus = 'connected'
+    state.identity = { workspaceName: 'Old', userName: 'Old' }
+    const unsubscribe = watchCredentialSignout()
+    listener({ 'notion.refresh': { newValue: null } }, 'local')
+    expect(state.connectionStatus).toBe('disconnected')
+    unsubscribe()
+    delete (storage as { onChanged?: unknown }).onChanged
   })
 
   it('keeps chat behind the connection setup until both services are ready', async () => {
@@ -207,9 +254,8 @@ describe('first-run setup', () => {
       await Promise.resolve()
     })
 
-    // F3/R5 UI completion guard: pre-restore check plus post-identity
-    // re-check before showing Connected.
-    expect(state.hasRefreshToken).toHaveBeenCalledTimes(2)
+    expect(state.hasRefreshToken).toHaveBeenCalledOnce()
+    expect(state.isLoginAttemptCurrent).toHaveBeenCalledWith('old')
     expect(state.refreshIdentity).toHaveBeenCalledOnce()
     expect(state.connectionStatus).toBe('connected')
     expect(state.identity).toEqual({ workspaceName: 'Acme', userName: 'Dana' })

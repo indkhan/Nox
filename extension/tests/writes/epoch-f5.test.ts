@@ -24,7 +24,7 @@ function propertiesReq(rid: number) {
   return {
     rid,
     tool: 'notion-update-page',
-    args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: {} } },
+    args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: { Title: 'Short title' } } },
     namespace: null,
   } as const
 }
@@ -147,24 +147,30 @@ describe('Epoch F5 — R6 restored undo without a new turn (integrated)', () => 
     const store = memoryJournalStore()
     const seeder = new MutationJournal(store)
     seeder.setThread('persisted-f5')
-    const args = { data: { page_id: PAGE }, command: { type: 'update_properties', properties: {} } }
+    const args = { data: { page_id: PAGE }, command: { type: 'replace_content', content: '# Simple\noriginal text' } }
     const entry = await seeder.record({
       tool: 'notion-update-page',
       args,
-      kind: 'properties',
+      kind: 'content-replace',
+      preImage: { kind: 'content-replace', pageId: PAGE, markdown: '# Simple\noriginal text', baselineComplete: true },
       inverse: { tool: 'notion-update-page', args },
+      scope: { threadId: 'persisted-f5', turnId: 'turn-f5', workspaceId: 'workspace-f5', connectionGeneration: 'conn-f5', ownerGeneration: 'owner-f5' },
+      verification: 'verified',
     })
     const journal = new MutationJournal(store)
     journal.scopeThread('persisted-f5')
     const calls: Array<{ name: string }> = []
+    let markdown = '# Agent edit'
     const access = createTurnAccessState()
     access.begin('auto', [PAGE], [], { allowed: true, pages: [PAGE] })
     const gate = new WriteGate({
-      callTool: async (name) => {
+      callTool: async (name, args) => {
         calls.push({ name })
+        const command = args.command as { content?: string } | undefined
+        if (command?.content) markdown = command.content
         return { content: [{ type: 'text', text: 'ok' }] }
       },
-      fetchPageMarkdown: async () => '# Simple\noriginal text',
+      fetchPageMarkdown: async () => JSON.stringify({ id: PAGE, content: markdown, truncated: false }),
       getMode: () => access.mode(),
       getContextSet: () => access.contextPages(),
       journal,
@@ -187,6 +193,7 @@ describe('Epoch F5 — R6 restored undo without a new turn (integrated)', () => 
 
 describe('Epoch F5 — R2 model-visible completeness (integrated)', () => {
   function gateWithExecutor(providerText: string) {
+    const completeRead = JSON.stringify({ id: PAGE, content: providerText, truncated: false })
     const dispatches: Array<{ name: string }> = []
     const journal = new MutationJournal()
     journal.setThread('thread-f5-r2')
@@ -194,12 +201,12 @@ describe('Epoch F5 — R2 model-visible completeness (integrated)', () => {
     access.begin('ask', [PAGE], [], { allowed: false, pages: [] })
     const gate = new WriteGate({
       callTool: async (name, args) => {
-        if (name === 'notion-fetch') return { content: [{ type: 'text', text: providerText }] }
+        if (name === 'notion-fetch') return { content: [{ type: 'text', text: completeRead }] }
         dispatches.push({ name })
         void args
         return { content: [{ type: 'text', text: 'ok' }] }
       },
-      fetchPageMarkdown: async () => providerText,
+      fetchPageMarkdown: async () => completeRead,
       getMode: () => access.mode(),
       getContextSet: () => access.contextPages(),
       journal,
@@ -375,7 +382,7 @@ describe('Epoch F5 — R3 retained untrusted exposure (integrated)', () => {
     const out = gate.handle({
       rid: 2,
       tool: 'notion-update-page',
-      args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: {} } },
+      args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: { Title: 'Short title' } } },
       namespace: null,
       provenance: 'untrusted-context',
     })

@@ -51,11 +51,12 @@ export function restoreTurns(messages: MessageRow[], journal: JournalEntry[] = [
         args: entry.args,
         status: entry.status === 'failed' ? 'failed' as const : 'completed' as const,
         journalId: entry.id,
-        undoable: entry.status === 'applied' && entry.inverse != null,
+        undoable: entry.status === 'applied' && entry.inverse != null && entry.verification === 'verified',
+        verification: entry.status === 'applied' && entry.inverse != null && entry.verification !== 'verified' ? 'unverified' : entry.verification,
         // Applied but not safely reversible: keep the precise reason and the
         // real target link on the restored row instead of dropping them.
-        notUndoableReason: entry.status === 'applied' && entry.inverse == null ? entry.notUndoableReason : undefined,
-        inspectUrl: entry.status === 'applied' && entry.inverse == null && entry.targetPageId ? inspectUrlForPage(entry.targetPageId) : undefined,
+        notUndoableReason: entry.status === 'applied' && (entry.inverse == null || entry.verification !== 'verified') ? entry.notUndoableReason ?? (entry.inverse != null ? 'The final state could not be verified.' : undefined) : undefined,
+        inspectUrl: entry.status === 'applied' && (entry.inverse == null || entry.verification !== 'verified') && entry.targetPageId ? inspectUrlForPage(entry.targetPageId) : undefined,
       }))
     const activity = [...interrupted.view.activity]
     for (const item of recovered) {
@@ -82,6 +83,7 @@ export function restoreTurns(messages: MessageRow[], journal: JournalEntry[] = [
       unresolvedDetail: describeUnresolvedEntry(entry),
       inspectUrl: entry.targetPageId ? inspectUrlForPage(entry.targetPageId) : undefined,
       reviewed: entry.reviewedAt != null ? true : undefined,
+      reviewable: entry.status !== 'submitted',
     }
     let placed = false
     for (const turn of turns) {
@@ -102,6 +104,6 @@ export function restoreTurns(messages: MessageRow[], journal: JournalEntry[] = [
 }
 
 function needsReviewRow(entry: JournalEntry): boolean {
-  if (entry.status === 'pending' || entry.status === 'unknown') return true
+  if (entry.status === 'pending' || entry.status === 'submitted' || entry.status === 'unknown') return true
   return entry.status === 'applied' && entry.reservedByUndoOpId != null
 }

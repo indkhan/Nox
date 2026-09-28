@@ -7,6 +7,7 @@ export const historyRepo: ThreadRepository = threadRepository(openNoxDB)
 /** One lock instance per panel document. */
 export type WindowRole = 'owner' | 'viewer' | 'pending'
 let releaseWebLock: (() => void) | null = null
+let roleClaim: Promise<WindowRole> | null = null
 
 /**
  * Read-only runtime lease for the `nox-agent-owner` Web Lock. The mutation
@@ -31,9 +32,11 @@ export function isOwnerActive(): boolean {
 
 /** Test-only reset for the module lease state (no lock is held in tests). */
 export function __resetWindowRoleForTests(): void {
+  releaseWebLock?.()
   currentRole = 'pending'
   ownerGeneration = null
   releaseWebLock = null
+  roleClaim = null
 }
 
 /**
@@ -41,23 +44,32 @@ export function __resetWindowRoleForTests(): void {
  * never start turns (MVP §8).
  */
 export async function claimWindowRole(): Promise<WindowRole> {
+  if (currentRole === 'owner') return 'owner'
+  if (roleClaim) return roleClaim
   if (navigator.locks) {
-    const acquired = new Promise<boolean>((resolve) => {
-      void navigator.locks.request('nox-agent-owner', { ifAvailable: true, mode: 'exclusive' }, async (lock) => {
-        resolve(lock != null)
-        if (lock) await new Promise<void>((release) => { releaseWebLock = release })
+    roleClaim = (async () => {
+      const acquired = await new Promise<boolean>((resolve, reject) => {
+        void navigator.locks.request('nox-agent-owner', { ifAvailable: true, mode: 'exclusive' }, async (lock) => {
+          resolve(lock != null)
+          if (lock) await new Promise<void>((release) => { releaseWebLock = release })
+        }).catch(reject)
       })
-    })
-    const owner = await acquired
-    if (owner) {
-      currentRole = 'owner'
-      ownerGeneration = crypto.randomUUID()
-      window.addEventListener('pagehide', () => { releaseWebLock?.(); releaseWebLock = null }, { once: true })
-    } else {
+      currentRole = acquired ? 'owner' : 'viewer'
+      ownerGeneration = acquired ? crypto.randomUUID() : null
+      if (acquired) window.addEventListener('pagehide', () => {
+        releaseWebLock?.()
+        releaseWebLock = null
+        roleClaim = null
+        currentRole = 'pending'
+        ownerGeneration = null
+      }, { once: true })
+      return currentRole
+    })().catch(() => {
       currentRole = 'viewer'
       ownerGeneration = null
-    }
-    return owner ? 'owner' : 'viewer'
+      return 'viewer' as const
+    }).finally(() => { if (currentRole !== 'owner') roleClaim = null })
+    return roleClaim
   }
   // Unsupported browsers stay read-only rather than risking two owners via
   // a non-atomic storage fallback.

@@ -12,7 +12,7 @@
 
 # Nox — Research Findings
 
-Evidence behind the decisions in [MVP.md](MVP.md) and [PLAN.md](PLAN.md).
+Evidence behind the decisions in [MVP.md](#archived-mvpmd) and [PLAN.md](#archived-planmd).
 
 Research date: **2026-08-19**. Claims are tagged:
 
@@ -590,7 +590,7 @@ Nox is an open-source Chrome/Chromium extension that recreates the Notion AI exp
 **your own Notion workspace** (via Notion's hosted MCP server) and **your own Codex
 subscription** (via the `codex` CLI already installed on your machine). No Nox server exists.
 
-Read [RESEARCH.md](RESEARCH.md) for the evidence behind these decisions.
+Read [RESEARCH.md](#archived-researchmd) for the evidence behind these decisions.
 
 ---
 
@@ -914,12 +914,12 @@ Thread search runs over titles and message text. Export writes a thread as JSON 
 
 # Nox — Delivery Plan (V1)
 
-Epics and acceptance criteria for [MVP.md](MVP.md). Evidence in [RESEARCH.md](RESEARCH.md).
+Epics and acceptance criteria for [MVP.md](#archived-mvpmd). Evidence in [RESEARCH.md](#archived-researchmd).
 
 **Status (2026-08-22): E0–E9 complete on `develop`.**
 E2 live-verified against production Notion MCP; E3 live-verified against the real
 `codex app-server`; 234 automated tests green; manual smoke checklist in
-[docs/smoke.md](docs/smoke.md). Design notes per epic in `docs/plans/`.
+[docs/smoke.md](smoke.md). Design notes per epic in `docs/plans/`.
 
 **Sequence:** E0 first (it can still reshape the runtime), then E1 → E2 → E3 → E4 in order.
 E5–E8 parallelize once E4 lands. E9 gates release.

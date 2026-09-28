@@ -53,7 +53,9 @@ export interface ScheduleOptions {
    */
   deadline?: number
   /** Called after capacity/rate admission, immediately before fn. */
-  beforeInvoke?: () => void
+  beforeInvoke?: () => void | Promise<void>
+  /** Reserve one capacity slot for a read performed by beforeInvoke. */
+  preflight?: boolean
 }
 
 /**
@@ -64,7 +66,7 @@ export interface ScheduleOptions {
 export class SchedulerDeadlineError extends Error {
   constructor(waitMs: number, remainingMs: number) {
     super(
-      `DEADLINE_EXCEEDED: a ${Math.ceil(waitMs)}ms rate-limit cooldown exceeds the ` +
+      `DEADLINE_EXCEEDED: a ${Math.ceil(waitMs)}ms scheduler wait exceeds the ` +
         `${Math.max(0, Math.ceil(remainingMs))}ms left before the turn deadline; ` +
         'stopping instead of waiting past the deadline.',
     )
@@ -89,6 +91,7 @@ export class Scheduler {
   private readonly global: BucketState
   private readonly search: BucketState
   private inFlight = 0
+  private preflightInFlight = 0
   private readonly waiters: Array<() => void> = []
   private readonly now: () => number
   private readonly sleep: (ms: number) => Promise<void>
@@ -126,19 +129,22 @@ export class Scheduler {
     bucket.lastRefill = t
   }
 
-  private async acquire(bucketName: Bucket, signal?: AbortSignal, deadline?: number): Promise<void> {
+  private async acquire(bucketName: Bucket, signal?: AbortSignal, deadline?: number, preflight = false): Promise<void> {
     // A search call spends one token from each budget; everything else
     // spends the global budget only.
     const needed: Bucket[] = bucketName === 'search' ? ['global', 'search'] : ['global']
     for (;;) {
       signal?.throwIfAborted()
+      this.throwIfPastDeadline(0, deadline)
       for (const name of needed) this.refill(this.bucketState(name), this.rates[name])
       const lacking = needed.filter((name) => this.bucketState(name).tokens < 1)
-      if (lacking.length === 0 && this.inFlight < this.maxConcurrent) {
+      if (lacking.length === 0 && this.inFlight < this.maxConcurrent &&
+          (!preflight || this.preflightInFlight < Math.min(2, this.maxConcurrent - 1))) {
         // Reserve every permit synchronously: a call runs only when
         // concurrency and all rate budgets hold together.
         for (const name of needed) this.bucketState(name).tokens -= 1
         this.inFlight += 1
+        if (preflight) this.preflightInFlight += 1
         return
       }
       if (lacking.length > 0) {
@@ -154,6 +160,13 @@ export class Scheduler {
       // Tokens are ready but every concurrency slot is busy: queue fairly
       // for the next release, then recheck everything on wakeup.
       await new Promise<void>((resolve, reject) => {
+        const remainingMs = deadline == null ? null : Math.max(0, deadline - this.now())
+        const timer = remainingMs == null ? null : setTimeout(() => {
+          const index = this.waiters.indexOf(ready)
+          if (index >= 0) this.waiters.splice(index, 1)
+          cleanup()
+          reject(new SchedulerDeadlineError(remainingMs, 0))
+        }, remainingMs)
         const ready = () => { cleanup(); resolve() }
         const aborted = () => {
           const index = this.waiters.indexOf(ready)
@@ -161,7 +174,10 @@ export class Scheduler {
           cleanup()
           reject(signal?.reason)
         }
-        const cleanup = () => signal?.removeEventListener('abort', aborted)
+        const cleanup = () => {
+          if (timer != null) clearTimeout(timer)
+          signal?.removeEventListener('abort', aborted)
+        }
         this.waiters.push(ready)
         signal?.addEventListener('abort', aborted, { once: true })
         if (signal?.aborted) aborted()
@@ -181,10 +197,11 @@ export class Scheduler {
     }
   }
 
-  private release(): void {
+  private release(preflight = false): void {
     this.inFlight -= 1
-    const waiter = this.waiters.shift()
-    waiter?.()
+    if (preflight) this.preflightInFlight -= 1
+    // A preflight waiter may still be capped while its nested read can run.
+    for (const waiter of this.waiters.splice(0)) waiter()
   }
 
   /**
@@ -194,18 +211,19 @@ export class Scheduler {
    * throws UncertainDispatchError, never a replay.
    */
   async schedule<T>(bucket: Bucket, fn: () => Promise<T>, signal?: AbortSignal, opts: ScheduleOptions = {}): Promise<T> {
+    if (opts.preflight && this.maxConcurrent < 2) throw new Error('preflight requires a second scheduler slot for its read')
     const retryable = opts.retryable ?? false
     let attempt = 0
     for (;;) {
       signal?.throwIfAborted()
-      await this.acquire(bucket, signal, opts.deadline)
-      // Abort between admission and invocation: the function never ran, so
-      // no dispatch can be blamed on this call.
-      signal?.throwIfAborted()
+      await this.acquire(bucket, signal, opts.deadline, opts.preflight)
       try {
-        opts.beforeInvoke?.()
+        // Abort between admission and invocation: release the reserved slot.
+        signal?.throwIfAborted()
+        await opts.beforeInvoke?.()
+        signal?.throwIfAborted()
       } catch (error) {
-        this.release()
+        this.release(opts.preflight)
         throw error
       }
       let delay: number | null = null
@@ -223,7 +241,7 @@ export class Scheduler {
         delay = retryDelayFor(e, attempt)
         if (delay == null || attempt++ >= this.maxRetries) throw e
       } finally {
-        this.release()
+        this.release(opts.preflight)
       }
       this.throwIfPastDeadline(delay, opts.deadline)
       await abortable(this.sleep(delay), signal)

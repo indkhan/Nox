@@ -19,6 +19,8 @@ import { restoreTurns } from '../lib/history/restore'
 import type { MentionRef } from '../shared/notion-page'
 import type { DraftAttachment, LocalAttachment } from '../shared/attachments'
 import { validateDraftSelection } from '../shared/attachments'
+import { notion } from '../lib/notion/panel'
+import type { JournalEntry } from '../lib/writes/journal'
 import type { OwnedAttachmentInput } from '../lib/history/repository'
 
 interface TurnView {
@@ -30,6 +32,8 @@ interface TurnView {
   /** Durable-history degradation for this turn ("History could not be saved"). */
   historyError?: string | null
 }
+
+const WORKSPACE_HISTORY_ERROR = 'This chat belongs to another or unknown Notion workspace. Reconnect its original workspace to resume it, or start a new chat.'
 
 /** Retry/copy banner for a failed final history save (Epoch 09 / M16). */
 export function HistorySaveError({ onRetry, onCopy }: { onRetry?: () => void; onCopy: () => void }) {
@@ -53,6 +57,8 @@ export function HistorySaveError({ onRetry, onCopy }: { onRetry?: () => void; on
 export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
   const [turns, setTurns] = useState<Array<{ id: string; userText: string; view: TurnView }>>([])
   const [busy, setBusy] = useState(false)
+  const [recoveryEntries, setRecoveryEntries] = useState<JournalEntry[]>([])
+  const [recoveryEvidence, setRecoveryEvidence] = useState<Record<string, string>>({})
   const busyRef = useRef(false)
   const sendAbortRef = useRef<AbortController | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -74,8 +80,34 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
   const reviewingPlan = useNoxStore((s) => s.pendingPlans.length > 0)
   const setAgentBusy = useNoxStore((s) => s.setAgentBusy)
   const setActiveThreadId = useNoxStore((s) => s.setActiveThreadId)
+  const activeThreadId = useNoxStore((s) => s.activeThreadId)
 
   useEffect(() => {
+    if (readOnly || connectionStatus !== 'connected' || !notion.identity?.workspaceId) return
+    const abort = new AbortController()
+    void writeGate.resumeSubmittedTasks(abort.signal).catch((error) => logError(`Task recovery failed: ${safeErrorDetail(error)}`))
+    return () => abort.abort()
+  }, [connectionStatus, readOnly])
+
+  useEffect(() => {
+    const workspaceId = notion.identity?.workspaceId
+    if (connectionStatus !== 'connected' || !workspaceId) {
+      setRecoveryEntries([])
+      return
+    }
+    let cancelled = false
+    const refresh = () => {
+      void writeGate.journal.unresolvedInScope(activeThreadId, new Set(), workspaceId).then((entries) => {
+        if (!cancelled) setRecoveryEntries(entries)
+      }).catch(() => { if (!cancelled) setRecoveryEntries([]) })
+    }
+    refresh()
+    const unsubscribe = writeGate.journal.onChange(refresh)
+    return () => { cancelled = true; unsubscribe() }
+  }, [activeThreadId, connectionStatus])
+
+  useEffect(() => {
+    if (connectionStatus !== 'connected') return
     let cancelled = false
     const generation = ++historyGenerationRef.current
     writeGate.journal.scopeThread(null)
@@ -83,7 +115,18 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
       const threadId = stored['nox_thread_id']
       if (typeof threadId !== 'string' || !threadId) return
       const [messages, thread, journal] = await Promise.all([historyRepo.getMessages(threadId), historyRepo.getThread(threadId), writeGate.journal.newestForThread(threadId)])
-      if (cancelled || historyRestoreCancelledRef.current || generation !== historyGenerationRef.current) return
+      if (cancelled || generation !== historyGenerationRef.current) return
+      if (!thread || !notion.identity?.workspaceId || thread.workspaceId !== notion.identity.workspaceId) {
+        currentThreadIdRef.current = null
+        setActiveThreadId(null)
+        setAgentHistoryThread(null)
+        agentLoop.newThread()
+        setThreadTitle('New chat')
+        setTurns([{ id: crypto.randomUUID(), userText: 'History', view: { activity: [], answer: '', error: WORKSPACE_HISTORY_ERROR, pending: false } }])
+        void chrome.storage.local.remove('nox_thread_id')
+        return
+      }
+      if (historyRestoreCancelledRef.current) return
       const restored = restoreTurns(messages, journal).map((turn) => ({
         ...turn, view: { ...turn.view, activity: attachJournalEntries(turn.view.activity, journal) },
       }))
@@ -102,7 +145,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
       if (removed > 0) logInfo(`Removed ${removed} unlinked legacy attachment(s)`)
     }).catch((error) => logError(`Legacy attachment cleanup failed: ${safeErrorDetail(error)}`))
     return () => { cancelled = true }
-  }, [setActiveThreadId])
+  }, [connectionStatus, setActiveThreadId, setThreadTitle])
 
   useEffect(() => {
     if (!openThreadRequest || agentBusy) return
@@ -111,6 +154,10 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
     void (async () => {
       const [messages, thread, journal] = await Promise.all([historyRepo.getMessages(threadId), historyRepo.getThread(threadId), writeGate.journal.newestForThread(threadId)])
       if (!thread || generation !== historyGenerationRef.current || busyRef.current) return
+      if (!notion.identity?.workspaceId || thread.workspaceId !== notion.identity.workspaceId) {
+        setTurns((all) => [...all, { id: crypto.randomUUID(), userText: 'History', view: { activity: [], answer: '', error: WORKSPACE_HISTORY_ERROR, pending: false } }])
+        return
+      }
       const restored = restoreTurns(messages, journal).map((turn) => ({
         ...turn, view: { ...turn.view, activity: attachJournalEntries(turn.view.activity, journal) },
       }))
@@ -157,44 +204,67 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
 
   // Send stays disabled until both transports report connected (Epoch 11 / L6):
   // the composer button is disabled and this guard blocks direct calls.
-  const transportDown = connectionStatus !== 'connected' || codexStatus === 'disconnected' || codexStatus === 'error'
+  const transportDown = connectionStatus !== 'connected' || codexStatus !== 'connected'
   const transportDownReason =
-    codexStatus === 'disconnected' || codexStatus === 'error'
+    codexStatus !== 'connected' && connectionStatus === 'connected'
       ? 'Codex disconnected — reconnect to continue. Your history is preserved and no turn was replayed.'
       : 'Connect Notion first — open Settings (top right) to connect.'
 
-  async function send(text: string, mentions: MentionRef[] = [], drafts: DraftAttachment[] = [], allowSmallEdits = false) {
-    if (busyRef.current || readOnly) return
+  async function send(text: string, mentions: MentionRef[] = [], drafts: DraftAttachment[] = [], allowSmallEdits = false): Promise<boolean> {
+    if (readOnly || busyRef.current) return false
+    const workspaceId = notion.identity?.workspaceId
+    if (!workspaceId) throw new Error('WORKSPACE_UNKNOWN: reconnect Notion before sending. Nothing was sent.')
+    busyRef.current = true
+    const { currentPage, mode } = useNoxStore.getState()
+    const page = currentPage ? { ...currentPage } : undefined
+    mentions = mentions.map((mention) => ({ ...mention }))
+    drafts = [...drafts]
+    const turnPageIds = [...mentions.map((mention) => mention.pageId), ...(page ? [page.pageId] : [])]
+    setAgentBusy(true)
+    setBusy(true)
     historyRestoreCancelledRef.current = true
     historyGenerationRef.current++
     if (transportDown) {
       setTurns((t) => [...t, { id: crypto.randomUUID(), userText: text, view: { activity: [], answer: '', error: transportDownReason, pending: false } }])
-      return
+      busyRef.current = false
+      setAgentBusy(false)
+      setBusy(false)
+      return false
     }
     // Epoch 10 / M7: stage attachment bytes before anything else. Sizes are
     // re-checked here (the composer already validated) before any bytes are
     // read, and the atomic header below commits thread + user message + bytes
     // in one transaction. A failure throws before prepareAgentTurn and before
     // any Codex/upload request, so the composer retains its in-memory draft.
-    const owned = await stageOwnedDrafts(drafts)
-    const currentPage = useNoxStore.getState().currentPage ?? undefined
+    let owned: OwnedAttachmentInput[]
+    try {
+      owned = await stageOwnedDrafts(drafts)
+    } catch (error) {
+      busyRef.current = false
+      setAgentBusy(false)
+      setBusy(false)
+      throw error
+    }
     const sendAbort = new AbortController()
     sendAbortRef.current = sendAbort
     const deadline = setTimeout(() => { sendAbort.abort(); agentLoop.cancel() }, 10 * 60 * 1000)
     lastUsageRef.current = null
-    const mode = useNoxStore.getState().mode
-    const turnPageIds = [...mentions.map((mention) => mention.pageId), ...(currentPage ? [currentPage.pageId] : [])]
     const turnId = crypto.randomUUID()
     let persisted: Awaited<ReturnType<typeof startPersistedTurn>> | null = null
     try {
-      persisted = await startPersistedTurn(historyRepo, currentThreadIdRef.current, text, owned)
+      persisted = await startPersistedTurn(historyRepo, currentThreadIdRef.current, text, owned, workspaceId)
     } catch (error) {
-      if (owned.length > 0) {
+      if (owned.length > 0 || currentThreadIdRef.current !== null) {
         const message = error instanceof Error ? error.message : String(error)
-        setTurns((t) => [...t, { id: crypto.randomUUID(), userText: text, view: { activity: [], answer: '', error: `Attachments could not be saved locally — nothing was sent. ${message}`, pending: false } }])
+        const reason = owned.length > 0 ? 'Attachments could not be saved locally' : 'History could not be saved locally'
+        setTurns((t) => [...t, { id: crypto.randomUUID(), userText: text, view: { activity: [], answer: '', error: `${reason} — nothing was sent. ${message}`, pending: false } }])
         clearTimeout(deadline)
         sendAbortRef.current = null
-        throw error
+        busyRef.current = false
+        setAgentBusy(false)
+        setBusy(false)
+        if (owned.length > 0) throw error
+        return false
       }
       /* persistence is best-effort when no attachments ride along; never block the chat */
     }
@@ -204,10 +274,16 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
     // The small-edit grant is captured here at Send — normalized targets,
     // grant flag, mode, and turn binding — and reset for the next turn. Only
     // Auto with an explicit grant permits silent small edits.
-    prepareAgentTurn(mode, turnPageIds, committed.map((attachment) => attachment.id), mode === 'auto' && allowSmallEdits ? { allowed: true, pages: turnPageIds } : undefined)
-    busyRef.current = true
-    setAgentBusy(true)
-    setBusy(true)
+    try {
+      prepareAgentTurn(mode, turnPageIds, committed.map((attachment) => attachment.id), mode === 'auto' && allowSmallEdits ? { allowed: true, pages: turnPageIds } : undefined)
+    } catch (error) {
+      clearTimeout(deadline)
+      sendAbortRef.current = null
+      busyRef.current = false
+      setAgentBusy(false)
+      setBusy(false)
+      throw error
+    }
     // Epoch 14 / L2: diagnostics record the turn operation only, never prompt text.
     logInfo(`Send: starting turn ${turnId} (mode=${mode}, mentions=${mentions.length}, attachments=${committed.length})`)
     setTurns((t) => [...t, { id: turnId, userText: text, view: { activity: [], answer: '', error: null, pending: true, historyError: persisted ? null : HISTORY_SAVE_ERROR } }])
@@ -219,6 +295,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
     let unsubscribe: (() => void) | null = null
     let unsubscribeHistoryErrors: (() => void) | null = null
 
+    void (async () => {
     try {
       if (persisted) {
         currentThreadIdRef.current = persisted.threadId
@@ -308,7 +385,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
       })
 
       const result = await agentLoop.sendUserMessage(text, {
-        currentPage,
+        currentPage: page,
         signal: sendAbort.signal,
         prepareContext: (signal) => Promise.all(mentions.map(m => fetchMentionContext(m, signal))),
         attachments: committed,
@@ -348,12 +425,26 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
       setBusy(false)
       scrollToEnd()
     }
+    })()
+    return true
   }
 
   const hasMessages = turns.length > 0
 
   return (
     <section className="flex min-h-0 flex-1 flex-col" data-testid="chat-panel">
+      {recoveryEntries.length > 0 && <div className="nox-warning border-b border-current/30 px-3 py-2 text-xs" role="alert" data-testid="workspace-recovery">
+        <p className="font-semibold">Needs review in this workspace</p>
+        {recoveryEntries.map((entry) => <div key={entry.id} className="mt-2">
+          <p>{entry.tool}: {describeUnresolvedEntry(entry)}</p>
+          {entry.targetPageId && <a href={inspectUrlForPage(entry.targetPageId)} target="_blank" rel="noreferrer" className="underline">Open in Notion</a>}
+          {recoveryEvidence[entry.id] && <p>{recoveryEvidence[entry.id]}</p>}
+          {!readOnly && !busy && <span className="ml-2 inline-flex gap-2">
+            <button onClick={() => void writeGate.readbackForReview(entry.id).then((result) => setRecoveryEvidence((all) => ({ ...all, [entry.id]: result.detail }))).catch((error) => setRecoveryEvidence((all) => ({ ...all, [entry.id]: `State check failed: ${error instanceof Error ? error.message : String(error)}` })))} className="underline">Check current state</button>
+            {entry.status !== 'submitted' && <button onClick={() => void writeGate.journal.markReviewed(entry.id, 'inspected from workspace recovery').then((reviewed) => { if (reviewed) setRecoveryEntries((all) => all.filter((item) => item.id !== entry.id)) }).catch((error) => setRecoveryEvidence((all) => ({ ...all, [entry.id]: `Review failed: ${error instanceof Error ? error.message : String(error)}` })))} className="underline">Mark reviewed</button>}
+          </span>}
+        </div>)}
+      </div>}
       {reviewingPlan && !readOnly ? <PlanCards /> : <>
       {!hasMessages ? (
         <EmptyState readOnly={readOnly || transportDown} onSend={(t, mentions) => void send(t, mentions)} />
@@ -456,15 +547,13 @@ const undoingJournalIds = new Set<string>()
 function attachJournalEntries(items: ActivityItem[], entries: Awaited<ReturnType<typeof writeGate.journal.newestFirst>>): ActivityItem[] {
   return items.map((item) => {
     if (item.kind !== 'tool') return item
-    const entry = entries.find((candidate) => candidate.callId && candidate.callId === item.id)
-    if (!entry) {
-      const byJournalId = entries.find((candidate) => candidate.id === item.journalId)
-      return byJournalId && (byJournalId.status === 'pending' || byJournalId.status === 'unknown')
-        ? markUnresolvedRow(item, byJournalId)
-        : item
-    }
-    if (entry.status === 'pending' || entry.status === 'unknown' || (entry.status === 'applied' && entry.reservedByUndoOpId != null)) {
+    const entry = entries.find((candidate) => candidate.callId && candidate.callId === item.id) ?? entries.find((candidate) => candidate.id === item.journalId)
+    if (!entry) return item
+    if (entry.status === 'pending' || entry.status === 'submitted' || entry.status === 'unknown' || (entry.status === 'applied' && entry.reservedByUndoOpId != null)) {
       return markUnresolvedRow(item, entry)
+    }
+    if (entry.status === 'applied' && (entry.verification === 'unverified' || (entry.inverse != null && entry.verification !== 'verified'))) {
+      return { ...item, journalId: entry.id, verification: 'unverified', undoable: false, notUndoableReason: entry.notUndoableReason ?? 'The final state could not be verified.', inspectUrl: entry.targetPageId ? inspectUrlForPage(entry.targetPageId) : undefined }
     }
     // Applied but not safely reversible: say exactly why, with the real
     // target link, instead of silently omitting the undo control.
@@ -477,7 +566,7 @@ function attachJournalEntries(items: ActivityItem[], entries: Awaited<ReturnType
         inspectUrl: entry.targetPageId ? inspectUrlForPage(entry.targetPageId) : undefined,
       }
     }
-    return { ...item, journalId: entry.id, undoable: entry.status === 'applied' && entry.inverse != null }
+    return { ...item, journalId: entry.id, verification: entry.verification, undoable: entry.status === 'applied' && entry.inverse != null && entry.verification === 'verified' }
   })
 }
 
@@ -493,6 +582,7 @@ function markUnresolvedRow(
     unresolvedDetail: describeUnresolvedEntry(entry),
     inspectUrl: entry.targetPageId ? inspectUrlForPage(entry.targetPageId) : undefined,
     reviewed: entry.reviewedAt != null ? true : undefined,
+    reviewable: entry.status !== 'submitted',
   }
 }
 

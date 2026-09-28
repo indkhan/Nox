@@ -91,19 +91,37 @@ export function evaluateApproval(call: ApprovalCall, ctx: ApprovalContext): Appr
  */
 function isGrantEligible(call: ApprovalCall): boolean {
   if (!call.grant.allowed) return false
-  if (call.kind !== 'properties' && call.kind !== 'content-update') return false
+  if (call.kind !== 'properties' || call.name !== 'notion-update-page' || !isSmallPropertyChange(call.args)) return false
   const pages = new Set(call.grant.pages.map((id) => normalizeId(id) ?? id))
   const scopeIds = [...call.targets, ...call.parents].map((id) => normalizeId(id) ?? id)
   if (scopeIds.length === 0) return false
   return scopeIds.every((id) => pages.has(id))
 }
 
+function isSmallPropertyChange(args: Record<string, unknown>): boolean {
+  if (Object.keys(args).some((key) => key !== 'data' && key !== 'page_id' && key !== 'command')) return false
+  const data = args.data
+  if (data !== undefined && (!data || typeof data !== 'object' || Array.isArray(data) || Object.keys(data).some((key) => key !== 'page_id'))) return false
+  const command = args.command
+  if (!command || typeof command !== 'object' || Array.isArray(command)) return false
+  const parsed = command as Record<string, unknown>
+  if (parsed.type !== 'update_properties' || Object.keys(parsed).some((key) => key !== 'type' && key !== 'properties')) return false
+  const props = parsed.properties
+  if (!props || typeof props !== 'object' || Array.isArray(props)) return false
+  const entries = Object.entries(props)
+  if (entries.length !== 1 || !entries[0][0]) return false
+  const value = entries[0][1]
+  if (value === null || typeof value === 'string' && !value.trim()) return false
+  if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') return false
+  return new TextEncoder().encode(JSON.stringify(props)).length <= 256
+}
+
 function grantRefusalReason(call: ApprovalCall): string {
   if (!call.grant.allowed) {
     return 'Auto mode needs the “Allow small edits this turn” grant for silent edits — approve each change instead'
   }
-  if (call.kind !== 'properties' && call.kind !== 'content-update') {
-    return 'the small-edit grant covers only property updates and small text additions on the listed pages'
+  if (call.kind !== 'properties' || !isSmallPropertyChange(call.args)) {
+    return 'the small-edit grant covers one bounded, non-clearing property value on a listed page'
   }
   return 'the change targets pages outside the granted small-edit pages'
 }

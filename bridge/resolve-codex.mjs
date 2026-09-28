@@ -5,14 +5,13 @@
 // gives you an older app-server with a truncated model/list (spike 0.2/0.5: the desktop build
 // reported 0.143.0 and hid every gpt-5.6 model, while npm's was 0.149.0 and showed all six).
 //
-// So: gather candidates, ask each its version, and take the newest.
+// So: gather candidates, ask each its version, and prefer a tested build.
 //
 // Explicit override: set CODEX_BIN to an absolute path to a local Codex binary.
 // An invalid CODEX_BIN fails closed (no fallback to another version). PATH-only
 // `codex` is resolved to an absolute existing path; a bare name is never returned.
-// Successful discovery is cached for the host lifetime; use
-// clearResolveCodexCacheForTests() in tests. Newest-selected is not equated with
-// tested-compatible: compare `version` against TESTED_CODEX_VERSIONS.
+// Untested builds require NOX_EXPERIMENTAL_CODEX=1. Successful discovery is
+// cached for the host lifetime; use clearResolveCodexCacheForTests() in tests.
 //
 // Recorded for diagnosis: callers log only `path`/`version` (no provider config).
 import { execFileSync } from 'node:child_process';
@@ -154,9 +153,17 @@ const cmp = (a, b) => {
   return 0;
 };
 
+/** Prefer the newest tested build; experimental opt-in permits newest available. */
+export function selectCodexCandidate(found, experimental = false) {
+  return [...found]
+    .filter((candidate) => experimental || TESTED_CODEX_VERSIONS.includes(candidate.version))
+    .sort((a, b) => cmp(b.version, a.version))[0] ?? null;
+}
+
 export function resolveCodex() {
   const override = process.env.CODEX_BIN;
-  const overrideKey = override ?? '';
+  const experimental = process.env.NOX_EXPERIMENTAL_CODEX === '1';
+  const overrideKey = `${override ?? ''}\0${experimental}`;
   if (cachedResult && cachedOverrideKey === overrideKey) return cachedResult;
 
   // CODEX_BIN is an explicit local override: validate it and never silently
@@ -168,6 +175,9 @@ export function resolveCodex() {
     }
     try {
       const { version, launcher } = probeVersion(absolute);
+      if (!experimental && !TESTED_CODEX_VERSIONS.includes(version)) {
+        return { path: null, version, error: `Codex ${version} is untested by this Nox revision. Set NOX_EXPERIMENTAL_CODEX=1 to opt in.`, candidates: [{ path: absolute, version, launcher }], testedCompatible: false };
+      }
       const result = {
         path: absolute,
         version,
@@ -201,8 +211,8 @@ export function resolveCodex() {
     }
   }
   if (!found.length) return { path: null, version: null, candidates: [] };
-  found.sort((a, b) => cmp(b.version, a.version));
-  const best = found[0];
+  const best = selectCodexCandidate(found, experimental);
+  if (!best) return { path: null, version: null, error: `Installed Codex versions ${found.map((c) => c.version).join(', ')} are untested by this Nox revision. Set NOX_EXPERIMENTAL_CODEX=1 to opt in.`, candidates: found, testedCompatible: false };
   const result = { ...best, candidates: found, testedCompatible: TESTED_CODEX_VERSIONS.includes(best.version) };
   cachedResult = result;
   cachedOverrideKey = overrideKey;
@@ -213,6 +223,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const r = resolveCodex();
   console.log('chosen :', r.path, r.version ? `(${r.version})` : '(none found)');
   if (r.error) console.log('error  :', r.error);
-  if (r.testedCompatible === false) console.log(`note   : version ${r.version} is not in tested ${JSON.stringify(TESTED_CODEX_VERSIONS)}`);
+  if (r.testedCompatible === false) console.log(`note   : version ${r.version ?? 'none selected'} is not in tested ${JSON.stringify(TESTED_CODEX_VERSIONS)}`);
   for (const c of r.candidates) console.log('   ', c.version.padEnd(10), c.path);
 }

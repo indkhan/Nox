@@ -187,6 +187,18 @@ describe('AgentLoop integration (scripted codex)', () => {
     expect(loop.currentThreadId).toBe('thr_A')
   })
 
+  it('treats completed web research as untrusted exposure', () => {
+    const researched = new AgentLoop({
+      bridge: bridge as unknown as NativeBridge,
+      codex,
+      executor,
+      getDynamicTools: async () => [],
+      developerInstructions: buildInstructionsStub(),
+    })
+    codex.emit({ kind: 'web-search-completed', id: 'search-1', query: 'external page' })
+    expect(researched.hasUntrustedConversation()).toBe(true)
+  })
+
   it('does not replay a disconnected turn even before a visible tool call', async () => {
     bridge.failNextTurnStart = true
     await expect(loop.sendUserMessage('hello there')).rejects.toThrow('disconnected')
@@ -295,9 +307,9 @@ describe('AgentLoop integration (scripted codex)', () => {
     expect(notionCalls).toEqual([{ name: 'notion-search', args: { query: 'overdue' }, provenance: 'user-only' }])
   })
 
-  it('treats metadata-only mentions as no untrusted exposure', async () => {
+  it('treats metadata-only mentions as untrusted exposure', async () => {
     await loop.sendUserMessage('summarize', { mentions: [{ pageId: 'page_abc', title: 'Projects DB' }] })
-    expect(notionCalls).toEqual([{ name: 'notion-search', args: { query: 'overdue' }, provenance: 'user-only' }])
+    expect(notionCalls).toEqual([{ name: 'notion-search', args: { query: 'overdue' }, provenance: 'untrusted-context' }])
   })
 
   it('does not taint the turn with local plan receipts', async () => {

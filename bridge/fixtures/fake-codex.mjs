@@ -54,6 +54,11 @@ rl.on('line', (line) => {
       return void unicodeLarge(m);
     case 'test/overlong-line':
       return void overlongLine(m);
+    case 'test/null-line':
+      process.stdout.write('null\n');
+      return send({ id: m.id, result: { ok: true } });
+    case 'test/overlong-tail':
+      return void overlongTail(m);
     case 'test/unicode-eof':
       return void unicodeEof(m);
     case 'initialize':
@@ -166,6 +171,14 @@ async function overlongLine(m) {
   await sleep(5);
   send({ method: 'item/agentMessage/delta', params: { threadId: 'thr_1', itemId: 'u-after-overlong', delta: 'after-overlong-ok' } });
   send({ id, result: { ok: true } });
+}
+
+async function overlongTail(m) {
+  process.stdout.write('x'.repeat(9 * 1024 * 1024));
+  await sleep(10);
+  process.stdout.write(JSON.stringify({ id: m.id, result: { phantom: true } }) + '\n');
+  await sleep(10);
+  send({ id: m.id, result: { ok: true } });
 }
 
 async function unicodeEof(m) {
