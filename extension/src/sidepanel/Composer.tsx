@@ -486,7 +486,7 @@ export function Composer({
           <ModelControls disabled={readOnly} />
           <span className="flex-1" />
           {mode === 'auto' && !readOnly && (
-            <label className="mr-1 flex cursor-pointer items-center gap-1 text-[11px] text-zinc-500 hover:text-zinc-300" title="Allow up to five small single-property changes (up to 256 bytes, no clearing) on the listed pages this turn. Replacements, moves, creations, uploads, and other pages still ask.">
+            <label className="mr-1 flex cursor-pointer items-center gap-1 text-[11px] text-zinc-500 hover:text-zinc-300" title="Allow up to five checkbox changes that set a value to true on the listed pages this turn. Other property changes, replacements, moves, creations, uploads, and other pages still ask.">
               <input
                 type="checkbox"
                 checked={allowSmallEdits}
@@ -539,7 +539,7 @@ export function Composer({
         {mode === 'auto' && !readOnly && grantTargets.length > 0 && (
           <p className="px-1 pb-1 text-[10px] leading-relaxed text-zinc-600" data-testid="small-edit-scope">
             Small edits apply to: {grantTargets.map((target) => target.title ?? target.pageId.slice(0, 8)).join(', ')}. Up to five
-            single-property changes (up to 256 bytes, no clearing) — replacements, moves, creations, uploads, and other pages still ask.
+            checkbox changes that set a value to true — other property changes, replacements, moves, creations, uploads, and other pages still ask.
           </p>
         )}
       </div>

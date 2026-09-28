@@ -88,8 +88,8 @@ That's it. Nox is ready in the Chrome side panel.
   five affected objects — with explicit approval in both Ask and Auto modes.
   A single cosmetic view rename or a single-page move uses one ordinary approval card.
 - **Auto needs your per-turn grant for silent edits** — “Allow small edits this turn”
-  (off by default, Auto only) permits one non-clearing property value of up to
-  256 bytes per change on listed pages, up to five effects. Everything else asks.
+  (off by default, Auto only) permits setting one checkbox to true per change
+  on listed pages, up to five effects. Everything else asks.
 - **Shows every action it takes, and undoes what can be undone**
 - **Optional web search** through Codex; file attachments stay local-only
   (PDF/image analysis is unavailable, and upload into Notion is unavailable in this alpha)

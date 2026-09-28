@@ -5,7 +5,7 @@ import { ToolExecutor } from '../../src/lib/agent/executor'
 import { Scheduler } from '../../src/lib/mcp/scheduler'
 
 const PAGE = 'c'.repeat(32)
-const request = (rid: number) => ({ rid, namespace: null, tool: 'notion-update-page', args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: { title: 'x' } } } })
+const request = (rid: number) => ({ rid, namespace: null, tool: 'notion-update-page', args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: { Done: true } } } })
 const deferred = () => { let resolve!: () => void; const promise = new Promise<void>(r => { resolve = r }); return { promise, resolve } }
 
 it('does not dispatch after authority changes while scheduler is waiting', async () => {

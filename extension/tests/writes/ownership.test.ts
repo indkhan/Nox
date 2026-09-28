@@ -59,7 +59,7 @@ function propertiesWrite(rid: number) {
   return {
     rid,
     tool: 'notion-update-page',
-    args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: { Title: 'Short title' } } },
+    args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: { Done: true } } },
     namespace: null,
   } as const
 }
@@ -191,7 +191,7 @@ describe('mutation ownership (Epoch 02.1)', () => {
     gate.endTurn()
     await gate.handleUndo('notion-update-page', {
       data: { page_id: PAGE },
-      command: { type: 'update_properties', properties: { Title: 'Short title' } },
+      command: { type: 'update_properties', properties: { Done: true } },
     })
     expect(calls).toHaveLength(1)
   })
@@ -200,7 +200,7 @@ describe('mutation ownership (Epoch 02.1)', () => {
     const release = deferred<{ content: Array<{ type: string; text?: string }> }>()
     const journal = new MutationJournal()
     journal.setThread('thread-owner')
-    const undoArgs = { data: { page_id: PAGE }, command: { type: 'update_properties', properties: { Title: 'Short title' } } }
+    const undoArgs = { data: { page_id: PAGE }, command: { type: 'update_properties', properties: { Done: true } } }
     const { gate, calls } = makeGate({
       journal,
       transport: async (name, args) => {

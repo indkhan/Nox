@@ -323,8 +323,8 @@ only by operation label until a second concrete plan supplies their ids.
 Reads never need plans or approval. A single cosmetic view rename or
 single-page move uses an ordinary approval card; anything structural needs a
 plan. In Auto, silent edits happen only under the user's explicit per-turn
-small-edit grant for listed pages — one non-clearing scalar property value
-within 256 bytes per change, up to five effects — while analysis without the grant authorizes nothing. Approval cards show the complete canonical
+small-edit grant for listed pages — one checkbox set to true per change,
+up to five effects — while analysis without the grant authorizes nothing. Approval cards show the complete canonical
 payload with targets, object count, and destructive flags outside the
 collapsible details; approving dispatches the frozen snapshot, never the live
 request object, and there is no approve-all. Workspace plans validate every

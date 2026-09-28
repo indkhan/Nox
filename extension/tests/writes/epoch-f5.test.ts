@@ -24,7 +24,7 @@ function propertiesReq(rid: number) {
   return {
     rid,
     tool: 'notion-update-page',
-    args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: { Title: 'Short title' } } },
+    args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: { Done: true } } },
     namespace: null,
   } as const
 }
@@ -382,7 +382,7 @@ describe('Epoch F5 — R3 retained untrusted exposure (integrated)', () => {
     const out = gate.handle({
       rid: 2,
       tool: 'notion-update-page',
-      args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: { Title: 'Short title' } } },
+      args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: { Done: true } } },
       namespace: null,
       provenance: 'untrusted-context',
     })

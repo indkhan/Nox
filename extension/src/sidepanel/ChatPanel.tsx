@@ -440,7 +440,7 @@ export function ChatPanel({ readOnly = false }: { readOnly?: boolean }) {
           {entry.targetPageId && <a href={inspectUrlForPage(entry.targetPageId)} target="_blank" rel="noreferrer" className="underline">Open in Notion</a>}
           {recoveryEvidence[entry.id] && <p>{recoveryEvidence[entry.id]}</p>}
           {!readOnly && !busy && <span className="ml-2 inline-flex gap-2">
-            <button onClick={() => void writeGate.readbackForReview(entry.id).then((result) => setRecoveryEvidence((all) => ({ ...all, [entry.id]: result.detail }))).catch((error) => setRecoveryEvidence((all) => ({ ...all, [entry.id]: `State check failed: ${error instanceof Error ? error.message : String(error)}` })))} className="underline">Check current state</button>
+            {entry.status !== 'submitted' && <button onClick={() => void writeGate.readbackForReview(entry.id).then((result) => setRecoveryEvidence((all) => ({ ...all, [entry.id]: result.detail }))).catch((error) => setRecoveryEvidence((all) => ({ ...all, [entry.id]: `State check failed: ${error instanceof Error ? error.message : String(error)}` })))} className="underline">Check current state</button>}
             {entry.status !== 'submitted' && <button onClick={() => void writeGate.journal.markReviewed(entry.id, 'inspected from workspace recovery').then((reviewed) => { if (reviewed) setRecoveryEntries((all) => all.filter((item) => item.id !== entry.id)) }).catch((error) => setRecoveryEvidence((all) => ({ ...all, [entry.id]: `Review failed: ${error instanceof Error ? error.message : String(error)}` })))} className="underline">Mark reviewed</button>}
           </span>}
         </div>)}

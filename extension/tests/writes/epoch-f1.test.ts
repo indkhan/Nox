@@ -11,7 +11,7 @@ function propertiesReq(rid: number) {
   return {
     rid,
     tool: 'notion-update-page',
-    args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: { Title: 'Short title' } } },
+    args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: { Done: true } } },
     namespace: null,
   } as const
 }
@@ -483,9 +483,9 @@ describe('Epoch F1.3 — R4 queued work stops behind unknown outcomes', () => {
     })
     const applied = await journal.record({
       tool: 'notion-update-page',
-      args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: { Title: 'Short title' } } },
+      args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: { Done: true } } },
       kind: 'properties',
-      inverse: { tool: 'notion-update-page', args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: { Title: 'Short title' } } } },
+      inverse: { tool: 'notion-update-page', args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: { Done: true } } } },
       scope: { threadId: 'thread-f1', turnId: 'turn-f1', workspaceId: 'workspace-1', connectionGeneration: 'conn-1', ownerGeneration: 'owner-gen-1' },
       verification: 'verified',
     })
@@ -631,7 +631,7 @@ describe('Epoch F1.4 — R6 restored undo without a new turn', () => {
     const store = memoryJournalStore()
     const seeder = new MutationJournal(store)
     seeder.setThread('persisted-thread')
-    const args = { data: { page_id: PAGE }, command: { type: 'update_properties', properties: { Title: 'Short title' } } }
+    const args = { data: { page_id: PAGE }, command: { type: 'update_properties', properties: { Done: true } } }
     const noInverse = await seeder.record({
       tool: 'notion-update-page',
       args,

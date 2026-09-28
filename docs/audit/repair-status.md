@@ -7,7 +7,7 @@ This change addresses the 31 findings in [the September 2026 audit](nox-adversar
 | NOX-01 | Documented string `replace_content` arguments, classification, exact inverse serialization, and mixed-alias refusal; `writes/classify.test.ts`, `writes/gate.test.ts`. The legacy object form is exercised by local fixtures only. |
 | NOX-02 | Unsupported tools and unadvertised writes stay out of the model tool surface; `capabilities.test.ts`, `agent/agent-modules.test.ts`. |
 | NOX-03 | Persist accepted task IDs, resume polling without resubmission, and block conflicting work while submitted; `writes/gate.test.ts`, `history.test.ts`, `viewer.test.tsx`. |
-| NOX-04 | Silent grant covers one non-clearing scalar property value up to 256 bytes; `writes/approvals.test.ts`. |
+| NOX-04 | Silent grant covers setting one checkbox to true in either known update-page command shape; string, number, false, and multi-property updates ask for consent; `writes/approvals.test.ts`. |
 | NOX-05 | Native web results and external metadata taint the conversation before write consent; `codex/loop-integration.test.ts`. |
 | NOX-06 | Every unplanned effect consumes the five-effect budget, including individually approved writes; `writes/gate.test.ts`. |
 | NOX-07 | Workspace identity binds thread resume, conflicts, recovery, and undo; unresolved records survive ordinary chat deletion; `history.test.ts`, `viewer.test.tsx`, `writes/gate.test.ts`. |

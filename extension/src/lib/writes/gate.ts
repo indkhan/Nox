@@ -543,8 +543,8 @@ export class WriteGate {
    * what Nox attempted, nothing more.
    */
   async readbackForReview(journalId: string): Promise<ReadbackEvidence> {
-    const entry = (await this.journal.newestFirst()).find((candidate) => candidate.id === journalId)
-    if (!entry) {
+    const entry = await this.journal.getEntry(journalId)
+    if (!entry || !entry.scope?.workspaceId || entry.scope.workspaceId !== (this.deps.getWorkspaceId?.() ?? null)) {
       throw new MutationRejectedError('NOT_UNDOABLE', 'this change is no longer available to review.')
     }
     if (entry.status !== 'pending' && entry.status !== 'unknown') {
@@ -1346,7 +1346,11 @@ function appliedRecoveryWarning(result: unknown): Error {
 /** Exact intended post-content for a replace_content operation, if knowable. */
 function intendedReplaceContent(entry: JournalEntry): { pageId: string; content: string } | null {
   if (!entry.targetPageId) return null
-  const command = (entry.args as Record<string, unknown> | undefined)?.command as Record<string, unknown> | undefined
+  const args = entry.args as Record<string, unknown> | undefined
+  if (args?.command === 'replace_content' && typeof args.new_str === 'string') {
+    return { pageId: entry.targetPageId, content: args.new_str }
+  }
+  const command = args?.command as Record<string, unknown> | undefined
   if (command?.type !== 'replace_content' || typeof command.content !== 'string') return null
   return { pageId: entry.targetPageId, content: command.content }
 }

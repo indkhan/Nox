@@ -78,7 +78,7 @@ function autoProperties(rid: number, signal?: AbortSignal) {
   return {
     rid,
     tool: 'notion-update-page',
-    args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: { Title: 'Short title' } } },
+    args: { data: { page_id: PAGE }, command: { type: 'update_properties', properties: { Done: true } } },
     namespace: null,
     signal,
   } as const
@@ -902,6 +902,29 @@ describe('WriteGate durable intent (Epoch 04)', () => {
     expect(evidence.detail).toMatch(/does not prove/)
   })
 
+  it('checks a documented replacement from another thread in the same workspace', async () => {
+    const { gate, journal } = makeGate({ mode: 'auto', markdown: () => '# Exact' })
+    const intent = await journal.beginIntent({
+      tool: 'notion-update-page',
+      args: { page_id: PAGE, command: 'replace_content', new_str: '# Exact' },
+      kind: 'content-replace',
+      scope: { ...SCOPE, threadId: 'another-thread' },
+      targetPageId: PAGE,
+    })
+    await journal.settleIntent(intent.id, { status: 'unknown' })
+    expect(await gate.readbackForReview(intent.id)).toMatchObject({ supported: true, match: true })
+  })
+
+  it('does not read back a record from another workspace', async () => {
+    const { gate, journal } = makeGate({ mode: 'auto' })
+    const intent = await journal.beginIntent({
+      tool: 'notion-update-page', args: { page_id: PAGE, command: 'replace_content', new_str: '# Exact' },
+      kind: 'content-replace', scope: { ...SCOPE, workspaceId: 'another-workspace' }, targetPageId: PAGE,
+    })
+    await journal.settleIntent(intent.id, { status: 'unknown' })
+    await expect(gate.readbackForReview(intent.id)).rejects.toThrow(/NOT_UNDOABLE/)
+  })
+
   it('reports readback mismatch and unsupported shapes honestly', async () => {
     const { gate, journal } = makeGate({ mode: 'auto' })
     const mismatch = await journal.beginIntent({
@@ -997,7 +1020,7 @@ describe('WriteGate effect validation (Epoch 05)', () => {
     await gate.handle({
       rid: 54,
       tool: 'notion-update-page',
-      args: { command: { properties: { Title: 'Short title' }, type: 'update_properties' }, data: { page_id: PAGE } },
+      args: { command: { properties: { Done: true }, type: 'update_properties' }, data: { page_id: PAGE } },
       namespace: null,
     })
     const entries = await journal.newestFirst()
