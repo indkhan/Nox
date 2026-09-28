@@ -60,7 +60,7 @@ test('uses Corepack when the installed pnpm is older than 10', () => {
 test('explains how to sign in when Codex is installed but logged out', () => {
   const directory = mkdtempSync(join(tmpdir(), 'nox-install-'))
   const codex = join(directory, 'codex.mjs')
-  writeFileSync(codex, `if (process.argv.includes('--version')) console.log('codex-cli 1.2.3')\nelse process.exit(1)\n`)
+  writeFileSync(codex, `if (process.argv.includes('--version')) console.log('codex-cli 0.153.4')\nelse process.exit(1)\n`)
 
   try {
     const result = spawnSync(process.execPath, [resolve('install.mjs'), '--dry-run'], {
@@ -95,14 +95,14 @@ test('CODEX_BIN names an existing absolute binary and caches discovery', async (
   const { resolveCodex, clearResolveCodexCacheForTests } = await import('../bridge/resolve-codex.mjs')
   const directory = mkdtempSync(join(tmpdir(), 'nox-install-'))
   const codex = join(directory, 'codex.mjs')
-  writeFileSync(codex, `if (process.argv.includes('--version')) console.log('codex-cli 9.9.9')\n`)
+  writeFileSync(codex, `if (process.argv.includes('--version')) console.log('codex-cli 0.153.4')\n`)
   clearResolveCodexCacheForTests?.()
   process.env.CODEX_BIN = codex
   try {
     const first = resolveCodex()
     const second = resolveCodex()
     assert.equal(first.path, codex)
-    assert.equal(first.version, '9.9.9')
+    assert.equal(first.version, '0.153.4')
     assert.equal(second.path, codex)
   } finally {
     delete process.env.CODEX_BIN
@@ -149,14 +149,14 @@ test('generated wrappers quote special-character paths without executing them', 
   assert.ok(bat.includes(`"C:\\a&b (x)%%y\\node.exe"`))
 })
 
-test('reports missing Codex instead of crashing', () => {
+test('invalid explicit Codex path fails closed with a clear error', () => {
   const result = spawnSync(process.execPath, [resolve('install.mjs'), '--dry-run'], {
     cwd: resolve('.'),
     env: { ...process.env, CODEX_BIN: join(tmpdir(), 'nox-definitely-missing-codex-bin') },
     encoding: 'utf8',
   })
-  assert.equal(result.status, 0, result.stderr)
-  assert.match(result.stdout, /Codex/i)
+  assert.equal(result.status, 1)
+  assert.match(result.stderr, /CODEX_BIN does not exist/)
 })
 
 test('spike callback binds loopback, tolerates invalid callbacks, writes atomically', async () => {
